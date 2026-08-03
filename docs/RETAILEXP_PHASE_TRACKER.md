@@ -651,9 +651,9 @@ simplification described above), `app/experience/kameleon/page.tsx`
   the full display exclusively without it. Chrome on Android (the named
   target test platform) supports dom-overlay, so this is a reasonable bet,
   not a guaranteed-safe one.
-- No USDZ asset exists for the sample model, so iOS Quick Look AR is not
-  available in this prototype (disclosed in the fallback UI itself, not
-  hidden) — see the asset manifest.
+- ~~No USDZ asset exists for the sample model, so iOS Quick Look AR is not
+  available in this prototype~~ — **resolved in the iPhone correction round
+  below.**
 - Analytics events (AR started/permission granted-denied/surface detected/
   model placed/tracking lost/AR completed/continued without AR/device
   capability) are **prepared for, not implemented** — no tracking calls
@@ -665,11 +665,96 @@ simplification described above), `app/experience/kameleon/page.tsx`
   dependencies and were not touched, per the standing prohibition on
   `npm audit fix --force`.
 
-**Approval required:** Yes — ground detection/placement must be demonstrated
-on a real compatible phone before this phase can be marked complete.
-**Next action:** Deploy a Vercel preview (see below) and test on a
-compatible Android phone (Chrome, HTTPS) and an iPhone, per the acceptance
-tests in the original request.
+### iPhone correction round (2026-08-03)
+
+Physical testing on the Vercel preview from commit `0bed737` (iPhone,
+Chrome on iOS, HTTPS) found: capability detection correctly reported no
+`navigator.xr` and showed the inline GLB preview — truthful, but **iPhone
+had no working AR launch action of any kind**, since no USDZ asset existed
+to offer Apple AR Quick Look. Capability detection also keyed only off
+`navigator.xr`, with no separate path for the very common case of "no
+WebXR, but Quick Look is available" (every iPhone).
+
+**Fix:**
+- Capability detection (`lib/kameleon/ar/capability-detection.ts`) now
+  resolves one of three `ARPathway`s — `"webxr"`, `"quicklook"`, or
+  `"unsupported"` — checking WebXR first, then the standards-based
+  `HTMLAnchorElement.relList.supports("ar")` feature check (true in Safari
+  *and* Chrome/Edge/Firefox on iOS, since Apple requires every iOS browser
+  to run on WebKit — this is why UA-sniffing alone, or `navigator.xr` alone,
+  was insufficient), then falling back to `"unsupported"` only if neither
+  applies.
+- New `components/kameleon/ar/ARQuickLookScreen.tsx`: "Place the experience
+  in your space" / "Open AR on iPhone" (a plain `<a rel="ar" href="/api/ar/usdz">`
+  — the standards-based Quick Look trigger, not model-viewer's small built-in
+  icon) / "View 3D preview" (inline `<model-viewer>`, reusing the animated
+  GLB) / "Continue without AR". Detects Quick Look's dismissal via the
+  WebKit-specific `webkitendfullscreen` event on the anchor, then shows "AR
+  experience viewed" with "Enter the Journey" promoted to the primary action.
+- New USDZ asset: **not** a Fox conversion (no reliable/verifiable
+  conversion path existed in this Windows environment — see the asset
+  manifest for why), but an original static geometric placeholder (two
+  analytic USD cylinders, PBR-colored in the Kameleon copper/red palette),
+  authored via `usd-core` (Pixar/NVIDIA's free, open-source PyPI OpenUSD
+  Python bindings — no paid service). Named `sample-static-model.usdz`
+  (not `sample-animated-model.usdz` as originally suggested) since it has
+  no animation — animation is documented as pending, not claimed. Served via
+  a dedicated route handler (`app/api/ar/usdz/route.ts`) with an explicit
+  `Content-Type: model/vnd.usdz+zip` header, since Next's default
+  `public/`-static-file MIME inference for `.usdz` was a plausible
+  contributor to the original failure and can't be relied on across hosts.
+- `ARUnsupportedFallback` (the true "neither path available" screen) is
+  otherwise unchanged, and — critically — is no longer reachable on iPhone
+  once Quick Look resolves, so "Full ground-plane AR isn't available here"
+  no longer appears on a device that actually has a working AR path.
+
+**Verification performed:**
+- `npx tsc --noEmit`, `npm run lint`, `npm run build` — all clean (dev
+  server stopped before build, restarted after). `/api/ar/usdz` confirmed
+  as a new static-prerendered route in the build output.
+- USDZ structural validation (can't substitute for physical-device
+  confirmation, but is real verification of what's checkable here): valid
+  ZIP with uncompressed (STORED) entries as Quick Look requires,
+  `testzip()` reports no corruption, USD stage re-opens with the expected
+  scene graph (`/Root` default prim, two bound-materialed cylinders),
+  Y-up axis, 1 meter/unit.
+- Desktop Chrome (this environment): capability detection still correctly
+  falls through to `"unsupported"` with an updated, accurate combined
+  reason ("...cannot start an immersive AR session, and Apple AR Quick Look
+  isn't available here").
+- iPhone path simulated on desktop via a `DOMTokenList.prototype.supports`
+  override (the only realistic way to exercise this branch without a
+  physical device): `ARQuickLookScreen` renders the exact required title/
+  copy/buttons, the launch anchor carries `rel="ar"` and
+  `href="/api/ar/usdz"` (confirmed via the DOM), "View 3D preview" loads
+  the real animated GLB inline, a simulated `webkitendfullscreen` event
+  correctly transitions to "AR experience viewed" with "Enter the Journey"
+  promoted, and that button correctly ends the flow at `quick-account`.
+- Android/WebXR path re-verified end-to-end after the capability-detection
+  rewrite via a `navigator.xr.isSessionSupported` override (same technique
+  as the original Phase 5 round): `ARStartScreen` still renders, session
+  request still correctly attempted and still correctly error-handled
+  (this non-HTTPS `localhost` environment can't complete a real session, so
+  the honest `SecurityError` path was re-exercised, not placement itself —
+  hit-test/reticle/placement code was untouched by this round's changes).
+- No console errors observed during any of the above. Existing journey
+  (commercial → AR → quick-account) reached correctly from both the
+  WebXR-error and Quick-Look-viewed paths.
+
+**What remains unverified — still the reason this phase isn't complete:**
+ground-plane hit-test placement on Android, and the actual Quick Look
+launch/placement/movement/dismissal sequence on a physical iPhone. Both
+require real hardware this environment doesn't have.
+
+**Files created:** `components/kameleon/ar/ARQuickLookScreen.tsx`,
+`app/api/ar/usdz/route.ts`, `public/assets/kameleon/ar/sample-static-model.usdz`.
+**Files changed:** `lib/kameleon/ar/{ar-types,capability-detection}.ts`,
+`components/kameleon/ar/KameleonARExperience.tsx`,
+`docs/KAMELEON_AR_ASSET_MANIFEST.md`.
+
+**Status: READY FOR MOBILE AR REVIEW** (unchanged) — not APPROVED, not
+COMPLETE until both the Android ground-plane placement and the iPhone Quick
+Look sequence are confirmed on physical hardware.
 
 ## Phase 6 — Kameleon Cinematic AR Introduction
 

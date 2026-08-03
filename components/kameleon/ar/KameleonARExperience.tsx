@@ -19,16 +19,17 @@ import { AnimationController } from "@/lib/kameleon/ar/animation-controller";
 import { createReticle, type ReticleHandle } from "@/lib/kameleon/ar/reticle";
 import { createEnergyRings, type EnergyRingsHandle } from "@/lib/kameleon/ar/energy-rings";
 import {
-  isCapabilitySupported,
   SAMPLE_MODEL_ANIMATIONS,
   type ARCapabilityResult,
   type ARError,
   type ARHitPose,
+  type ARPathway,
   type ARPhase,
 } from "@/lib/kameleon/ar/ar-types";
 import { cn } from "@/lib/cn";
 import { ARStartScreen } from "./ARStartScreen";
 import { ARUnsupportedFallback } from "./ARUnsupportedFallback";
+import { ARQuickLookScreen } from "./ARQuickLookScreen";
 import { ARErrorState } from "./ARErrorState";
 import { ARScanningOverlay } from "./ARScanningOverlay";
 import { ARControls } from "./ARControls";
@@ -63,7 +64,8 @@ export function KameleonARExperience({
   /** Skip/decline/exit AR entirely — still returns to the same journey entry point. */
   onSkipAr: () => void;
 }) {
-  const [phase, setPhase] = useState<ARPhase>("capability-check");
+  const [pathway, setPathway] = useState<ARPathway>("checking");
+  const [phase, setPhase] = useState<ARPhase>("start-screen");
   const [capability, setCapability] = useState<ARCapabilityResult | null>(null);
   const [error, setError] = useState<ARError | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -72,7 +74,7 @@ export function KameleonARExperience({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRootRef = useRef<HTMLDivElement | null>(null);
 
-  const phaseRef = useRef<ARPhase>("capability-check");
+  const phaseRef = useRef<ARPhase>("start-screen");
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -96,18 +98,29 @@ export function KameleonARExperience({
     setPhase(next);
   }
 
-  // --- Capability check, once on mount (phase already starts at "capability-check" via useState) ---
+  // --- Capability check, once on mount — resolves which of the three real
+  // AR paths (webxr / quicklook / unsupported) this device/browser gets. ---
   useEffect(() => {
     let cancelled = false;
     detectARCapability().then((result) => {
       if (cancelled) return;
       setCapability(result);
-      setPhaseBoth(isCapabilitySupported(result) ? "start-screen" : "unsupported");
+      setPathway(result.pathway);
+      if (result.pathway === "webxr") setPhaseBoth("start-screen");
     });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  function recheckCapability() {
+    setPathway("checking");
+    detectARCapability().then((result) => {
+      setCapability(result);
+      setPathway(result.pathway);
+      if (result.pathway === "webxr") setPhaseBoth("start-screen");
+    });
+  }
 
   // --- Full teardown on unmount, regardless of how the user left ---
   // Routed through a ref (updated every render, below) rather than closing
@@ -443,13 +456,17 @@ export function KameleonARExperience({
   }
 
   function handleRetry() {
+    // Error phases only ever happen within the webxr pathway (session
+    // start/hit-test/model-load failures), so retrying just resets back to
+    // that pathway's own start screen — no need to re-run capability
+    // detection here.
     setError(null);
     cleanedUpRef.current = true;
     endingIntentRef.current = "none";
-    setPhaseBoth(capability && isCapabilitySupported(capability) ? "start-screen" : "unsupported");
+    setPhaseBoth("start-screen");
   }
 
-  const isLive = LIVE_PHASES.includes(phase);
+  const isLive = pathway === "webxr" && LIVE_PHASES.includes(phase);
 
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden">
@@ -473,24 +490,28 @@ export function KameleonARExperience({
         {helpOpen && <ARHelpPanel onClose={() => setHelpOpen(false)} />}
       </div>
 
-      {/* Phase-specific screens paint over the (empty, transparent until a
-          session starts) canvas — normal DOM order puts them on top. */}
+      {/* Pathway/phase-specific screens paint over the (empty, transparent
+          until a webxr session starts) canvas — normal DOM order puts them
+          on top. */}
       <div className={cn("relative flex flex-1 flex-col bg-kameleon-bg", isLive && "pointer-events-none opacity-0")}>
-        {phase === "capability-check" && (
+        {pathway === "checking" && (
           <div className="flex flex-1 items-center justify-center">
             <LoadingState brand="kameleon" message="Checking AR support…" />
           </div>
         )}
-        {phase === "start-screen" && <ARStartScreen checking={false} onStart={() => void handleStartAr()} onSkip={onSkipAr} />}
-        {phase === "unsupported" && (
+        {pathway === "webxr" && phase === "start-screen" && (
+          <ARStartScreen checking={false} onStart={() => void handleStartAr()} onSkip={onSkipAr} />
+        )}
+        {pathway === "webxr" && phase === "error" && error && (
+          <ARErrorState error={error} onRetry={handleRetry} onContinueWithoutAr={onSkipAr} />
+        )}
+        {pathway === "quicklook" && <ARQuickLookScreen onEnterJourney={onEnterJourney} onSkipAr={onSkipAr} />}
+        {pathway === "unsupported" && (
           <ARUnsupportedFallback
             reason={capability?.reason ?? "AR isn't available on this device or browser."}
-            onTryAr={() => setPhaseBoth("start-screen")}
+            onTryAr={recheckCapability}
             onContinue={onSkipAr}
           />
-        )}
-        {phase === "error" && error && (
-          <ARErrorState error={error} onRetry={handleRetry} onContinueWithoutAr={onSkipAr} />
         )}
       </div>
     </div>
