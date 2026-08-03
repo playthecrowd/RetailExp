@@ -3,6 +3,41 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* RetailExp admin palette — neutral, professional, distinct from the
+     Kameleon client brand below. Used across /admin. */
+  --admin-bg: #f7f7f8;
+  --admin-surface: #ffffff;
+  --admin-surface-muted: #f1f1f3;
+  --admin-border: #e3e3e7;
+  --admin-text: #17181c;
+  --admin-text-muted: #6b6d76;
+  --admin-primary: #3730a3;
+  --admin-primary-hover: #312a8f;
+  --admin-primary-foreground: #ffffff;
+  --admin-success: #157a4a;
+  --admin-success-bg: #e6f5ee;
+  --admin-warning: #9a6300;
+  --admin-warning-bg: #fdf1d9;
+  --admin-danger: #b3261e;
+  --admin-danger-bg: #fbe9e8;
+  --admin-focus-ring: #3730a3;
+
+  /* Kameleon client brand — near-black tactile backgrounds, copper
+     typography/controls, red/blue cinematic accents. Used only within
+     /experience/kameleon. */
+  --kameleon-bg: #0a0908;
+  --kameleon-surface: #14120f;
+  --kameleon-surface-raised: #1c1815;
+  --kameleon-border: #322a20;
+  --kameleon-copper: #c08552;
+  --kameleon-copper-light: #e3b583;
+  --kameleon-copper-dark: #8a5c34;
+  --kameleon-red: #b23a3a;
+  --kameleon-blue: #2e5c8a;
+  --kameleon-text: #f5efe6;
+  --kameleon-text-muted: #b8afa2;
+  --kameleon-focus-ring: #e3b583;
 }
 
 @theme inline {
@@ -10,6 +45,35 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-kameleon-display);
+
+  --color-admin-bg: var(--admin-bg);
+  --color-admin-surface: var(--admin-surface);
+  --color-admin-surface-muted: var(--admin-surface-muted);
+  --color-admin-border: var(--admin-border);
+  --color-admin-text: var(--admin-text);
+  --color-admin-text-muted: var(--admin-text-muted);
+  --color-admin-primary: var(--admin-primary);
+  --color-admin-primary-hover: var(--admin-primary-hover);
+  --color-admin-primary-foreground: var(--admin-primary-foreground);
+  --color-admin-success: var(--admin-success);
+  --color-admin-success-bg: var(--admin-success-bg);
+  --color-admin-warning: var(--admin-warning);
+  --color-admin-warning-bg: var(--admin-warning-bg);
+  --color-admin-danger: var(--admin-danger);
+  --color-admin-danger-bg: var(--admin-danger-bg);
+
+  --color-kameleon-bg: var(--kameleon-bg);
+  --color-kameleon-surface: var(--kameleon-surface);
+  --color-kameleon-surface-raised: var(--kameleon-surface-raised);
+  --color-kameleon-border: var(--kameleon-border);
+  --color-kameleon-copper: var(--kameleon-copper);
+  --color-kameleon-copper-light: var(--kameleon-copper-light);
+  --color-kameleon-copper-dark: var(--kameleon-copper-dark);
+  --color-kameleon-red: var(--kameleon-red);
+  --color-kameleon-blue: var(--kameleon-blue);
+  --color-kameleon-text: var(--kameleon-text);
+  --color-kameleon-text-muted: var(--kameleon-text-muted);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -19,8 +83,27 @@
   }
 }
 
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Respect reduced-motion preferences platform-wide; individual AR/video
+   components add their own stronger guards in later phases. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

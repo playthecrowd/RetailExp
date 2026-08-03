@@ -1,0 +1,21 @@
+/** The 18 application states of the Kameleon mobile experience, in order. */
+export const kameleonMobileStates: string[] = [
+  "Tap to Begin",
+  "Commercial Video",
+  "WebAR Camera Permission",
+  "Ground Scanning",
+  "Ground Found",
+  "Portal Placement",
+  "Live AR Introduction",
+  "AR Tracking Lost",
+  "AR Unsupported/Fallback",
+  "Quick Account",
+  "Choose First Path",
+  "Selected Path Preview",
+  "360-Degree Video Player",
+  "End-of-Video Decision",
+  "Loading Next Chapter",
+  "Saved Story-Path Map",
+  "Journey Completion",
+  "Replay or Explore Another Path",
+];
