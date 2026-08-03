@@ -23,6 +23,7 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
  */
 export function ARControls({
   soundMuted,
+  placed,
   onToggleSound,
   onReposition,
   onReset,
@@ -31,6 +32,8 @@ export function ARControls({
   onEnterJourney,
 }: {
   soundMuted: boolean;
+  /** Only once the object is actually placed does "Continue Your Journey" appear. */
+  placed: boolean;
   onToggleSound: () => void;
   onReposition: () => void;
   onReset: () => void;
@@ -57,13 +60,15 @@ export function ARControls({
           <ExitIcon className="h-5 w-5" />
         </IconButton>
       </div>
-      <button
-        type="button"
-        onClick={onEnterJourney}
-        className="min-h-11 w-full max-w-xs rounded-full bg-kameleon-copper-light px-6 py-3 text-sm font-semibold uppercase tracking-wide text-kameleon-bg transition-colors hover:bg-kameleon-copper"
-      >
-        Enter the Journey
-      </button>
+      {placed && (
+        <button
+          type="button"
+          onClick={onEnterJourney}
+          className="min-h-11 w-full max-w-xs rounded-full bg-kameleon-copper-light px-6 py-3 text-sm font-semibold uppercase tracking-wide text-kameleon-bg transition-colors hover:bg-kameleon-copper"
+        >
+          Continue Your Journey
+        </button>
+      )}
     </div>
   );
 }

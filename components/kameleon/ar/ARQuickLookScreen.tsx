@@ -1,19 +1,48 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/Button";
 import { KameleonFlowHeader } from "@/components/kameleon/FlowHeader";
-import { CheckCircleIcon } from "@/components/kameleon/icons";
-import { SAMPLE_MODEL_URL, SAMPLE_MODEL_USDZ_URL } from "@/lib/kameleon/ar/ar-types";
+import { SAMPLE_MODEL_USDZ_URL } from "@/lib/kameleon/ar/ar-types";
+
+/** How long to wait after tapping the AR button before assuming Quick Look never actually opened. */
+const LAUNCH_TIMEOUT_MS = 2500;
 
 /**
- * iPhone/iPad AR path: Apple AR Quick Look, launched via a plain
- * `<a rel="ar" href="....usdz">` — the standards-based mechanism WebKit
- * (Safari, and every other iOS browser, which all run on WebKit per Apple's
- * App Store policy) intercepts to open the native camera-based AR viewer.
- * Deliberately not routed through model-viewer's own built-in AR button —
- * the correction explicitly calls for one obvious, custom launch action
- * rather than a small icon the user has to find.
+ * Apple's documented custom-action banner for AR Quick Look: these keys, in
+ * the USDZ link's URL *fragment* (not query string), make Quick Look show a
+ * bottom banner with our own call-to-action button instead of just a close
+ * button. Tapping that button dispatches a `message` event carrying
+ * `_apple_ar_quicklook_button_tapped` back to the triggering anchor — that's
+ * what actually drives the "Continue Your Journey" transition below, not
+ * Quick Look's dismissal on its own (the user might just close it via the
+ * native X without tapping our banner).
+ */
+function buildQuickLookHref(): string {
+  const parts = [
+    `callToAction=${encodeURIComponent("Continue Your Journey")}`,
+    `checkoutTitle=${encodeURIComponent("Kameleon")}`,
+    `checkoutSubtitle=${encodeURIComponent("Every Pour Is a Transformation")}`,
+  ];
+  if (typeof window !== "undefined") {
+    parts.push(`canonicalWebPageURL=${encodeURIComponent(window.location.href)}`);
+  }
+  return `${SAMPLE_MODEL_USDZ_URL}#${parts.join("&")}`;
+}
+
+/**
+ * iPhone/iPad AR-first path: one primary action opens Apple AR Quick Look
+ * directly (via a plain `<a rel="ar">` — the standards-based WebKit trigger,
+ * not a small icon). No inline 3D preview or AR/preview choice is offered
+ * in the normal flow — "Continue without AR" only appears after a launch
+ * failure, on an explicit help request, or (upstream, in
+ * KameleonARExperience) when the device genuinely can't do AR at all.
+ *
+ * IMPORTANT PLATFORM LIMITATION: once Quick Look opens, its AR/Object tabs,
+ * close button, and share button are rendered and owned entirely by iOS —
+ * nothing on this page can hide, restyle, or remove them. The only
+ * page-controllable outcomes are (a) the custom call-to-action banner
+ * configured above, and (b) reacting to the two WebKit events below once
+ * the user interacts with or dismisses Quick Look.
  */
 export function ARQuickLookScreen({
   onEnterJourney,
@@ -22,32 +51,67 @@ export function ARQuickLookScreen({
   onEnterJourney: () => void;
   onSkipAr: () => void;
 }) {
-  const [viewedAR, setViewedAR] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
-  const [modelViewerReady, setModelViewerReady] = useState(false);
+  const [launchFailed, setLaunchFailed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const arLinkRef = useRef<HTMLAnchorElement | null>(null);
+  const launchTimeoutRef = useRef<number | null>(null);
+
+  function clearLaunchTimeout() {
+    if (launchTimeoutRef.current !== null) {
+      window.clearTimeout(launchTimeoutRef.current);
+      launchTimeoutRef.current = null;
+    }
+  }
+
+  // The banner's call-to-action tap — the real "Continue Your Journey"
+  // signal. Fires while Quick Look is still visually open/animating closed,
+  // so the page underneath has already switched to Quick Account by the
+  // time Quick Look actually hands control back.
+  useEffect(() => {
+    const anchor = arLinkRef.current;
+    if (!anchor) return;
+    function handleMessage(event: MessageEvent) {
+      if (event.data === "_apple_ar_quicklook_button_tapped") {
+        clearLaunchTimeout();
+        onEnterJourney();
+      }
+    }
+    anchor.addEventListener("message", handleMessage as EventListener);
+    return () => anchor.removeEventListener("message", handleMessage as EventListener);
+  }, [onEnterJourney]);
+
+  // Confirms Quick Look actually took over the screen (cancels the launch-
+  // failure timer) and, on return without a banner tap, just resets to the
+  // idle button rather than assuming success or failure.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") clearLaunchTimeout();
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
 
   useEffect(() => {
     const anchor = arLinkRef.current;
     if (!anchor) return;
-    const handleEndFullscreen = () => setViewedAR(true);
-    // `webkitendfullscreen` is the WebKit-specific event AR Quick Look fires
-    // on the triggering anchor when the user dismisses it — there is no
-    // standardized cross-browser equivalent for "AR Quick Look was closed".
+    function handleEndFullscreen() {
+      clearLaunchTimeout();
+    }
     anchor.addEventListener("webkitendfullscreen", handleEndFullscreen);
     return () => anchor.removeEventListener("webkitendfullscreen", handleEndFullscreen);
   }, []);
 
-  useEffect(() => {
-    if (!showPreview || modelViewerReady) return;
-    let cancelled = false;
-    import("@google/model-viewer").then(() => {
-      if (!cancelled) setModelViewerReady(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [showPreview, modelViewerReady]);
+  useEffect(() => clearLaunchTimeout, []);
+
+  function handleArClick() {
+    setLaunchFailed(false);
+    clearLaunchTimeout();
+    launchTimeoutRef.current = window.setTimeout(() => {
+      if (document.visibilityState !== "hidden") {
+        setLaunchFailed(true);
+      }
+    }, LAUNCH_TIMEOUT_MS);
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-4 px-6 pb-6">
@@ -60,89 +124,84 @@ export function ARQuickLookScreen({
       />
 
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-        {viewedAR ? (
-          <>
-            <CheckCircleIcon className="h-8 w-8 text-kameleon-copper-light" />
-            <h1 className="font-display text-xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
-              AR experience viewed
-            </h1>
-            <p className="max-w-xs text-sm text-kameleon-text-muted">
-              You explored the Kameleon prototype in your space using Apple AR Quick Look.
-            </p>
-          </>
-        ) : (
-          <>
-            <h1 className="font-display text-xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
-              Place the experience in your space
-            </h1>
-            <p className="max-w-xs text-sm text-kameleon-text-muted">
-              Tap below to open the camera, find a surface, and place the Kameleon prototype.
-            </p>
-          </>
-        )}
+        <h1 className="font-display text-2xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
+          Place the experience in your space
+        </h1>
+        <p className="max-w-xs text-sm text-kameleon-text-muted">
+          Move your phone slowly to find a surface, then place the Kameleon experience in your
+          world.
+        </p>
 
-        {showPreview && (
-          <div className="mt-1 aspect-square w-full max-w-[200px] overflow-hidden rounded-2xl border border-kameleon-border bg-kameleon-surface">
-            {modelViewerReady ? (
-              <model-viewer
-                src={SAMPLE_MODEL_URL}
-                alt="Sample prototype model"
-                camera-controls
-                auto-rotate
-                autoplay
-                animation-name="Survey"
-                style={{ width: "100%", height: "100%", backgroundColor: "transparent" }}
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-xs text-kameleon-text-muted">
-                Loading…
-              </div>
-            )}
+        {launchFailed && (
+          <div className="mt-2 flex flex-col items-center gap-3 rounded-xl border border-kameleon-red/40 bg-kameleon-surface px-4 py-3">
+            <p className="max-w-xs text-sm text-kameleon-text-muted">
+              AR didn&apos;t open. You can try again, or continue without it.
+            </p>
+            <button
+              type="button"
+              onClick={onSkipAr}
+              className="text-sm font-medium text-kameleon-copper-light underline-offset-4 hover:underline"
+            >
+              Continue without AR
+            </button>
           </div>
         )}
-
-        <p className="mt-1 max-w-xs text-[11px] text-kameleon-text-muted">
-          iPhone uses Apple AR Quick Look — a native, camera-based placement view outside the
-          browser page. Supported Android devices use an embedded WebXR view instead. Both place
-          the object on a real surface using your camera; only the controls and presentation
-          differ.
-        </p>
       </div>
 
       <div className="flex shrink-0 flex-col items-center gap-3">
-        {viewedAR ? (
-          <Button brand="kameleon" size="lg" fullWidth onClick={onEnterJourney}>
-            Enter the Journey
-          </Button>
-        ) : (
-          <a
-            ref={arLinkRef}
-            rel="ar"
-            href={SAMPLE_MODEL_USDZ_URL}
-            className="flex min-h-11 w-full items-center justify-center rounded-full bg-kameleon-copper-light px-6 py-3 text-center text-sm font-semibold uppercase tracking-wide text-kameleon-bg transition-colors hover:bg-kameleon-copper"
-          >
-            Open AR on iPhone
-          </a>
-        )}
+        <a
+          ref={arLinkRef}
+          rel="ar"
+          href={buildQuickLookHref()}
+          onClick={handleArClick}
+          className="flex min-h-11 w-full items-center justify-center rounded-full bg-kameleon-copper-light px-6 py-3 text-center text-sm font-semibold uppercase tracking-wide text-kameleon-bg transition-colors hover:bg-kameleon-copper"
+        >
+          Open AR Experience
+        </a>
 
         <button
           type="button"
-          onClick={() => setShowPreview((v) => !v)}
-          className="text-sm font-medium text-kameleon-copper-light underline-offset-4 hover:underline"
+          onClick={() => setHelpOpen(true)}
+          className="text-xs text-kameleon-text-muted underline-offset-4 hover:underline"
         >
-          {showPreview ? "Hide 3D preview" : "View 3D preview"}
+          Need help?
         </button>
-
-        {!viewedAR && (
-          <button
-            type="button"
-            onClick={onSkipAr}
-            className="text-xs text-kameleon-text-muted underline-offset-4 hover:underline"
-          >
-            Continue without AR
-          </button>
-        )}
       </div>
+
+      {helpOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
+          role="dialog"
+          aria-modal="true"
+          aria-label="AR help"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-kameleon-copper/40 bg-kameleon-surface p-5 text-center">
+            <h2 className="font-display text-lg font-semibold uppercase tracking-wide text-kameleon-copper-light">
+              Need help?
+            </h2>
+            <p className="mt-2 text-sm text-kameleon-text-muted">
+              Tap &quot;Open AR Experience,&quot; allow camera access if asked, then slowly move your
+              phone until a surface is found and the experience appears.
+            </p>
+            <div className="mt-4 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => setHelpOpen(false)}
+                className="w-full rounded-full bg-kameleon-copper-light py-3 text-sm font-semibold uppercase tracking-wide text-kameleon-bg"
+              >
+                Got it
+              </button>
+              <button
+                type="button"
+                onClick={onSkipAr}
+                className="text-sm font-medium text-kameleon-copper-light underline-offset-4 hover:underline"
+              >
+                Continue without AR
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

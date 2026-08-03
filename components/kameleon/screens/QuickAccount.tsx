@@ -5,24 +5,28 @@ import { Button } from "@/components/ui/Button";
 import { KameleonEmblem } from "@/components/kameleon/art/Emblem";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { KameleonFlowHeader } from "@/components/kameleon/FlowHeader";
+import { saveLocalProfile } from "@/lib/kameleon/profile";
 
 /**
- * Mock authentication only (checkpoint 3.8) — no account is actually
- * created and no credentials leave the browser. Real Supabase email/
- * password + magic-link auth replaces this in Phase 7.
+ * Local prototype persistence only (checkpoint 3.8) — no permanent account
+ * is created, nothing is sent anywhere, and no password is collected or
+ * stored. Real Supabase signup replaces this in Phase 7 (see
+ * lib/kameleon/profile.ts for the adapter seam).
  */
 export function QuickAccount({ onComplete }: { onComplete: () => void }) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const canSubmit = emailValid && password.length >= 8 && ageConfirmed;
+  const canSubmit = firstName.trim().length > 0 && lastName.trim().length > 0 && emailValid && termsAccepted;
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (canSubmit) onComplete();
+    if (!canSubmit) return;
+    saveLocalProfile({ firstName: firstName.trim(), lastName: lastName.trim(), email });
+    onComplete();
   }
 
   return (
@@ -45,7 +49,7 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               Save your place in the story
             </h1>
             <p className="mt-2 max-w-xs text-sm text-kameleon-text-muted">
-              Create a quick account to choose your path, save progress, and return anytime.
+              A quick note so we can pick up where you left off — no account, no password.
             </p>
           </div>
 
@@ -53,6 +57,39 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
             onSubmit={handleSubmit}
             className="flex w-full max-w-sm flex-col gap-4 rounded-xl border border-kameleon-border bg-kameleon-bg/80 p-5 text-left backdrop-blur-sm"
           >
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="quick-first-name" className="mb-1.5 block text-sm text-kameleon-text-muted">
+                  First name
+                </label>
+                <input
+                  id="quick-first-name"
+                  type="text"
+                  autoComplete="given-name"
+                  required
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
+                  placeholder="Jordan"
+                />
+              </div>
+              <div>
+                <label htmlFor="quick-last-name" className="mb-1.5 block text-sm text-kameleon-text-muted">
+                  Last name
+                </label>
+                <input
+                  id="quick-last-name"
+                  type="text"
+                  autoComplete="family-name"
+                  required
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
+                  placeholder="Rivera"
+                />
+              </div>
+            </div>
+
             <div>
               <label htmlFor="quick-email" className="mb-1.5 block text-sm text-kameleon-text-muted">
                 Email address
@@ -69,89 +106,36 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               />
             </div>
 
-            <div>
-              <label htmlFor="quick-password" className="mb-1.5 block text-sm text-kameleon-text-muted">
-                Create password
-              </label>
-              <div className="relative">
-                <input
-                  id="quick-password"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="new-password"
-                  required
-                  minLength={8}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 pr-16 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
-                  placeholder="At least 8 characters"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((s) => !s)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-kameleon-text-muted hover:text-kameleon-text"
-                >
-                  {showPassword ? "Hide" : "Show"}
-                </button>
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2.5 text-sm text-kameleon-text-muted">
+            <label className="flex items-start gap-2.5 text-sm text-kameleon-text-muted">
               <input
                 type="checkbox"
-                checked={ageConfirmed}
-                onChange={(e) => setAgeConfirmed(e.target.checked)}
-                className="h-4 w-4 rounded border-kameleon-border accent-kameleon-copper"
+                checked={termsAccepted}
+                onChange={(e) => setTermsAccepted(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-kameleon-border accent-kameleon-copper"
               />
-              I&apos;m 21 or older
+              <span>
+                I agree to the{" "}
+                <span className="text-kameleon-copper-light underline-offset-4" title="Not available in this preview">
+                  Terms of Service
+                </span>{" "}
+                and{" "}
+                <span className="text-kameleon-copper-light underline-offset-4" title="Not available in this preview">
+                  Privacy Policy
+                </span>
+                .
+              </span>
             </label>
 
             <Button brand="kameleon" size="lg" fullWidth type="submit" disabled={!canSubmit}>
               Continue the experience
             </Button>
 
-            <div className="flex items-center gap-3 text-xs text-kameleon-text-muted">
-              <span className="h-px flex-1 bg-kameleon-border" />
-              or
-              <span className="h-px flex-1 bg-kameleon-border" />
-            </div>
-
-            <div>
-              <button
-                type="button"
-                disabled
-                aria-describedby="oauth-unavailable"
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-md border border-kameleon-border text-sm text-kameleon-text-muted/50"
-              >
-                Continue with Apple
-              </button>
-            </div>
-            <div>
-              <button
-                type="button"
-                disabled
-                aria-describedby="oauth-unavailable"
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-md border border-kameleon-border text-sm text-kameleon-text-muted/50"
-              >
-                Continue with Google
-              </button>
-            </div>
-            <p id="oauth-unavailable" className="text-center text-[11px] text-kameleon-text-muted/60">
-              Apple &amp; Google sign-in are disabled in this preview — available once Supabase auth
-              (Phase 7) is connected.
-            </p>
-
             <p className="text-center text-xs text-kameleon-text-muted/70">
-              Preview mode — this creates a local mock session only. No account is created and nothing is
-              sent anywhere until Supabase auth is connected.
+              Preview mode — this saves your name and email on this device only. No account is
+              created, no password is collected, and nothing is sent anywhere until Supabase is
+              connected.
             </p>
           </form>
-
-          <p className="text-sm text-kameleon-text-muted">
-            Already have an account?{" "}
-            <span className="text-kameleon-copper-light underline-offset-4" title="Not available in this preview">
-              Sign in
-            </span>
-          </p>
         </div>
       </div>
     </div>

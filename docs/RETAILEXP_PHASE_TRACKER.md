@@ -756,6 +756,115 @@ require real hardware this environment doesn't have.
 COMPLETE until both the Android ground-plane placement and the iPhone Quick
 Look sequence are confirmed on physical hardware.
 
+### AR-only customer flow correction (2026-08-03)
+
+Physical iPhone screenshots from the previous round confirmed Quick Look
+itself works end-to-end (camera, surface detection, placement, native
+AR/Object tabs) — this round is a customer-experience correction, not a
+new capability. Two things prompted it: the page still offered a redundant
+inline 3D-preview choice alongside real AR, and the placeholder USDZ (two
+cylinders) needed to stop looking like it might be the intended design.
+
+**AR-first iPhone flow (`components/kameleon/ar/ARQuickLookScreen.tsx`,
+rewritten):**
+- Removed "View 3D preview"/"Hide 3D preview" and the technical WebXR/iOS
+  comparison paragraph entirely from the customer-facing screen — one
+  primary action only.
+- New copy exactly as specified: "Place the experience in your space" /
+  "Move your phone slowly to find a surface, then place the Kameleon
+  experience in your world." / "Open AR Experience" / "Need help?".
+- "Continue without AR" is no longer shown by default — it now only
+  appears (a) inside the "Need help?" panel, or (b) if a
+  `visibilitychange`-timeout heuristic concludes Quick Look never actually
+  took over the screen after the button was tapped (there is no direct
+  browser event for "Quick Look failed to open," so this is a best-effort,
+  not a guaranteed-precise, detector).
+- The USDZ launch link now carries Apple's documented custom-banner
+  fragment parameters (`callToAction=Continue Your Journey`,
+  `checkoutTitle=Kameleon`, `checkoutSubtitle=Every Pour Is a
+  Transformation`, `canonicalWebPageURL`) so Quick Look shows our own
+  call-to-action instead of a bare close button. Tapping it dispatches a
+  `message` event (`data === "_apple_ar_quicklook_button_tapped"`) to the
+  triggering anchor — that event, not Quick Look's dismissal on its own
+  (the user could just tap the native X), is what transitions the page
+  straight to Quick Account, before Quick Look has finished closing. No
+  personal data is placed in this URL — only the three static strings.
+
+**Platform limitation, stated plainly:** Quick Look's AR tab, Object tab,
+close button, and share button are rendered and owned by iOS. Nothing
+on this website can hide, remove, or restyle them — confirmed against the
+physical-device screenshots, and documented in
+`docs/KAMELEON_AR_ASSET_MANIFEST.md` so this isn't re-litigated as a bug
+later. The Object tab was **not** removed and no report will claim it was.
+
+**Android consistency (`components/kameleon/ar/ARControls.tsx`,
+`KameleonARExperience.tsx`):** the bottom-tray primary action is renamed
+"Continue Your Journey" (from "Enter the Journey") and now only renders
+once `phase === "placed"` — before that, "Exit AR" in the icon row remains
+the only way out, matching the "no inline preview choice, no early exit
+via a non-AR path" requirement. Ending it still cleanly ends the WebXR
+session, stops the camera, disposes all Three.js/hit-test resources
+(unchanged code path from the original Phase 5 round), and opens Quick
+Account.
+
+**Quick Account form rewritten (`components/kameleon/screens/
+QuickAccount.tsx`, `lib/kameleon/profile.ts` new):** First name / Last
+name / Email / Terms-and-privacy acknowledgment, replacing the previous
+email+password+age-checkbox form. **No password field exists anymore, and
+none is stored.** Submissions save to `localStorage` only
+(`lib/kameleon/profile.ts`, a small isolated adapter — swapping in real
+Supabase signup later touches only that one file) with copy that explicitly
+says no account is created and nothing is sent anywhere yet.
+
+**3D asset:** the two-cylinder USDZ and the Fox GLB are **kept as-is**,
+relabeled in `docs/KAMELEON_AR_ASSET_MANIFEST.md` as deprecated technical
+placement placeholders (their placement/pipeline-proving job is done, they
+are not presented as final design) rather than replaced with a hand-coded
+substitute. A rigged, animated, low-poly chameleon (idle-breathing,
+head-turn, blink, tail movement, crawl loop for Android; a matching, static
+unless verified, USDZ for iPhone) is **not achievable with the tools
+available in this environment** — no 3D modeling/rigging/animation software
+is installed, and raw geometry-API scripting (the only asset-authoring tool
+actually available here) cannot produce organic character rigging. Per the
+explicit instruction covering this exact case, a full Blender-ready
+production specification (geometry, rig, named animation clips, materials,
+GLB/USDZ delivery requirements, and exactly what code does *not* need to
+change once delivered) was written into the asset manifest instead of
+fabricating a worse substitute or claiming completion.
+
+**Verification performed:**
+- `npx tsc --noEmit`, `npm run lint`, `npm run build` — all clean (one
+  real lint catch: an unnecessary `eslint-disable` comment on the
+  message-event effect, removed rather than left in). Dev server stopped
+  before the build, restarted after.
+- Desktop simulation (the only testing this environment can do without
+  physical hardware): the Quick Look screen renders the exact required
+  copy with no scrolling needed; the launch anchor carries all four
+  required fragment parameters; a simulated `MessageEvent` with
+  `data: "_apple_ar_quicklook_button_tapped"` correctly and immediately
+  transitions straight to the new Quick Account form (no intermediate
+  screen); the new form's fields, no-password behavior, and
+  `localStorage`-only persistence were exercised end-to-end and confirmed
+  correct; "Need help?" reveals its panel with a working "Continue without
+  AR"; the WebXR/Android start-screen path was re-verified reachable and
+  unaffected by this round's changes (via the same
+  `navigator.xr.isSessionSupported` override technique as prior rounds).
+  No console errors observed at any point.
+- **Not verified — still the reason this phase isn't complete:** the
+  actual Quick Look banner tap on a physical iPhone (both Safari and
+  Chrome), the `visibilitychange`-timeout failure heuristic under a real
+  failure condition, and Android ground-plane hit-test placement itself.
+
+**Files created:** `components/kameleon/ar/ARQuickLookScreen.tsx`
+(rewritten, not new — see above), `lib/kameleon/profile.ts`.
+**Files changed:** `components/kameleon/ar/{ARControls,
+KameleonARExperience}.tsx`, `components/kameleon/screens/QuickAccount.tsx`,
+`docs/KAMELEON_AR_ASSET_MANIFEST.md`.
+
+**Status: READY FOR MOBILE AR REVIEW** (unchanged) — not APPROVED, not
+COMPLETE until iPhone Safari, iPhone Chrome, and Android are all confirmed
+on physical hardware per this round's specific test list.
+
 ## Phase 6 — Kameleon Cinematic AR Introduction
 
 **Goal:** Replace the AR mock with the real ground-anchored introduction.

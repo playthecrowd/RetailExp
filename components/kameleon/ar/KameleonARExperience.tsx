@@ -479,6 +479,7 @@ export function KameleonARExperience({
         {isLive && (
           <ARControls
             soundMuted={soundMuted}
+            placed={phase === "placed"}
             onToggleSound={toggleMuted}
             onReposition={clearPlacement}
             onReset={clearPlacement}
