@@ -4,18 +4,19 @@ import type { Database } from "./database.types";
 
 /**
  * Server-side Supabase client for Server Components/Actions/Route
- * Handlers — still uses the anon key (RLS applies exactly as it would for
- * a browser request), just reads the session from cookies instead of
- * browser storage. For operations that must bypass RLS entirely (e.g.
- * creating the first client_memberships row for a brand-new client),
- * use ./service-role.ts instead, and only from trusted server code.
+ * Handlers — still uses the publishable key (RLS applies exactly as it
+ * would for a browser request; see lib/supabase/client.ts), just reads
+ * the session from cookies instead of browser storage. For operations
+ * that must bypass RLS entirely (e.g. creating the first
+ * client_memberships row for a brand-new client), use ./secret.ts
+ * instead, and only from trusted server code.
  */
 export async function createClient() {
   const cookieStore = await cookies();
 
   return createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
     {
       cookies: {
         getAll() {

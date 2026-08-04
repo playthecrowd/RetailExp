@@ -4,8 +4,22 @@
 -- row-level, not column-level, and Postgres has no native "this column is
 -- only writable by X" primitive) — even if an RLS policy would otherwise
 -- permit a write, these triggers can still reject it. Both bypass for
--- auth.role() = 'service_role' only, i.e. server-side/administrative
--- scripts using the service-role key — never the anon/browser key.
+-- auth.role() = 'service_role' only, i.e. requests authenticated with the
+-- secret key (lib/supabase/secret.ts) — never the browser-safe
+-- publishable key.
+--
+-- This condition is intentionally NOT renamed to match the new
+-- publishable/secret key terminology — 'service_role' here refers to the
+-- underlying Postgres role/JWT claim, not the old key name, and that role
+-- is unchanged by Supabase's key-format migration. Verified against
+-- Supabase's own migration guide rather than assumed: "You can substitute
+-- the sb_publishable_... and sb_secret_... values anywhere you used the
+-- anon and service_role keys respectively, as they work roughly the same
+-- in terms of permissions and data access."
+-- https://supabase.com/docs/guides/getting-started/migrating-to-new-api-keys
+-- This should still be empirically re-confirmed once a real project
+-- exists and these migrations are actually applied (Checkpoint 7.2 has
+-- not connected to a live Supabase project) — see the Checkpoint report.
 --
 -- Both are marked SECURITY DEFINER with an explicit search_path: their
 -- internal reads (of profiles.is_platform_admin / client_memberships.role

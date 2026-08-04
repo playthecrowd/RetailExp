@@ -37,7 +37,7 @@ Implementation (all in `supabase/migrations/*_rls_policies.sql` and
   literally: nothing is granted now, and a future masked/non-PII view is
   explicitly left as later work rather than guessed at today.
 - `profiles_protect_platform_admin_flag` trigger — nobody but a
-  service-role operation can grant platform-admin access, including an
+  secret-key operation can grant platform-admin access, including an
   existing platform admin trying to grant it to someone else through a
   normal client update.
 
@@ -67,8 +67,8 @@ a permanent public link.
 **Server-side signed-URL generation.** A future Route Handler (e.g.
 `app/api/media/[assetId]/route.ts`) will:
 1. Create a Supabase server client (`lib/supabase/server.ts` — the
-   **anon-key** client, not service-role) using the requester's own
-   session/cookies.
+   **publishable-key** client, not the secret-key one) using the
+   requester's own session/cookies.
 2. `SELECT` the requested `media_assets` row through that client. This
    read is subject to the exact same RLS policies already written
    (`media_assets_select_members` / `media_assets_select_published_public`)
@@ -79,7 +79,7 @@ a permanent public link.
    using the **same** session-bound client. `createSignedUrl` is itself
    subject to the Storage RLS policies already written
    (`platform_media_select_members` / `platform_media_select_published_public`)
-   — so **no service-role key is needed for this operation at all**. The
+   — so **no secret key is needed for this operation at all**. The
    two independent RLS layers (table + storage) have to agree before a
    URL is ever produced.
 
@@ -99,7 +99,7 @@ URLs serve the object with standard HTTP `Range` support — a `<video>`
 element seeks against a signed URL exactly as it would against a public
 one. No special handling is needed in the player.
 
-**No service-role key in the client bundle:** never required by this flow
+**No secret key in the client bundle:** never required by this flow
 in the first place (see above) — the browser only ever receives the
 short-lived signed URL itself, never any key.
 
