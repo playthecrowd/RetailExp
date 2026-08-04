@@ -3,21 +3,29 @@
  * namedErrors.d.ts — the actual list this project verified by reading the
  * installed package's source, not guessed) plus raw browser
  * `getUserMedia` DOMExceptions to honest, customer-facing copy. Every
- * mapped error also carries whether a "Try again" action makes sense.
+ * mapped error also carries whether a "Try again" action makes sense, and a
+ * normalized `category` (the matched error/DOMException name, or a fixed
+ * label for non-SDK failure paths) so the isolated diagnostics screen can
+ * show *which kind* of failure occurred without ever showing the raw
+ * error object (which could otherwise leak stack traces/host info).
  */
 
 export interface SnapArError {
   message: string;
   recoverable: boolean;
+  category: string;
 }
+
+const DEFAULT_CATEGORY = "Unknown";
 
 const DEFAULT_ERROR: SnapArError = {
   message: "The AR test couldn't start. You can try again or exit.",
   recoverable: true,
+  category: DEFAULT_CATEGORY,
 };
 
 /** DOMException.name values from a failed navigator.mediaDevices.getUserMedia() call. */
-const CAMERA_PERMISSION_MESSAGES: Record<string, SnapArError> = {
+const CAMERA_PERMISSION_MESSAGES: Record<string, Omit<SnapArError, "category">> = {
   NotAllowedError: {
     message: "Camera access was denied. Allow camera access in your browser settings to continue.",
     recoverable: true,
@@ -38,10 +46,14 @@ const CAMERA_PERMISSION_MESSAGES: Record<string, SnapArError> = {
     message: "Camera access requires a secure (HTTPS) connection.",
     recoverable: false,
   },
+  AbortError: {
+    message: "Camera startup was interrupted. Try again.",
+    recoverable: true,
+  },
 };
 
-/** Camera Kit's own named error types (Error.prototype.name). */
-const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, SnapArError> = {
+/** Camera Kit's own named error types (Error.prototype.name) — full list per namedErrors.d.ts. */
+const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "category">> = {
   PlatformNotSupportedError: {
     message: "This browser doesn't support the AR test on this device.",
     recoverable: false,
@@ -56,6 +68,10 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, SnapArError> = {
   },
   WebGLError: {
     message: "This device/browser couldn't start the AR renderer.",
+    recoverable: false,
+  },
+  BenchmarkError: {
+    message: "This device couldn't be evaluated for AR performance.",
     recoverable: false,
   },
   CameraKitSourceError: {
@@ -82,6 +98,26 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, SnapArError> = {
     message: "The AR test became unavailable and needs to be restarted.",
     recoverable: true,
   },
+  LensImagePickerError: {
+    message: "The AR effect couldn't access an image it needed.",
+    recoverable: true,
+  },
+  LensVideoPlaybackMutedError: {
+    message: "Video in this AR effect is muted by your browser.",
+    recoverable: true,
+  },
+  CacheKeyNotFoundError: {
+    message: "The AR effect's cached data couldn't be found and needs to be reloaded.",
+    recoverable: true,
+  },
+  PersistentStoreError: {
+    message: "The AR effect couldn't save its data on this device.",
+    recoverable: true,
+  },
+  ArgumentValidationError: {
+    message: "AR test configuration is invalid.",
+    recoverable: false,
+  },
   LegalError: {
     message: "You'll need to accept Snap's terms to continue the AR test.",
     recoverable: true,
@@ -100,18 +136,20 @@ function isErrorLike(value: unknown): value is { name?: string; message?: string
  * Walks a possible error/cause chain (Camera Kit often wraps the original
  * browser DOMException as `.cause` on its own named error) looking for a
  * recognized name, camera-permission error first since it's the most
- * common real-world case.
+ * common real-world case. The returned `category` is always just the
+ * matched name (or "Unknown") — never the raw error/message/stack, so it's
+ * safe to render directly in the isolated diagnostics UI.
  */
 export function mapSnapArError(error: unknown): SnapArError {
   let current: unknown = error;
   for (let i = 0; i < 5 && isErrorLike(current); i++) {
     const name = current.name;
     if (typeof name === "string") {
-      if (CAMERA_PERMISSION_MESSAGES[name]) return CAMERA_PERMISSION_MESSAGES[name];
-      if (CAMERA_KIT_NAMED_ERROR_MESSAGES[name]) return CAMERA_KIT_NAMED_ERROR_MESSAGES[name];
+      if (CAMERA_PERMISSION_MESSAGES[name]) return { ...CAMERA_PERMISSION_MESSAGES[name], category: name };
+      if (CAMERA_KIT_NAMED_ERROR_MESSAGES[name]) return { ...CAMERA_KIT_NAMED_ERROR_MESSAGES[name], category: name };
     }
     if (isDOMException(current) && CAMERA_PERMISSION_MESSAGES[current.name]) {
-      return CAMERA_PERMISSION_MESSAGES[current.name];
+      return { ...CAMERA_PERMISSION_MESSAGES[current.name], category: current.name };
     }
     current = current.cause;
   }
@@ -122,9 +160,18 @@ export function mapSnapArError(error: unknown): SnapArError {
 export const CONFIG_MISSING_ERROR: SnapArError = {
   message: "AR test configuration is missing.",
   recoverable: false,
+  category: "ConfigMissing",
 };
 
 export const UNSUPPORTED_BROWSER_ERROR: SnapArError = {
   message: "This browser doesn't support the AR test.",
   recoverable: false,
+  category: "UnsupportedBrowser",
+};
+
+/** The session never produced a rendered frame within the timeout window. */
+export const NO_FRAME_TIMEOUT_ERROR: SnapArError = {
+  message: "The AR test didn't finish starting in time.",
+  recoverable: true,
+  category: "NoFrameTimeout",
 };

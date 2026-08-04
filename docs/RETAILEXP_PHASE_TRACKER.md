@@ -872,8 +872,10 @@ directly inside the Kameleon webpage via Snap Camera Kit Web (camera feed
 composited in-page, not a redirect to Snapchat/an external Snap surface),
 so the existing "Continue Your Journey" interface can wrap it the same way
 it wraps the WebXR and Quick Look paths.
-**Status:** IN PROGRESS — Checkpoint 1 (Preflight) only. No code has been
-written or installed for this evaluation yet.
+**Status:** IN PROGRESS — Checkpoints 1-4 complete (preflight, safe
+scaffold, isolated embedded prototype, diagnostic/cleanup correction).
+Awaiting a new round of physical iPhone testing (Safari/Firefox/Chrome)
+against Checkpoint 4 before any further checkpoint.
 **Start date:** 2026-08-03
 **Approval required:** Yes — this introduces a new third-party SDK,
 external network calls (Snap's CDN/API), and a new credential (Camera Kit
@@ -993,7 +995,109 @@ begins until explicitly approved past this preflight checkpoint.
 
 **Approval required:** Yes — before any package install, any file
 creation, or any request for a Snap developer token.
-**Next action:** Await review of this preflight before Checkpoint 2.
+
+### Checkpoint 2 — Safe scaffold (2026-08-03)
+
+Added `.env.example` (blank placeholders for the three
+`NEXT_PUBLIC_SNAP_*` variables), `lib/kameleon/ar/snap-camera-kit-config.ts`
+(typed env reader using literal `process.env.NEXT_PUBLIC_*` references, per
+Next.js's requirement that only literal references get inlined into the
+client bundle), and the isolated route
+`app/experience/kameleon/ar-snap-test/page.tsx`, which shows "Snap Camera
+Kit configuration pending." until all three variables are set. No package
+installed, no camera access requested, production route untouched.
+
+### Checkpoint 3 — Isolated embedded prototype (2026-08-03, commit `167081b`)
+
+Installed `@snap/camera-kit` and `@snap/react-camera-kit` (both official,
+free — no billing found anywhere in Camera Kit's terms, npm registry, or
+account setup). Implemented the isolated test route using
+`@snap/react-camera-kit`'s `CameraKitProvider`/`LensPlayer`/`LiveCanvas`:
+camera access is only requested after a "START SNAP AR TEST" tap, the
+configured Lens loads full-screen with Continue Your Journey / Exit AR /
+Help controls, and errors map to customer-friendly copy via
+`lib/kameleon/ar/snap-error-messages.ts`. CSP scoped narrowly to this one
+route in `next.config.ts` (real Snap hostnames found by grepping the
+installed package's source, not guessed; `'unsafe-inline'` on `script-src`
+required by Next dev-mode's own inline bootstrap script — see that file's
+inline comments for the full isolation-testing trail). Cleanup relied on
+unmounting `CameraKitProvider` (the wrapper exposes no separate dispose
+method). `tsc`/lint/build all passed. Committed as `167081b`.
+
+**Physical iPhone test result (reported after this commit):** camera
+permission/activation succeeds on Safari, Firefox, and Chrome (all
+WebKit-backed on iPhone), but the experience fails before the Lens becomes
+visible on all three, landing on the generic error screen — and the camera
+indicator stays on after the error screen renders, i.e. the
+unmount-based cleanup assumption from Checkpoint 3 was wrong in practice.
+
+### Checkpoint 4 — Diagnostic instrumentation and cleanup correction (2026-08-03)
+
+**Root-cause direction:** `@snap/react-camera-kit`'s `useCameraKit()` only
+exposes three coarse status buckets (`sdkStatus` / `source.status` /
+`lens.status`), which can't distinguish "Lens not found in the configured
+group" from "Lens content download failed" from "Lens apply failed" —
+three separate core-SDK calls the wrapper collapses into one bucket. It
+also never exposed the `MediaStream` it created internally, so this
+project had no way to guarantee `track.stop()` ran — which matches the
+observed bug (camera indicator staying on after the error screen).
+
+**Change made:** `components/kameleon/ar/SnapArTestScreen.tsx` was
+rewritten to use the core `@snap/camera-kit` API directly
+(`bootstrapCameraKit`, `cameraKit.createSession`,
+`cameraKit.lensRepository.loadLens`/`cacheLensContent`,
+`session.applyLens`, `session.setSource`, `session.play`), per the
+explicit instruction to drop the React wrapper if it couldn't provide
+reliable lifecycle/cleanup control. `@snap/react-camera-kit` was removed
+from `package.json` (no longer used anywhere in the codebase).
+
+- **Own `getUserMedia()` call:** the component now requests the camera
+  itself and holds the resulting `MediaStream` in a ref, so cleanup can
+  always call `track.stop()` on every track regardless of SDK state.
+- **12 named lifecycle stages** tracked in
+  `lib/kameleon/ar/snap-ar-diagnostics.ts` (configuration, SDK bootstrap,
+  terms/consent, camera request, camera ready, Lens group lookup, Lens
+  content load, Lens apply, session play, first rendered frame, active
+  session, cleanup), each tied to one specific core-API call. "Terms/
+  consent" has no public hook (Camera Kit's legal-prompt handling is
+  internal) — it's attributed by exclusion (passed if no `LegalError`
+  surfaces), documented as such rather than reached via a private API.
+  "First rendered frame" is detected via `session.metrics.beginMeasurement()`
+  and polling `.measure().lensFrameProcessingN > 0` (a real frame-count
+  signal from the SDK's own performance API, not a heuristic based on
+  canvas size).
+- **Cleanup sequencing rewritten:** on any exit path (error, Exit AR,
+  Continue Your Journey, unmount), cleanup now runs *before* any
+  transition is shown: cancel the first-frame polling loop → detach the
+  session error listener → stop every `MediaStreamTrack` on the
+  self-owned stream (unconditional, first, wrapped per-track so one
+  failure can't block the rest) → `session.pause()` /
+  `session.removeLens()` / `session.destroy()` → `cameraKit.destroy()` →
+  mark `cleanupCompleted`. The error screen's "Try Again" button is
+  hidden (replaced with "Finishing cleanup…") until
+  `diagnostics.cleanupCompleted === "yes"`.
+- **Retry** goes back through the Start screen (fresh user-gesture-backed
+  `getUserMedia()` call, matching browser autoplay/permission-prompt
+  requirements) and remounts a fresh session component via a `key` bump —
+  a genuinely new `MediaStream`/`CameraKit`/`CameraKitSession` instance
+  each time, not a reused one.
+- **Diagnostics UI:** a "View diagnostics" toggle (visible during loading
+  and on the error screen) renders the 12-field diagnostics record —
+  last successful stage, failed stage, normalized error category
+  (`SnapArError.category`, e.g. `"BootstrapError"`, `"NotAllowedError"`),
+  and yes/no/pass-fail for each stage. Every field is a stage name,
+  boolean, or matched error-type name — never an API token, Lens ID, Lens
+  Group ID, or other environment-variable value.
+
+**Verification:** `tsc --noEmit`, `eslint`, and `next build` all pass.
+Production route (`app/experience/kameleon/page.tsx` and everything it
+imports) untouched by this change.
+**Not yet done:** a new round of physical iPhone testing (Safari,
+Firefox, Chrome) against this rewrite — the diagnostics panel should now
+show exactly which of the 12 stages fails and why, rather than a generic
+error.
+**Next action:** physical re-test, then read back the diagnostics panel's
+values to actually root-cause the WebKit-common failure.
 
 ## Phase 6 — Kameleon Cinematic AR Introduction
 
