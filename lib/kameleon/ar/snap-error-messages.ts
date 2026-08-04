@@ -8,6 +8,11 @@
  * label for non-SDK failure paths) so the isolated diagnostics screen can
  * show *which kind* of failure occurred without ever showing the raw
  * error object (which could otherwise leak stack traces/host info).
+ *
+ * Shared by BOTH the isolated diagnostic route
+ * (`/experience/kameleon/ar-snap-test`) and the production Kameleon AR
+ * screen (`KameleonCameraKitExperience`) — every message here must be
+ * appropriate for a real customer to read, not just an internal tester.
  */
 
 export interface SnapArError {
@@ -19,7 +24,7 @@ export interface SnapArError {
 const DEFAULT_CATEGORY = "Unknown";
 
 const DEFAULT_ERROR: SnapArError = {
-  message: "The AR test couldn't start. You can try again or exit.",
+  message: "AR couldn't start. You can try again or continue without it.",
   recoverable: true,
   category: DEFAULT_CATEGORY,
 };
@@ -55,7 +60,7 @@ const CAMERA_PERMISSION_MESSAGES: Record<string, Omit<SnapArError, "category">> 
 /** Camera Kit's own named error types (Error.prototype.name) — full list per namedErrors.d.ts. */
 const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "category">> = {
   PlatformNotSupportedError: {
-    message: "This browser doesn't support the AR test on this device.",
+    message: "This browser doesn't support AR on this device.",
     recoverable: false,
   },
   BootstrapError: {
@@ -63,7 +68,7 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "categor
     recoverable: true,
   },
   ConfigurationError: {
-    message: "AR test configuration is invalid.",
+    message: "AR configuration is invalid.",
     recoverable: false,
   },
   WebGLError: {
@@ -75,7 +80,7 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "categor
     recoverable: false,
   },
   CameraKitSourceError: {
-    message: "The camera couldn't be started for the AR test.",
+    message: "The camera couldn't be started for AR.",
     recoverable: true,
   },
   LensError: {
@@ -95,7 +100,7 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "categor
     recoverable: true,
   },
   LensAbortError: {
-    message: "The AR test became unavailable and needs to be restarted.",
+    message: "AR became unavailable and needs to be restarted.",
     recoverable: true,
   },
   LensImagePickerError: {
@@ -115,11 +120,11 @@ const CAMERA_KIT_NAMED_ERROR_MESSAGES: Record<string, Omit<SnapArError, "categor
     recoverable: true,
   },
   ArgumentValidationError: {
-    message: "AR test configuration is invalid.",
+    message: "AR configuration is invalid.",
     recoverable: false,
   },
   LegalError: {
-    message: "You'll need to accept Snap's terms to continue the AR test.",
+    message: "You'll need to accept Snap's terms to continue with AR.",
     recoverable: true,
   },
 };
@@ -158,20 +163,20 @@ export function mapSnapArError(error: unknown): SnapArError {
 
 /** Missing/invalid configuration — distinct from a runtime SDK error. */
 export const CONFIG_MISSING_ERROR: SnapArError = {
-  message: "AR test configuration is missing.",
+  message: "AR configuration is missing.",
   recoverable: false,
   category: "ConfigMissing",
 };
 
 export const UNSUPPORTED_BROWSER_ERROR: SnapArError = {
-  message: "This browser doesn't support the AR test.",
+  message: "This browser doesn't support AR.",
   recoverable: false,
   category: "UnsupportedBrowser",
 };
 
 /** The session never produced a rendered frame within the timeout window. */
 export const NO_FRAME_TIMEOUT_ERROR: SnapArError = {
-  message: "The AR test didn't finish starting in time.",
+  message: "AR didn't finish starting in time.",
   recoverable: true,
   category: "NoFrameTimeout",
 };

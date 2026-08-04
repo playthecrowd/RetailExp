@@ -19,13 +19,21 @@ import { StoryPathMap } from "@/components/kameleon/screens/StoryPathMap";
 import { JourneyCompletion } from "@/components/kameleon/screens/JourneyCompletion";
 
 /**
- * The real WebXR/Three.js AR experience must never run during SSR (it
- * touches `window`/`navigator.xr`/WebGL at module-evaluation-adjacent
- * points) — `ssr: false` guarantees it's only ever loaded and mounted in
- * the browser. See docs/RETAILEXP_PHASE_TRACKER.md's Phase 5 record.
+ * The embedded Snap Camera Kit AR experience must never run during SSR (it
+ * touches `navigator.mediaDevices`/`window`/WebGL at module-evaluation-
+ * adjacent points) — `ssr: false` guarantees it's only ever loaded and
+ * mounted in the browser. See docs/RETAILEXP_PHASE_TRACKER.md's Phase 5B
+ * record. This replaced the earlier WebXR/Three.js `KameleonARExperience`
+ * as the production AR pathway on both iPhone and Android — that
+ * component still exists (kept intact, not deleted, in case it's ever
+ * needed again) but is no longer mounted anywhere in the production
+ * journey.
  */
-const KameleonARExperience = dynamic(
-  () => import("@/components/kameleon/ar/KameleonARExperience").then((m) => m.KameleonARExperience),
+const KameleonCameraKitExperience = dynamic(
+  () =>
+    import("@/components/kameleon/ar/KameleonCameraKitExperience").then(
+      (m) => m.KameleonCameraKitExperience,
+    ),
   {
     ssr: false,
     loading: () => (
@@ -80,11 +88,11 @@ export default function KameleonExperiencePage() {
         );
 
       case "ar-permission":
-        // Hosts the entire real WebXR ground-plane AR flow, including its
-        // own internal unsupported-device fallback — see
-        // components/kameleon/ar/KameleonARExperience.tsx.
+        // Hosts the entire embedded Snap Camera Kit AR flow, including its
+        // own internal capability check and unsupported-device fallback —
+        // see components/kameleon/ar/KameleonCameraKitExperience.tsx.
         return (
-          <KameleonARExperience
+          <KameleonCameraKitExperience
             onEnterJourney={() => dispatch({ type: "ENTER_JOURNEY" })}
             onSkipAr={() => dispatch({ type: "CONTINUE_WITHOUT_AR_FALLBACK" })}
           />
