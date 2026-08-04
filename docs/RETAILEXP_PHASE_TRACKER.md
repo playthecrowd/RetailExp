@@ -15,6 +15,29 @@ Writing code alone never earns `COMPLETE`.
 
 ---
 
+## STABLE SHOWCASE
+
+**URL:** `https://retail-exp-nx4m.vercel.app/experience/kameleon`
+**Release commit:** `094132e`
+**Release tag:** `kameleon-showcase-v1`
+**Development branch:** `phase-7-platform`
+**Status:** FROZEN FOR SHOWCASE — PHASE 7 DEVELOPMENT MUST NOT MODIFY MAIN
+
+`main` = stable public showcase, verified working end-to-end (commercial →
+Access AR Experience → Camera Kit start screen → Continue Without AR →
+Quick Account → pathway selection → journey navigation) against the live
+production URL on 2026-08-04, immediately before this freeze — see Phase 7
+Checkpoint 1's release-verification record for the full result. All Phase
+7 (Supabase, authentication, admin/client-dashboard) work happens on
+`phase-7-platform`. Do not merge `phase-7-platform` into `main` without
+explicit approval. Do not push Phase 7 application code directly to
+`main`. Do not change the Vercel production branch away from `main`. Do
+not redeploy a Phase 7 preview over the production showcase domain. Do
+not delete or force-move the `kameleon-showcase-v1` tag. Do not rewrite
+Git history.
+
+---
+
 ## Phase 0 — Repository Audit and Baseline
 
 **Goal:** Understand the current repository before changing it.
@@ -1226,15 +1249,58 @@ something this project controls the timeline of).
 
 ## Phase 7 — Supabase Foundation
 
-**Goal:** Replace mock accounts and journey data with a secure Supabase backend.
-**Status:** NOT STARTED — **BLOCKED until Supabase project/credentials are explicitly approved.**
-**Approval required:** Yes — security and data isolation reviewed before production deployment.
+**Goal:** Replace mock accounts and journey data with a secure Supabase
+backend, built as a reusable multi-tenant platform (Kameleon as the first
+client, not a hardcoded assumption) with a full video/media
+content-management data model.
+**Status:** CHECKPOINT 1 (PREFLIGHT) COMPLETE — planning only, nothing
+implemented. Full architecture proposal (universal schema, Supabase
+Storage layout, upload/publish workflow, placeholder-to-production
+strategy, RLS/tenant-isolation strategy, universal URL migration path
+preserving `/experience/kameleon`, import-manifest format, dashboard
+screens, checkpoint roadmap) is in
+`docs/PHASE7_PLATFORM_ARCHITECTURE_PREFLIGHT.md`. **Still BLOCKED on
+Checkpoint 2 until Supabase project/credentials are explicitly approved**
+(new external account/resource, per the standing restrictions below).
+**Approval required:** Yes — security and data isolation reviewed before
+production deployment; Supabase project creation itself requires separate
+explicit approval before Checkpoint 2 begins.
+
+**Checkpoint 1 decisions confirmed (2026-08-04):** initial client =
+Kameleon (`kameleon`); initial experience = "Kameleon Interactive Journey"
+(`kameleon`, type `branching-video`, existing route
+`/experience/kameleon`) — "The Perfect Pour" is campaign/commercial-content
+title, not the platform experience name; the 13-table universal model
+proposed in the preflight doc is approved, plus a `profiles` table (Supabase
+Auth user profile, standard companion to `client_memberships`); no
+permanent two-choice limit; `content_nodes.node_type` used instead of
+per-screen-type tables; denormalized `client_id` permitted for RLS
+simplicity but every tenant-owned row must also carry a real, validated FK
+relationship — denormalization is a read-performance aid, never the sole
+integrity mechanism; Checkpoint 2 is schema + RLS + Storage design only
+(no full pathway/media import, no in-code renderer replacement, no changes
+to `/experience/kameleon` or the Snap Camera Kit implementation).
+
+**Release protection (2026-08-04):** before any Phase 7 code was written,
+`main` was verified at `094132e` (matches `origin/main` exactly, no
+drift), the production URL was verified live end-to-end (see STABLE
+SHOWCASE above), tag `kameleon-showcase-v1` was created at `094132e` and
+pushed, and branch `phase-7-platform` was created from `main` and pushed.
+All Phase 7 implementation work happens on `phase-7-platform` from this
+point forward.
 
 ## Phase 8 — Media and Content Management
 
-**Goal:** Allow authorized admins to manage Kameleon content via Supabase Storage.
-**Status:** NOT STARTED
-**Approval required:** Implicit via Phase 7 gate; no AI video generation permitted.
+**Goal:** Allow authorized client admins to manage their own experience's
+video/media content (uploads, branching-choice editing, publish/unpublish,
+missing-media and broken-branch validation) via Supabase Storage — scoped
+generically to any client, not hardcoded to Kameleon. See
+`docs/PHASE7_PLATFORM_ARCHITECTURE_PREFLIGHT.md` §4, §9, §10 for the
+proposed workflow, validation rules, and dashboard screens.
+**Status:** NOT STARTED (planning covered under Phase 7 Checkpoint 1, since
+the media/content schema and the multi-tenant schema are the same tables)
+**Approval required:** Implicit via Phase 7 gate; no AI video generation
+or paid transcoding/processing service permitted.
 
 ## Phase 9 — Analytics and Admin Management
 
