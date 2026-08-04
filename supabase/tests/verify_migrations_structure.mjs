@@ -28,16 +28,22 @@ const seedSqlWithoutComments = seedSql
   .join("\n");
 const rlsPoliciesSql = readFileSync(join(migrationsDir, "20260804152549_rls_policies.sql"), "utf8");
 
-// SQL with `-- line comments` and `comment on ... is '...'` statements
-// stripped, for checks that must only look at actual schema identifiers
-// (table/column/enum names), not explanatory prose. Rationale comments
-// legitimately reference "Kameleon" as the real first client by name —
-// that's expected, not a violation.
+// SQL with `-- line comments`, `comment on ... is '...'` statements, AND
+// `insert into ... ;` statement bodies stripped, for checks that must
+// only look at actual schema identifiers (table/column/enum names), not
+// explanatory prose or client-owned DATA. Rationale comments legitimately
+// reference "Kameleon" as the real first client by name, and — since the
+// review moved the initial client records into a tracked migration —
+// so does that migration's actual INSERT ... VALUES ('Kameleon', ...)
+// data. Both are expected, not violations: the schema itself must stay
+// universal; the data it stores is exactly where client-specific names
+// belong.
 const sqlWithoutComments = sql
   .split("\n")
   .filter((line) => !line.trim().startsWith("--"))
   .join("\n")
-  .replace(/comment on [\s\S]*?;/g, "");
+  .replace(/comment on [\s\S]*?;/g, "")
+  .replace(/insert into [\s\S]*?;/gi, "");
 
 let failed = 0;
 function assert(condition, message) {
@@ -48,6 +54,10 @@ function assert(condition, message) {
     console.error(`FAIL: ${message}`);
   }
 }
+
+// --- Exactly eight migration files exist ------------------------------------
+
+assert(files.length === 8, `exactly 8 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -142,30 +152,50 @@ assert(
   "client_memberships.role changes are protected by a trigger",
 );
 
-// --- Correction 1: seed.sql contains no throwaway/fixture tenant -----------
+// --- Review correction: seed.sql is now empty of actual data ---------------
+// --- (Supabase advises against `db push --include-seed` on a real project;
+// --- the legitimate initial records moved into a tracked migration below) --
 
+assert(
+  !/insert into/i.test(seedSqlWithoutComments),
+  "seed.sql contains no INSERT statements — it's explanatory comments only",
+);
 assert(
   !/tenant-isolation-test|isolation-check|Tenant Isolation Test/i.test(seedSql),
   "seed.sql contains no throwaway test tenant",
 );
-assert(
-  (seedSql.match(/insert into public\.clients/g) || []).length === 1,
-  "seed.sql inserts exactly one client (Kameleon)",
-);
 
-// --- Correction 2: seed.sql is idempotent on business keys, never DO UPDATE -
+// --- The initial-client-records migration contains no throwaway/fixture ----
+// --- tenant, and is idempotent on the real unique business keys ------------
 
+const initialRecordsMigration = sql.match(
+  /-- Phase 7 Checkpoint 2 — initial legitimate platform records\.[\s\S]*$/,
+)?.[0] ?? "";
+assert(initialRecordsMigration.length > 0, "the initial-client-records migration was found");
 assert(
-  /on conflict \(slug\) do nothing/.test(seedSql),
-  "seed.sql's client insert is conflict-safe on the unique slug, not a hardcoded id",
+  !/tenant-isolation-test|isolation-check|Tenant Isolation Test/i.test(initialRecordsMigration),
+  "the initial-client-records migration contains no throwaway test tenant",
 );
 assert(
-  /on conflict \(client_id, slug\) do nothing/.test(seedSql),
-  "seed.sql's experience insert is conflict-safe on the unique (client_id, slug)",
+  (initialRecordsMigration.match(/insert into public\.clients/g) || []).length === 1,
+  "the initial-client-records migration inserts exactly one client (Kameleon)",
 );
 assert(
-  !/do update/i.test(seedSqlWithoutComments),
-  "seed.sql never uses DO UPDATE (would risk overwriting legitimate edits)",
+  /on conflict \(slug\) do nothing/.test(initialRecordsMigration),
+  "the client insert is conflict-safe on the unique slug, not a hardcoded id",
+);
+assert(
+  /on conflict \(client_id, slug\) do nothing/.test(initialRecordsMigration),
+  "the experience insert is conflict-safe on the unique (client_id, slug)",
+);
+assert(
+  !/do update/i.test(
+    initialRecordsMigration
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n"),
+  ),
+  "the initial-client-records migration never uses DO UPDATE (would risk overwriting legitimate edits)",
 );
 
 // --- Correction 3: membership management and PII access exclude 'editor' ---

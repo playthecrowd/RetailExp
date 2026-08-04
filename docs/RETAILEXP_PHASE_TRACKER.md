@@ -1289,6 +1289,16 @@ pushed, and branch `phase-7-platform` was created from `main` and pushed.
 All Phase 7 implementation work happens on `phase-7-platform` from this
 point forward.
 
+**Seed correction (2026-08-04):** Supabase's current guidance advises
+against `supabase db push --include-seed` on a real project — seed data
+is meant for local/preview development only. The two legitimate initial
+records (Kameleon client + its draft "Kameleon Interactive Journey"
+experience) were moved out of `supabase/seed.sql` into a tracked,
+idempotent migration (`supabase/migrations/20260804200621_initial_client_
+records.sql`), bringing the schema to **eight** migrations total.
+`supabase/seed.sql` is now empty except explanatory comments and must
+never be run against the linked remote project.
+
 ## Phase 8 — Media and Content Management
 
 **Goal:** Allow authorized client admins to manage their own experience's

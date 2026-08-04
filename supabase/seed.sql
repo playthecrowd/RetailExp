@@ -1,45 +1,18 @@
--- Phase 7 Checkpoint 2 — minimal seed data.
+-- Phase 7 — intentionally empty.
 --
--- Per Decision 3: only the minimum platform records needed for
--- verification. NOT the full Kameleon pathway tree or production media —
--- that's a later, separately-verified checkpoint (see
--- docs/PHASE7_PLATFORM_ARCHITECTURE_PREFLIGHT.md §14, Checkpoint 7.4).
+-- Supabase's current guidance advises against using `supabase db push
+-- --include-seed` against a real/production project — seed data is meant
+-- for local/preview development only. The legitimate initial platform
+-- records (the Kameleon client and its draft experience) were moved out
+-- of this file into a tracked migration instead:
+--   supabase/migrations/20260804200621_initial_client_records.sql
+-- That migration is applied the same way as the rest of the schema
+-- (`supabase db push`, no --include-seed flag), so it runs exactly once,
+-- idempotently, against every environment including the linked
+-- "The Retail Experience" project — never through this file.
 --
--- Only the legitimate Kameleon client/experience are seeded here. The
--- throwaway second tenant used to verify isolation lives entirely inside
--- supabase/tests/tenant_isolation_check.sql, created and rolled back
--- within that test's own transaction — this file must never contain
--- fixture/test-only data, since it's meant to be safe to run against a
--- real project.
---
--- Idempotent by design: conflicts are resolved on the actual unique
--- business keys (slug / (client_id, slug)) rather than the seed's own
--- hardcoded ids, and always DO NOTHING — never DO UPDATE — so rerunning
--- this file can never clobber legitimate changes an admin has since made
--- to the Kameleon client or experience row.
-
-insert into public.clients (id, slug, name, status, primary_color, secondary_color)
-values (
-  '00000000-0000-0000-0000-000000000001',
-  'kameleon',
-  'Kameleon',
-  'active',
-  '#c98a4b', -- kameleon-copper, approximate
-  '#7a1f2b'  -- kameleon-red, approximate
-)
-on conflict (slug) do nothing;
-
-insert into public.experiences (
-  id, client_id, slug, name, experience_type, signup_required, publication_status
-)
-select
-  '00000000-0000-0000-0000-000000000002',
-  c.id,
-  'kameleon',
-  'Kameleon Interactive Journey',
-  'branching-video',
-  true,
-  'draft'
-from public.clients c
-where c.slug = 'kameleon'
-on conflict (client_id, slug) do nothing;
+-- Do NOT run this file (or `db push --include-seed`) against the linked
+-- remote project. If disposable local/preview-only fixture data is ever
+-- needed for development (e.g. throwaway test tenants), it belongs here —
+-- explicitly labeled as disposable, never real client data, and never
+-- referenced by any tracked migration.
