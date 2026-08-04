@@ -865,6 +865,136 @@ KameleonARExperience}.tsx`, `components/kameleon/screens/QuickAccount.tsx`,
 COMPLETE until iPhone Safari, iPhone Chrome, and Android are all confirmed
 on physical hardware per this round's specific test list.
 
+## Phase 5B — Embedded Snap Camera Kit Evaluation
+
+**Goal:** Evaluate running an existing, approved Hosted WebAR Snap Lens
+directly inside the Kameleon webpage via Snap Camera Kit Web (camera feed
+composited in-page, not a redirect to Snapchat/an external Snap surface),
+so the existing "Continue Your Journey" interface can wrap it the same way
+it wraps the WebXR and Quick Look paths.
+**Status:** IN PROGRESS — Checkpoint 1 (Preflight) only. No code has been
+written or installed for this evaluation yet.
+**Start date:** 2026-08-03
+**Approval required:** Yes — this introduces a new third-party SDK,
+external network calls (Snap's CDN/API), and a new credential (Camera Kit
+API token) that don't exist anywhere else in this project; none of that
+begins until explicitly approved past this preflight checkpoint.
+
+**Existing Hosted WebAR Lens (documented, not yet integrated):**
+`https://lens.snap.com/experience/907c0f39-5f64-49d5-9ee5-b911a8fa9248`
+
+### Checkpoint 1 — Preflight findings (2026-08-03)
+
+**Environment confirmed:**
+- Working directory: `C:\Users\cotye\Documents\RetailExp\retail-exp`
+- Branch: `main`
+- Working tree: clean
+- Remote: `https://github.com/playthecrowd/RetailExp.git`
+- Latest local commit: `ac86f64`; confirmed identical on `origin/main`
+  after a fresh `git fetch` (not stale local knowledge)
+- `.env.local` (and every `.env*` variant) confirmed ignored by
+  `.gitignore` line 34 (`.env*`) — verified with `git check-ignore`
+  against a same-named test file, not just by reading the pattern. No
+  `.env.local` exists in the repo yet, and no `process.env.*` reference
+  exists anywhere in the codebase — environment variables are a genuinely
+  blank slate here, no established `NEXT_PUBLIC_`-vs-server-only
+  convention to follow or break yet.
+- Existing Vercel deployment route: **not independently verifiable from
+  this environment** — no `.vercel/project.json` exists locally, the
+  Vercel CLI isn't installed, and this session's Vercel API access does
+  not see a matching project under the one team it can query. Per your
+  own physical-device testing, a deployment tracking this repo's `main`
+  branch already exists; ask if you'd like the exact URL recorded here.
+
+**Existing architecture inspected:**
+- `package.json`: only `next`, `react`, `react-dom`, `three`,
+  `@google/model-viewer` as runtime dependencies — no camera/AR SDK beyond
+  what Phase 5 already added. Nothing Snap-related present.
+- `next.config.ts`: minimal, no custom `headers()`, no CSP, no
+  `Permissions-Policy`, no image-domain allowlist, no experimental flags.
+- No `middleware.ts` exists. No CSP/`Permissions-Policy`/`X-Frame-Options`
+  header is set anywhere in the codebase today — the existing WebXR/Quick
+  Look camera access relies entirely on browser-default same-origin
+  permission prompts, not an explicit policy. This means there's currently
+  nothing to conflict with a Camera Kit integration, but also no existing
+  pattern to extend — headers for Snap's CDN/API domains (script-src,
+  connect-src, and likely `frame-src`/`worker-src` depending on how Camera
+  Kit Web loads its runtime, plus `Permissions-Policy: camera=(self)`)
+  would need to be designed from scratch.
+- Current AR component tree (`components/kameleon/ar/`): `ARControls`,
+  `ARErrorState`, `ARHelpPanel`, `ARQuickLookScreen`, `ARScanningOverlay`,
+  `ARStartScreen`, `ARUnsupportedFallback`, `KameleonARExperience`
+  (orchestrator). Corresponding logic in `lib/kameleon/ar/`:
+  `animation-controller`, `ar-types`, `capability-detection`,
+  `energy-rings`, `hit-test`, `model-loader`, `reticle`, `webxr-session`.
+- Current Kameleon session state machine (`lib/kameleon/{types,actions,
+  reducer}.ts`): `ar-permission` is the single top-level `screen` that
+  hosts the entire AR experience; `KameleonARExperience` internally
+  resolves one of three `ARPathway`s (`webxr` / `quicklook` /
+  `unsupported`) via `detectARCapability()` and renders accordingly.
+  `onEnterJourney`/`onSkipAr` props (mapped to the `ENTER_JOURNEY` /
+  `CONTINUE_WITHOUT_AR_FALLBACK` actions) are the two exit points every AR
+  path already funnels through to reach Quick Account — a fourth
+  "snap-camera-kit" pathway would plug into this exact same seam rather
+  than requiring a new top-level screen or reducer action.
+
+**Proposed files (not yet created):**
+- `lib/kameleon/ar/snap-camera-kit-session.ts` — SDK init/session
+  lifecycle (mirroring the existing `webxr-session.ts` pattern: start,
+  clean teardown, typed errors).
+- `components/kameleon/ar/SnapCameraKitScreen.tsx` — the in-page camera
+  view + "Continue Your Journey" UI, mirroring `ARQuickLookScreen.tsx`'s
+  shape.
+- Capability-detection addition (extend `ar-types.ts`'s `ARPathway` union
+  and `capability-detection.ts`, not a new file) — need to decide whether
+  Camera Kit becomes a 4th pathway, replaces one of the existing three, or
+  is gated behind a separate entry point entirely; not decided yet.
+- `docs/KAMELEON_SNAP_CAMERA_KIT_MANIFEST.md` — license/attribution/token
+  handling documentation, mirroring `KAMELEON_AR_ASSET_MANIFEST.md`.
+- `.env.local` (untracked, git-ignored) for the Camera Kit API token once
+  one is actually provided.
+
+**Risks:**
+- **Credential handling.** Camera Kit requires an API token from Snap's
+  developer portal. This project has no existing account/credential
+  precedent — creating a Snap developer account or generating a token is
+  an external-account action outside what's been authorized so far, and
+  must be confirmed explicitly (and done by you, not fabricated by me)
+  before any code references it.
+- **Cost/tier uncertainty.** Snap Camera Kit's free-tier limits (usage
+  caps, watermarking, feature gating) haven't been researched yet — this
+  must be confirmed before integration, per the standing no-paid/no-
+  credit-based-service restriction.
+- **New CSP surface.** Introducing a third-party SDK loading remote
+  scripts/assets into a codebase with zero existing CSP means the first
+  Snap-related headers written here are also the first headers of any
+  kind in this project — no prior pattern to lean on, higher chance of
+  getting it wrong on the first pass than extending an established policy.
+- **Two parallel camera-AR systems.** WebXR/Quick Look (Phase 5) and Snap
+  Camera Kit would coexist as genuinely different technical approaches to
+  the same customer moment. Product-level questions (does Snap replace
+  Phase 5 entirely, run alongside it as an alternative, or serve a
+  different use case?) aren't resolved by this preflight and shouldn't be
+  assumed.
+- **Bundle/performance impact.** Camera Kit Web's SDK size and runtime
+  cost on mobile Safari/Chrome are unresearched; could meaningfully affect
+  the page's existing lazy-loaded, client-only AR-module pattern
+  (`next/dynamic(..., { ssr: false })`).
+
+**Blockers:**
+- No Snap Camera Kit API token exists yet — implementation cannot begin
+  without one, and it must come from you (or an account you explicitly
+  approve creating), never fabricated or guessed.
+- Whether Camera Kit is additive (new option) or a replacement for an
+  existing AR path is a product decision not yet made.
+- Confirmed no code has been written and nothing has been installed for
+  this evaluation — this section is documentation only, per the explicit
+  instruction not to begin implementation until preflight is reviewed.
+
+**Approval required:** Yes — before any package install, any file
+creation, or any request for a Snap developer token.
+**Next action:** Await review of this preflight before Checkpoint 2.
+
 ## Phase 6 — Kameleon Cinematic AR Introduction
 
 **Goal:** Replace the AR mock with the real ground-anchored introduction.
