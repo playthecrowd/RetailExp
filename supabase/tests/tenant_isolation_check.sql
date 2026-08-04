@@ -1,17 +1,17 @@
--- Phase 7 Checkpoint 2 — tenant isolation verification.
+-- Phase 7 — tenant isolation verification.
 --
--- NOT YET EXECUTED. This project has no Docker available in this
--- environment, so `supabase start` (the local dev Postgres stack) can't
--- run here, and no real Supabase project/credentials exist yet either —
--- see the Checkpoint 2 report. This file is prepared and ready to run
--- once either becomes available, via:
---   supabase start && psql "$(supabase status -o env | grep DB_URL)" -f supabase/tests/tenant_isolation_check.sql
--- or against a real project's SQL editor / connection string.
---
--- Run after `supabase/seed.sql` has been applied. Uses the same
+-- Run against the linked project via the Supabase Dashboard's SQL Editor
+-- (paste this whole file and Run) — no CLI subcommand executes an
+-- arbitrary .sql file against a remote project, and this avoids ever
+-- needing a raw database password/connection string. Uses the same
 -- session-variable technique PostgREST uses to simulate an authenticated
 -- request (`request.jwt.claims`), so these checks exercise the exact RLS
 -- policies a real API call would.
+--
+-- Run after the initial-client-records migration has been applied (the
+-- legitimate Kameleon client/experience now come from a tracked
+-- migration, not supabase/seed.sql, which is intentionally empty — see
+-- 20260804200621_initial_client_records.sql).
 --
 -- This file owns ALL of its own test fixtures, including the second
 -- ("other tenant") client/experience used to prove isolation —
@@ -55,6 +55,30 @@ insert into public.client_memberships (client_id, user_id, role) values
   ((select id from public.clients where slug = 'kameleon'), '10000000-0000-0000-0000-000000000003', 'editor'),
   ('90000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000002', 'owner')
 on conflict (client_id, user_id) do nothing;
+
+-- Fixture sanity check: this INSERT previously failed here (before any of
+-- the 8 checks below ever ran) because protect_membership_role_changes()
+-- didn't recognize an ambient/no-JWT-context connection as trusted — see
+-- 20260804210404_fix_role_promotion_ambient_connection.sql. Asserting the
+-- fixture actually landed makes any future regression here fail loudly
+-- and unambiguously, instead of surfacing as a confusing mid-script error
+-- with no indication it happened before Check 1 even started.
+do $$
+declare
+  fixture_membership_count integer;
+begin
+  select count(*) into fixture_membership_count
+  from public.client_memberships
+  where user_id in (
+    '10000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000003'
+  );
+  if fixture_membership_count <> 3 then
+    raise exception 'FIXTURE SETUP FAILED: expected 3 client_memberships fixture rows, found %. None of the numbered checks below ran.', fixture_membership_count;
+  end if;
+  raise notice 'Fixture setup OK: % client_memberships rows created', fixture_membership_count;
+end $$;
 
 -- A minimal content graph on the Kameleon side, so the choices/media_assets
 -- cross-tenant checks below have real rows to try (and fail) to connect
@@ -162,12 +186,12 @@ begin
       and user_id = '10000000-0000-0000-0000-000000000001';
     raise exception 'FAIL: self-role-change was not blocked';
   exception
-    when others then
-      if sqlerrm like '%cannot change their own%' then
-        raise notice 'PASS: self-role-change correctly blocked (%)', sqlerrm;
-      else
-        raise; -- an unexpected error — surface it
-      end if;
+    -- Catches ONLY the deliberate authorization denial (SQLSTATE 42501,
+    -- insufficient_privilege) — any other error, including the FAIL
+    -- marker above (which raises with the default P0001), is NOT caught
+    -- here and correctly propagates as a genuine test failure.
+    when sqlstate '42501' then
+      raise notice 'PASS: self-role-change correctly blocked (SQLSTATE 42501: %)', sqlerrm;
   end;
 end $$;
 
@@ -184,12 +208,8 @@ begin
     update public.profiles set is_platform_admin = true where id = '10000000-0000-0000-0000-000000000001';
     raise exception 'FAIL: is_platform_admin was changed by a non-service-role update';
   exception
-    when others then
-      if sqlerrm like '%is_platform_admin cannot be changed%' then
-        raise notice 'PASS: is_platform_admin change correctly blocked (%)', sqlerrm;
-      else
-        raise;
-      end if;
+    when sqlstate '42501' then
+      raise notice 'PASS: is_platform_admin change correctly blocked (SQLSTATE 42501: %)', sqlerrm;
   end;
 end $$;
 

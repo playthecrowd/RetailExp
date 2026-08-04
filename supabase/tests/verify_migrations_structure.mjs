@@ -55,9 +55,9 @@ function assert(condition, message) {
   }
 }
 
-// --- Exactly eight migration files exist ------------------------------------
+// --- Exactly nine migration files exist -------------------------------------
 
-assert(files.length === 8, `exactly 8 migration files exist (found ${files.length})`);
+assert(files.length === 9, `exactly 9 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -286,6 +286,38 @@ for (const table of consistencyTriggerTables) {
 assert(
   /choices cannot connect content_nodes across different experiences/.test(sql),
   "the choices consistency trigger blocks cross-experience connections",
+);
+
+// --- Corrective migration: ambient-connection bypass + SQLSTATE 42501 ------
+
+assert(
+  /auth\.role\(\) = 'service_role' or auth\.role\(\) is null/.test(sql),
+  "protect_membership_role_changes() bypasses on auth.role() (not auth.uid()) — a genuine service_role request OR no JWT/API role context at all (ambient/direct connection). auth.role() is never null for a real anon/authenticated request, unlike auth.uid().",
+);
+assert(
+  !/or acting_user_id is null/.test(sql),
+  "the rejected auth.uid() IS NULL bypass condition is not present anywhere (would also match real anonymous API requests)",
+);
+// Scoped to ONLY the corrective migration — the original (still-applied,
+// intentionally untouched per the remote-migration rule)
+// 20260804152547_role_promotion_protections.sql still has the old,
+// unqualified RAISE EXCEPTIONs textually, superseded at runtime by this
+// migration's CREATE OR REPLACE, not edited in place.
+const correctiveMigrationSql = readFileSync(
+  join(migrationsDir, "20260804210404_fix_role_promotion_ambient_connection.sql"),
+  "utf8",
+);
+const raiseExceptionBlocks = [...correctiveMigrationSql.matchAll(/raise exception[\s\S]*?;/g)];
+const membershipRelatedRaises = raiseExceptionBlocks.filter((m) =>
+  /cannot change their own client_memberships row|only an owner of this client|is_platform_admin cannot be changed/.test(m[0]),
+);
+assert(
+  membershipRelatedRaises.length === 3 && membershipRelatedRaises.every((m) => /errcode = '42501'/.test(m[0])),
+  `all 3 role-promotion-protection RAISE EXCEPTIONs in the corrective migration use the explicit 42501 (insufficient_privilege) SQLSTATE (found ${membershipRelatedRaises.length} matching raises)`,
+);
+assert(
+  /fixture_membership_count/.test(sql) === false, // migrations dir shouldn't contain test-only fixture code
+  "no fixture/test-only code leaked into the migrations directory",
 );
 
 console.log(`\n${files.length} migration files checked.`);
