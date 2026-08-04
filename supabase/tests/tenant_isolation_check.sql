@@ -238,19 +238,100 @@ end $$;
 reset role;
 
 -- --- Check 7: an editor cannot read another member's PII via experience_users
+--
+-- experience_users_write_own only ever permits a row where
+-- auth_user_id = auth.uid() — i.e. a user creating THEIR OWN association,
+-- never someone else's. The fixture for this check therefore cannot be
+-- created while impersonating the editor (that's exactly the "associating
+-- another auth user" case the policy is designed to deny) — it must be
+-- created under the same trusted/ambient tier every other fixture in this
+-- file already uses, representing a genuinely separate fake-customer
+-- identity, before switching to the editor's identity to test visibility.
 
-set local role authenticated;
-set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}';
+-- Step 1: explicitly return to the trusted ambient context — do not rely
+-- on Check 6's own cleanup having already done this.
+reset role;
+set local request.jwt.claims = ''; -- cleared, not just left however a prior check set it; auth.role()/auth.uid() both read as null via nullif(..., '')
 
-insert into public.experience_users (id, experience_id, client_id, email)
+-- Step 2: a dedicated fake customer identity — distinct from every
+-- admin/editor fixture identity above, never used as an actor anywhere
+-- else in this file.
+insert into auth.users (id, email) values
+  ('90000000-0000-0000-0000-000000000021', 'fake-customer@example.test')
+on conflict (id) do nothing;
+
+-- Step 3: the experience_users fixture, explicitly owned by the fake
+-- customer (auth_user_id set), scoped to the real Kameleon client and
+-- experience, with only a fake .test email — no real customer data.
+insert into public.experience_users (id, experience_id, client_id, auth_user_id, email)
 select
   '90000000-0000-0000-0000-000000000020',
   (select id from public.experiences where slug = 'kameleon'),
   c.id,
-  'real-customer@example.test'
+  '90000000-0000-0000-0000-000000000021',
+  'fake-customer@example.test'
 from public.clients c where c.slug = 'kameleon'
 on conflict (id) do nothing;
 
+-- Fixture sanity assertions — fail loudly and specifically here if setup
+-- itself is broken, rather than surfacing as a confusing failure inside
+-- the actual PII-visibility assertion below.
+do $$
+declare
+  fake_customer_exists boolean;
+  fixture_auth_user_id uuid;
+  fixture_experience_id uuid;
+  fixture_client_id uuid;
+  real_experience_id uuid;
+  real_client_id uuid;
+begin
+  select exists (
+    select 1 from auth.users where id = '90000000-0000-0000-0000-000000000021'
+  ) into fake_customer_exists;
+  if not fake_customer_exists then
+    raise exception 'FIXTURE SETUP FAILED: fake customer auth.users row was not created';
+  end if;
+
+  select auth_user_id, experience_id, client_id
+  into fixture_auth_user_id, fixture_experience_id, fixture_client_id
+  from public.experience_users
+  where id = '90000000-0000-0000-0000-000000000020';
+
+  if fixture_auth_user_id is null then
+    raise exception 'FIXTURE SETUP FAILED: experience_users.auth_user_id is null (must be the fake customer''s id)';
+  end if;
+  if fixture_auth_user_id <> '90000000-0000-0000-0000-000000000021' then
+    raise exception 'FIXTURE SETUP FAILED: experience_users.auth_user_id does not match the fake customer';
+  end if;
+
+  select id, client_id into real_experience_id, real_client_id
+  from public.experiences where slug = 'kameleon';
+
+  if fixture_experience_id is distinct from real_experience_id or fixture_client_id is distinct from real_client_id then
+    raise exception 'FIXTURE SETUP FAILED: experience_users fixture''s experience/client relationship does not match the real Kameleon experience';
+  end if;
+
+  raise notice 'Fixture setup OK: fake customer % enrolled in Kameleon experience %', fixture_auth_user_id, fixture_experience_id;
+end $$;
+
+-- Step 4: explicitly re-establish the editor's identity — not inherited
+-- from any earlier check — and confirm it actually took effect before
+-- relying on it for the actual test below.
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"10000000-0000-0000-0000-000000000003","role":"authenticated"}';
+
+do $$
+begin
+  if auth.uid() is distinct from '10000000-0000-0000-0000-000000000003'::uuid then
+    raise exception 'FIXTURE SETUP FAILED: auth.uid() is % after switching to the editor, expected the editor''s id', auth.uid();
+  end if;
+  if auth.role() is distinct from 'authenticated' then
+    raise exception 'FIXTURE SETUP FAILED: auth.role() is %, expected authenticated', auth.role();
+  end if;
+end $$;
+
+-- Step 5: the actual check — the editor must not be able to read the fake
+-- customer's PII-bearing row at all.
 do $$
 declare
   visible integer;
@@ -258,9 +339,9 @@ begin
   select count(*) into visible from public.experience_users
   where id = '90000000-0000-0000-0000-000000000020';
   if visible <> 0 then
-    raise exception 'FAIL: editor role can read experience_users PII (expected 0 visible rows)';
+    raise exception 'FAIL: editor role can read another user''s experience_users PII (expected 0 visible rows, got %)', visible;
   end if;
-  raise notice 'PASS: editor cannot read experience_users PII';
+  raise notice 'PASS: editor cannot read the fake customer''s experience_users PII (email/identity hidden)';
 end $$;
 
 reset role;
