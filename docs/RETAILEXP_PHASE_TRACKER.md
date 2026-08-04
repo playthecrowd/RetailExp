@@ -872,10 +872,14 @@ directly inside the Kameleon webpage via Snap Camera Kit Web (camera feed
 composited in-page, not a redirect to Snapchat/an external Snap surface),
 so the existing "Continue Your Journey" interface can wrap it the same way
 it wraps the WebXR and Quick Look paths.
-**Status:** IN PROGRESS — Checkpoints 1-4 complete (preflight, safe
-scaffold, isolated embedded prototype, diagnostic/cleanup correction).
-Awaiting a new round of physical iPhone testing (Safari/Firefox/Chrome)
-against Checkpoint 4 before any further checkpoint.
+**Status:** READY FOR ANDROID PHYSICAL REVIEW — embedded Camera Kit is
+now the production AR pathway (Checkpoints 1-7 complete) and a physical
+device review has confirmed the core flow works end-to-end. **Not**
+APPROVED or COMPLETE: the physical review that passed did not name which
+specific browser(s) were tested (see Checkpoint 7), and Android
+Chrome/Samsung Internet have not been physically tested at all. Do not
+treat any specific browser as individually confirmed passing beyond what
+Checkpoint 7 states.
 **Start date:** 2026-08-03
 **Approval required:** Yes — this introduces a new third-party SDK,
 external network calls (Snap's CDN/API), and a new credential (Camera Kit
@@ -1098,6 +1102,121 @@ show exactly which of the 12 stages fails and why, rather than a generic
 error.
 **Next action:** physical re-test, then read back the diagnostics panel's
 values to actually root-cause the WebKit-common failure.
+
+### Checkpoint 5 — Production integration (2026-08-04, commit `974c1f5`)
+
+Embedded Camera Kit became the primary AR pathway on both iPhone and
+Android, replacing the WebXR/Quick Look pathway in the production
+journey. `app/experience/kameleon/page.tsx`'s `ar-permission` screen now
+mounts `components/kameleon/ar/KameleonCameraKitExperience.tsx` (new)
+instead of the old `KameleonARExperience` — same `onEnterJourney`/
+`onSkipAr` contract, so no reducer/state-machine changes were needed.
+Capability gating (`lib/kameleon/ar/snap-camera-kit-capability.ts`, new)
+uses feature detection only (secure context + `getUserMedia` +
+configuration present) — no user-agent sniffing, so iPhone and Android
+run the identical code path. Session lifecycle ported directly from the
+isolated route's Checkpoint 4 design (own `getUserMedia()`, core
+`@snap/camera-kit` API, guaranteed track-stop cleanup), with production-
+only additions: the commercial-gate Start screen, Kameleon sound
+integration, and a `visibilitychange` handler that releases the camera
+when the tab/app is backgrounded.
+
+`lib/kameleon/ar/snap-error-messages.ts` (shared by both the isolated and
+production routes) had its copy corrected — several messages said "AR
+**test** couldn't start," diagnostic-route language that would have
+leaked to real customers. Reworded project-wide; isolated route
+regression-tested afterward (unaffected).
+
+**Deliberately not done, by design:** no CSP added to the production
+route (production has zero CSP anywhere today; adding one requires
+enumerating every resource the whole Kameleon page needs, which is a
+separate careful pass, not a Camera Kit side-effect). WebXR/Quick Look
+code (`KameleonARExperience.tsx` and its dependents) kept fully intact
+but unreachable — not deleted.
+
+**Verification:** `tsc --noEmit`, `eslint`, `next build` all pass.
+Production flow regression-tested via desktop browser (commercial-gate
+hydration → Camera Kit start screen → "Continue without AR" → Quick
+Account, no console errors) — the actual camera/Lens flow couldn't be
+exercised from that environment (native permission prompt hangs
+automated browser tooling).
+
+### Checkpoint 6 — Camera-permission/unmount race-condition fix (2026-08-04, commit `7e5f43c`)
+
+A review of the startup sequence found two real gaps around cancellation
+handling in `KameleonCameraKitExperience.tsx`:
+
+1. If `bootstrapCameraKit()` resolved *after* the attempt was already
+   cancelled, the returned `CameraKit` instance was discarded without
+   calling `.destroy()` — a resource leak. Fixed to destroy it on that
+   branch, matching the pattern already used for the session.
+2. `getUserMedia()` resolving after cancellation was already handled
+   correctly (tracks stopped, never assigned to the active ref, never
+   proceeded) — but there was no check for `document.visibilityState`
+   immediately after it resolved. If permission was granted while the
+   tab was still genuinely backgrounded, the code would have silently
+   continued bootstrapping AR off-screen. Fixed: now stops the stream and
+   runs the same "interrupted" path used for backgrounding an active
+   session.
+
+No separate "session generation" counter was added: this component runs
+exactly one attempt per mounted instance ("Try Again" always produces a
+fresh component instance via a `key` bump, with entirely fresh refs), so
+two attempts can never share mutable state or race each other — the
+existing `cancelledRef` (documented in the component with this reasoning)
+already serves as both the cancellation guard and the disposed/unmounted
+guard.
+
+**Verification:** no test framework is configured in this project — a
+standalone mock verification script (not committed, no test
+infrastructure to hang it on) reproduced the exact guard pattern with a
+controllable `getUserMedia()` promise and a fake `MediaStream`. Result:
+9/9 assertions passed — confirmed the late-resolving stream's tracks are
+all stopped, never assigned to the active ref, no session is created, no
+state update occurs after cancellation, and cleanup is idempotent under a
+second call. `tsc`/`eslint`/`next build` all pass; both routes
+regression-tested afterward.
+
+### Checkpoint 7 — Physical device review (2026-08-04, commit `7e5f43c` follow-up)
+
+**Result:** a physical device review confirmed the following pass:
+camera initialization; Lens-group lookup (after correcting the Lens
+Group ID in the Vercel environment configuration — the isolated route's
+Checkpoint 4 diagnostics work was built for exactly this kind of
+misconfiguration); Her Wine Lens loading; Lens graphics/animation;
+Continue Your Journey; camera cleanup; Continue without AR.
+
+**Scope of this result — read carefully before citing it elsewhere:**
+the review's own description (mentions of the iPhone-specific green
+camera indicator and the native Motion & Orientation Access permission
+prompt) indicates it was performed on an iPhone, but **no specific
+browser (Safari, Chrome, or Firefox) was named**, so none of the three
+can individually be marked as confirmed-passing — only that at least one
+iPhone browser passed the full flow. **Android (Chrome, Samsung
+Internet) has not been physically tested at all.** Per standing
+instruction, Phase 5B stays at READY FOR ANDROID PHYSICAL REVIEW, not
+APPROVED or COMPLETE, until Android is explicitly tested and until the
+specific iPhone browser(s) are named.
+
+**Staging branding (expected, not a bug):** the large green "Camera Kit
+Staging" overlay visible during testing is produced by Snap's own
+staging API token — this project's code has no involvement in it and
+must not attempt to hide or cover it. It will be removed once the Camera
+Kit app is submitted for and receives Snap's production approval, the
+resulting Production API Token replaces
+`NEXT_PUBLIC_SNAP_CAMERA_KIT_API_TOKEN` in Vercel, and the app is
+redeployed. Separately, the iPhone green camera-in-use indicator and the
+native Motion & Orientation Access permission popup are iOS system
+privacy features, not part of this project's UI, and cannot be removed
+by this project's code. Snap attribution ("powered by Snap AR" /
+Learn More link) is kept in this build for user trust and transparency,
+though Snap's current guidance treats it as optional for a personal-
+device web experience like this one.
+
+**Deferred, not in scope for this checkpoint:** Supabase and real
+authentication (Quick Account remains the mock local-only flow); the
+Snap production API token (blocked on Snap's own app-review process, not
+something this project controls the timeline of).
 
 ## Phase 6 — Kameleon Cinematic AR Introduction
 
