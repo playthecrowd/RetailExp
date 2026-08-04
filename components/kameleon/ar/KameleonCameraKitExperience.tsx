@@ -325,6 +325,22 @@ function CameraKitSessionRuntime({
   const streamRef = useRef<MediaStream | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
+  // cancelledRef is this attempt's cancellation/disposed guard: set exactly
+  // once, synchronously, the instant runCleanup() first runs (unmount,
+  // Exit AR, Continue Your Journey, a fatal error, or backgrounding — see
+  // runCleanup below). Every `await` in the startup sequence (run(),
+  // further down) re-checks it immediately on resume, before touching any
+  // ref or React state, so a slow-resolving stage from an attempt that's
+  // already being torn down can never win a race against the teardown.
+  //
+  // There's deliberately no separate "session generation" counter: this
+  // component only ever runs ONE attempt per mounted instance (there's no
+  // in-place retry — see handleRetry() in the parent, which returns to the
+  // Start screen and bumps `sessionKey` so "Try Again" always mounts a
+  // brand-new CameraKitSessionRuntime with entirely fresh refs). Two
+  // attempts can therefore never share this ref or race each other; a
+  // generation counter would be redundant with what React's own
+  // mount/unmount identity already guarantees here.
   const cancelledRef = useRef(false);
   // Only the first exit path (complete / exit / interrupted / error) wins —
   // guards against e.g. a runtime LensExecutionError firing right as the
@@ -447,7 +463,18 @@ function CameraKitSessionRuntime({
       try {
         const config = getSnapCameraKitConfig();
         const cameraKit = await bootstrapCameraKit({ apiToken: config.apiToken });
-        if (cancelledRef.current) return;
+        // Stale-attempt check #1 (SDK bootstrap): if this attempt was
+        // cancelled (unmounted, or a fresher "Try Again" attempt — though
+        // in this component's design each attempt is its own component
+        // instance with its own refs, see the comment on cancelledRef,
+        // so there is only ever one attempt per instance) while bootstrap
+        // was in flight, the returned CameraKit instance is otherwise
+        // never referenced anywhere and would leak — destroy it here
+        // rather than just discarding the reference.
+        if (cancelledRef.current) {
+          await cameraKit.destroy().catch(() => undefined);
+          return;
+        }
         cameraKitRef.current = cameraKit;
 
         awaitingPermissionRef.current = true;
@@ -456,8 +483,27 @@ function CameraKitSessionRuntime({
           audio: false,
         });
         awaitingPermissionRef.current = false;
+        // Stale-attempt check #2 (camera permission): this is the exact
+        // race the whole guard system exists for — getUserMedia() can
+        // resolve well after the user navigated away, closed the
+        // experience, or this component unmounted. If so: stop every
+        // track on the just-returned stream immediately, never assign it
+        // to streamRef (so cleanup can't double-stop it and nothing else
+        // can pick it up), and never proceed to create a Camera Kit
+        // session with it. No state update happens on this branch.
         if (cancelledRef.current) {
           stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        // Distinct from cancellation: permission may resolve while the
+        // tab/app is still genuinely backgrounded (the visitor switched
+        // away instead of answering, then answered later without
+        // returning). Don't silently start bootstrapping AR in the
+        // background — stop the stream and run the same "interrupted"
+        // path used for backgrounding an active session.
+        if (document.visibilityState === "hidden") {
+          stream.getTracks().forEach((track) => track.stop());
+          await finishWith({ type: "interrupted" });
           return;
         }
         streamRef.current = stream;
