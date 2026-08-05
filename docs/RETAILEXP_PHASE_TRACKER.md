@@ -1253,18 +1253,17 @@ something this project controls the timeline of).
 backend, built as a reusable multi-tenant platform (Kameleon as the first
 client, not a hardcoded assumption) with a full video/media
 content-management data model.
-**Status:** CHECKPOINT 1 (PREFLIGHT) COMPLETE — planning only, nothing
-implemented. Full architecture proposal (universal schema, Supabase
-Storage layout, upload/publish workflow, placeholder-to-production
-strategy, RLS/tenant-isolation strategy, universal URL migration path
-preserving `/experience/kameleon`, import-manifest format, dashboard
-screens, checkpoint roadmap) is in
-`docs/PHASE7_PLATFORM_ARCHITECTURE_PREFLIGHT.md`. **Still BLOCKED on
-Checkpoint 2 until Supabase project/credentials are explicitly approved**
-(new external account/resource, per the standing restrictions below).
-**Approval required:** Yes — security and data isolation reviewed before
-production deployment; Supabase project creation itself requires separate
-explicit approval before Checkpoint 2 begins.
+**Status:** CHECKPOINT 2 (SCHEMA + RLS + STORAGE FOUNDATION) **APPROVED
+AND COMPLETE** on the remote "The Retail Experience" Supabase project
+(`lfwuuanzrtwewpfqryeg`). Checkpoint 1 (preflight) architecture proposal
+is in `docs/PHASE7_PLATFORM_ARCHITECTURE_PREFLIGHT.md`. **Not merged to
+`main`** — all of this lives on `phase-7-platform` only; the stable
+showcase is untouched (see STABLE SHOWCASE above). Checkpoint 7.3
+(real authentication) is now **PLANNED, not implemented** — see
+`docs/PHASE7_CHECKPOINT_7_3_AUTHENTICATION_PLAN.md`.
+**Approval required:** Yes — every checkpoint from here on (7.3
+implementation, Vercel env vars, any further remote schema change)
+still requires separate explicit approval before it begins.
 
 **Checkpoint 1 decisions confirmed (2026-08-04):** initial client =
 Kameleon (`kameleon`); initial experience = "Kameleon Interactive Journey"
@@ -1295,9 +1294,47 @@ is meant for local/preview development only. The two legitimate initial
 records (Kameleon client + its draft "Kameleon Interactive Journey"
 experience) were moved out of `supabase/seed.sql` into a tracked,
 idempotent migration (`supabase/migrations/20260804200621_initial_client_
-records.sql`), bringing the schema to **eight** migrations total.
-`supabase/seed.sql` is now empty except explanatory comments and must
-never be run against the linked remote project.
+records.sql`). `supabase/seed.sql` is now empty except explanatory
+comments and must never be run against the linked remote project.
+
+**Checkpoint 2 — APPROVED AND COMPLETE (2026-08-04):** all 9 migrations
+applied to the linked remote project via `supabase db push` (no `db
+reset`, no manual dashboard SQL, no migration repair at any point).
+Two real bugs were found and fixed during physical verification against
+the actual remote database — not caught by local structural checks
+alone, since neither has a Docker-based local Postgres available to test
+against in this environment:
+- `protect_membership_role_changes()` incorrectly rejected trusted
+  ambient/direct-database connections (SQL Editor, migration
+  application) because it had no way to distinguish "no JWT context at
+  all" from "a real but unauthorized end-user." Fixed in
+  `20260804210404_fix_role_promotion_ambient_connection.sql` using
+  `auth.role() IS NULL` — not `auth.uid() IS NULL`, which was considered
+  and explicitly rejected because it would also match real anonymous API
+  requests. All required-deny behaviors (self-promotion, editor changing
+  roles, admin self-promotion, cross-client access) re-verified intact.
+- The tenant-isolation test's own `experience_users` fixture tried to
+  insert a row while impersonating the Kameleon editor with
+  `auth_user_id` left null — correctly rejected by
+  `experience_users_write_own` (which only ever permits `auth_user_id =
+  auth.uid()`, i.e. a user creating their own association). This was a
+  **test-only** bug, not a policy bug — fixed by creating the fixture
+  under the same trusted ambient tier every other fixture uses, with an
+  explicit fake-customer identity. No RLS policy was changed for this.
+
+Final run of `supabase/tests/tenant_isolation_check.sql` in the Supabase
+Dashboard SQL Editor: **all 8 checks reported PASS**, transaction ended
+in `ROLLBACK`, confirmed independently via `supabase inspect db
+table-stats --linked` that no fixture data was left behind (only the 2
+legitimate seed rows — `clients`: 1, `experiences`: 1 — exist; every
+other table: 0 rows).
+
+**Checkpoint 7.3 — real authentication: PLANNED, not started.** Full
+implementation plan (admin/client-user auth via `client_memberships`,
+end-customer auth via `experience_users`, session middleware, RLS
+tightening, what's explicitly deferred) is in
+`docs/PHASE7_CHECKPOINT_7_3_AUTHENTICATION_PLAN.md`. Not to be
+implemented until that plan is reviewed and approved.
 
 ## Phase 8 — Media and Content Management
 
