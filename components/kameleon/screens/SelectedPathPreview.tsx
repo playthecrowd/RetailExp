@@ -1,16 +1,8 @@
 import { getPathway, getNode } from "@/lib/kameleon/live-content";
-import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { Button } from "@/components/ui/Button";
-import { CheckCircleIcon, DecanterIcon, ToastIcon, BrushIcon, FireworkIcon } from "@/components/kameleon/icons";
+import { CheckCircleIcon } from "@/components/kameleon/icons";
 import type { ViewerProgress } from "@/lib/kameleon/pathway-model";
 import { playKameleonSound } from "@/lib/kameleon/sound";
-
-const motifIcon = {
-  "private-pour": DecanterIcon,
-  "social-shift": ToastIcon,
-  create: BrushIcon,
-  arrive: FireworkIcon,
-} as const;
 
 export function SelectedPathPreview({
   pathwayId,
@@ -26,7 +18,6 @@ export function SelectedPathPreview({
   const pathway = getPathway(pathwayId);
   if (!pathway) return null;
   const root = getNode(pathway.rootNodeId);
-  const Icon = motifIcon[pathway.motif];
   const chapterNumber = progress.history.length + 1;
 
   function handleBegin() {
@@ -38,7 +29,10 @@ export function SelectedPathPreview({
     <div className="relative flex flex-1 flex-col overflow-hidden">
       {/* Full-bleed pathway photo — fills the entire screen behind every
           control below, never a separate rectangular hero element. */}
-      <EnvironmentArt motif={pathway.motif} className="absolute inset-0" priority gradientOverlay={false} />
+      {root?.posterSource && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={root.posterSource} alt="" className="absolute inset-0 h-full w-full object-cover" />
+      )}
 
       {/* Cinematic vignette: dark near the top (nav legibility), a lighter
           center so the environment stays visible, stronger darkening behind
@@ -65,12 +59,12 @@ export function SelectedPathPreview({
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-3 pb-6 pt-8 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full border border-kameleon-copper bg-black/30 backdrop-blur-sm">
-            <Icon className="h-6 w-6 text-kameleon-copper-light" />
-          </div>
           <h1 className="font-display text-2xl font-semibold uppercase tracking-wide text-kameleon-copper-light drop-shadow-[0_2px_10px_rgba(0,0,0,0.9)]">
             {pathway.label}
           </h1>
+          <p className="text-xs uppercase tracking-widest text-kameleon-text-muted drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">
+            {pathway.subtitle}
+          </p>
           <p className="max-w-xs text-sm text-kameleon-text drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{pathway.description}</p>
           <p className="text-xs uppercase tracking-widest text-kameleon-text-muted">
             360° Experience <span className="text-kameleon-red">•</span> {root ? Math.round(root.duration / 60) : 4} min{" "}

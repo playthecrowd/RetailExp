@@ -57,13 +57,24 @@ const motifConfig: Record<
  */
 export function EnvironmentArt({
   motif,
+  photoSrc,
   className,
   priority = false,
   gradientOverlay = true,
   thumbnailKind,
   children,
 }: {
-  motif: EnvironmentMotif;
+  /**
+   * A curated illustrated motif (see EnvironmentMotif) OR — for real,
+   * per-pathway content such as the character pathways — an arbitrary
+   * pathway/node slug with no entry in motifConfig. When `photoSrc` isn't
+   * given and the motif is unrecognized, this renders a neutral fallback
+   * instead of throwing (there's no dedicated illustrated fallback for
+   * every possible real pathway).
+   */
+  motif: string;
+  /** Real photo URL to render instead of the motif-driven bundled art (used for real, non-curated pathway content). Takes priority over `motif` for photo selection. */
+  photoSrc?: string;
   className?: string;
   /** Set true only for the single most important image on the current screen (LCP). */
   priority?: boolean;
@@ -79,18 +90,18 @@ export function EnvironmentArt({
   thumbnailKind?: "pathway-card" | "decision";
   children?: React.ReactNode;
 }) {
-  const config = motifConfig[motif];
+  const config = motifConfig[motif as EnvironmentMotif];
   const dedicatedThumbnail =
     thumbnailKind === "pathway-card"
-      ? kameleonPathwayThumbnails[motif]
+      ? kameleonPathwayThumbnails[motif as EnvironmentMotif]
       : thumbnailKind === "decision"
-        ? kameleonDecisionThumbnails[motif]
+        ? kameleonDecisionThumbnails[motif as EnvironmentMotif]
         : undefined;
-  const photo = dedicatedThumbnail ?? kameleonFullscreenPhotos[motif];
+  const photo = photoSrc ?? dedicatedThumbnail ?? kameleonFullscreenPhotos[motif as EnvironmentMotif];
   // A dedicated crop is already composed at its target ratio (16:9 or 3:2),
   // so it renders centered; only the full-screen source needs the per-motif
   // focal point to keep the subject in frame when cropped to a narrower box.
-  const objectPosition = dedicatedThumbnail ? "center" : kameleonPhotoFocalPoint[motif];
+  const objectPosition = photoSrc ? "center" : dedicatedThumbnail ? "center" : kameleonPhotoFocalPoint[motif as EnvironmentMotif];
 
   // The outer div is fully caller-controlled (sizing: h-64, aspect-[16/9],
   // absolute inset-0, h-full w-full, etc.) and deliberately carries no
@@ -99,6 +110,30 @@ export function EnvironmentArt({
   // beat a caller-supplied "absolute" in the compiled stylesheet regardless
   // of class-string order, collapsing the box to the photo's natural size.
   // The inner div owns "relative" purely to anchor the `fill` image/overlay.
+  // Real, remote (Supabase Storage signed-URL) photos bypass next/image —
+  // they're not in the local static-import set next/image expects and carry
+  // their own signed query string that shouldn't be re-optimized.
+  if (photoSrc) {
+    return (
+      <div className={cn("overflow-hidden bg-kameleon-bg", className)}>
+        <div className="relative h-full w-full">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={photoSrc}
+            alt=""
+            loading={priority ? "eager" : "lazy"}
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{ objectPosition }}
+          />
+          {gradientOverlay && (
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent" />
+          )}
+          {children}
+        </div>
+      </div>
+    );
+  }
+
   if (photo) {
     return (
       <div className={cn("overflow-hidden bg-kameleon-bg", className)}>
@@ -122,15 +157,23 @@ export function EnvironmentArt({
     );
   }
 
-  // Fallback: CSS/SVG composition (no photography available for this motif).
-  const Icon = config.icon;
+  // Fallback: CSS/SVG composition (no photography available for this motif,
+  // or an unrecognized motif — e.g. a real character-pathway slug with no
+  // curated illustrated fallback).
+  const fallback = config ?? {
+    gradient: "from-[#1c1410] via-kameleon-surface to-black",
+    skylineTone: "neutral" as const,
+    icon: ToastIcon,
+    glow: "bg-kameleon-copper/15",
+  };
+  const Icon = fallback.icon;
   return (
-    <div className={cn("overflow-hidden bg-gradient-to-b", config.gradient, className)}>
+    <div className={cn("overflow-hidden bg-gradient-to-b", fallback.gradient, className)}>
       <div className={cn("relative h-full w-full")}>
-        <div className={cn("absolute -top-10 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full blur-3xl", config.glow)} />
+        <div className={cn("absolute -top-10 left-1/2 h-40 w-40 -translate-x-1/2 rounded-full blur-3xl", fallback.glow)} />
         <Icon className="absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 text-kameleon-copper-light/10" />
         <div className="absolute inset-x-0 bottom-0 h-1/2 opacity-60">
-          <Skyline tone={config.skylineTone} />
+          <Skyline tone={fallback.skylineTone} />
         </div>
         {gradientOverlay && (
           <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent" />

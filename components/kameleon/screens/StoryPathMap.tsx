@@ -31,7 +31,7 @@ function NodeCard({
 }) {
   return (
     <div className={cn("min-w-0 overflow-hidden rounded-lg border-2 bg-kameleon-surface", statusCardStyles[status])}>
-      <EnvironmentArt motif={getNodeMotif(node)} className="h-10 w-full" />
+      <EnvironmentArt motif={getNodeMotif(node)} photoSrc={node.posterSource} className="h-10 w-full" />
       <div className="flex min-w-0 items-center justify-between gap-1 p-2">
         <p className="min-w-0 truncate font-display text-xs font-semibold uppercase tracking-wide text-kameleon-text">
           {node.title}

@@ -91,6 +91,7 @@ export function DecisionDrawer({
                     {destinationNode && (
                       <EnvironmentArt
                         motif={getNodeMotif(destinationNode)}
+                        photoSrc={destinationNode.posterSource}
                         className="aspect-[3/2] w-24 shrink-0"
                         gradientOverlay={false}
                         thumbnailKind="decision"

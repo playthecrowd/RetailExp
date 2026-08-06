@@ -1,15 +1,6 @@
 import { kameleonPathways, getNode } from "@/lib/kameleon/live-content";
-import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
-import { DecanterIcon, ToastIcon, BrushIcon, FireworkIcon } from "@/components/kameleon/icons";
 import { cn } from "@/lib/cn";
 import { playKameleonSound } from "@/lib/kameleon/sound";
-
-const motifIcon = {
-  "private-pour": DecanterIcon,
-  "social-shift": ToastIcon,
-  create: BrushIcon,
-  arrive: FireworkIcon,
-} as const;
 
 export function ChooseFirstPath({
   onSelect,
@@ -22,23 +13,22 @@ export function ChooseFirstPath({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 pb-2">
       <div className="shrink-0 pt-1 text-center">
         <div className="mx-auto mb-1.5 h-px w-24 bg-gradient-to-r from-transparent via-kameleon-red to-transparent" />
-        <p className="text-[11px] uppercase tracking-widest text-kameleon-text-muted">Kameleon · Chapter 1</p>
+        <p className="text-[11px] uppercase tracking-widest text-kameleon-text-muted">
+          Four Different Lives. Four Pathways.
+        </p>
         <h1 className="mt-0.5 font-display text-lg font-semibold uppercase leading-tight tracking-wide text-kameleon-copper-light">
-          Where will the night take you?
+          Whose Journey Will You Follow?
         </h1>
-        <p className="mt-0.5 text-xs text-kameleon-text-muted">Choose a world. Your decision shapes what happens next.</p>
       </div>
 
-      {/* Four compact horizontal cards. Rows use 1fr (no minimum), so the
-          grid always shrink-to-fits the space actually left between the
-          header and the footer nav — never a scroll container, even on the
-          shortest tested viewport. Each card's own max-h caps growth on
-          taller screens (target ~90-125px) instead of a row-level floor,
-          which would force overflow instead of shrinking. */}
-      <div className="grid min-h-0 flex-1 grid-rows-4 content-center gap-1.5 py-1.5">
+      {/* 2x2 grid — each card's real approved photo as the thumbnail, name
+          and career as live UI text (never baked into the image). Grid rows
+          use 1fr so this always shrink-to-fits the space between header and
+          footer nav instead of introducing a scrollbar. */}
+      <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 content-center gap-2 py-2">
         {kameleonPathways.map((pathway, index) => {
           const root = getNode(pathway.rootNodeId);
-          const Icon = motifIcon[pathway.motif];
+          const posterSrc = root?.posterSource ?? "";
           return (
             <button
               key={pathway.id}
@@ -48,34 +38,35 @@ export function ChooseFirstPath({
                 onSelect(pathway.id);
               }}
               className={cn(
-                "grid h-full max-h-32 min-w-0 grid-cols-[minmax(105px,42%)_1fr] self-center overflow-hidden rounded-2xl border bg-kameleon-surface text-left transition-colors",
-                pathway.accent === "red" ? "border-l-4 border-l-kameleon-red" : "border-l-4 border-l-kameleon-blue",
+                "group relative flex min-h-0 flex-col overflow-hidden rounded-2xl border bg-kameleon-surface text-left transition-colors",
+                pathway.accent === "red" ? "border-t-4 border-t-kameleon-red" : "border-t-4 border-t-kameleon-blue",
                 "border-kameleon-border hover:border-kameleon-copper/60",
               )}
             >
-              {/* Landscape thumbnail — the dedicated pathway-card crop, not a square icon. */}
-              <EnvironmentArt
-                motif={pathway.motif}
-                className="h-full w-full"
-                priority={index === 0}
-                thumbnailKind="pathway-card"
-                gradientOverlay={false}
-              />
-              <div className="flex min-w-0 items-center justify-between gap-2 px-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <Icon className="h-4 w-4 shrink-0 text-kameleon-copper-light" />
-                    <p className="truncate font-display text-sm font-semibold uppercase tracking-wide text-kameleon-text">
-                      {pathway.label}
-                    </p>
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-kameleon-text-muted">{pathway.subtitle}</p>
-                  <p className="mt-0.5 text-[10px] uppercase tracking-widest text-kameleon-text-muted">
-                    {root ? Math.round(root.duration / 60) : 4} min · 360°
-                  </p>
-                </div>
-                <span aria-hidden="true" className="shrink-0 text-lg text-kameleon-copper-light">
-                  →
+              {posterSrc && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={posterSrc}
+                  alt=""
+                  className="absolute inset-0 h-full w-full object-cover object-top"
+                  loading={index === 0 ? "eager" : "lazy"}
+                />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+
+              <div className="relative mt-auto flex flex-col gap-0.5 p-2.5">
+                <p className="font-display text-base font-semibold uppercase tracking-wide text-white">
+                  {pathway.label}
+                </p>
+                <p className="truncate text-[11px] text-white/75">{pathway.subtitle}</p>
+                <p className="truncate text-[10px] uppercase tracking-widest text-kameleon-copper-light">
+                  {pathway.description}
+                </p>
+                <span
+                  aria-hidden="true"
+                  className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-white/30 bg-black/30 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white"
+                >
+                  Choose {pathway.label} →
                 </span>
               </div>
             </button>

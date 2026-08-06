@@ -177,13 +177,16 @@ async function fetchAndAssignCache(): Promise<void> {
       };
       continue;
     }
-    if (!n.pathway_id) continue; // shouldn't happen for pathway_chapter nodes, but keep the map well-typed
+    // pathway_id is legitimately null for a shared convergence node (e.g.
+    // PP-FINAL, node_type "journey_completion") reachable from every
+    // pathway's leaves — only pathway_chapter nodes are required to have one.
+    if (!n.pathway_id && n.node_type === "pathway_chapter") continue;
 
     nodesById[n.id] = {
       id: n.id,
       clientId: n.client_id,
       experienceId: n.experience_id,
-      pathwayId: n.pathway_id,
+      pathwayId: n.pathway_id ?? "",
       chapterNumber: n.chapter_number ?? 0,
       displayName: n.chapter_label ?? n.internal_name,
       branchCode: n.branch_code ?? "",

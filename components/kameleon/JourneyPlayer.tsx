@@ -217,7 +217,11 @@ export function JourneyPlayer({
               startPaused={startedAwaitingChoice && playKey === 0}
               onComplete={handleVideoComplete}
               onProgress={handleProgress}
-              background={pathway && <EnvironmentArt motif={pathway.motif} className="h-full w-full" priority />}
+              background={
+                pathway && (
+                  <EnvironmentArt motif={pathway.motif} photoSrc={node.posterSource} className="h-full w-full" priority />
+                )
+              }
               src={node.videoSource}
               posterSrc={node.posterSource}
               captionsSrc={node.captionsSource}
