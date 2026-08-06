@@ -1,6 +1,6 @@
 import type { EnvironmentMotif } from "@/components/kameleon/art/EnvironmentArt";
 import type { VideoNode } from "./pathway-model";
-import { getPathway } from "@/lib/mock-data/kameleon-pathways";
+import { getPathway } from "@/lib/kameleon/live-content";
 
 /**
  * Real production photography, supplied 2026-08-03. Only full-screen (9:16,

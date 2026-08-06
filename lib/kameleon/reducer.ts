@@ -1,5 +1,5 @@
 import { createInitialProgress } from "./pathway-model";
-import { getPathway } from "@/lib/mock-data/kameleon-pathways";
+import { getPathway } from "@/lib/kameleon/live-content";
 import { createInitialOpeningGate, type KameleonSessionState } from "./types";
 import type { KameleonAction } from "./actions";
 

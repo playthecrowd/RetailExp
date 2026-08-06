@@ -1,4 +1,4 @@
-import { kameleonNodesById } from "@/lib/mock-data/kameleon-pathways";
+import { kameleonNodesById } from "@/lib/kameleon/live-content";
 import type { VideoNode } from "./pathway-model";
 
 /**

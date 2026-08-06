@@ -64,7 +64,7 @@ assert(legacyHits.length === 0, `no legacy env var names remain in executable so
 // --- SUPABASE_SECRET_KEY is referenced only where expected, never from a ---
 // --- "use client" file -------------------------------------------------------
 
-const ALLOWED_SECRET_KEY_FILES = new Set(["lib/supabase/secret.ts"]);
+const ALLOWED_SECRET_KEY_FILES = new Set(["lib/supabase/secret.ts", "scripts/seed-kameleon-content.mjs"]);
 const filesReferencingSecretKey = sourceFiles.filter((f) => readFileSync(f, "utf8").includes("SUPABASE_SECRET_KEY"));
 
 for (const file of filesReferencingSecretKey) {

@@ -7,6 +7,7 @@ import { KameleonFlowHeader } from "@/components/kameleon/FlowHeader";
 import { KameleonWordmark } from "@/components/kameleon/Wordmark";
 import { PortraitGrid } from "@/components/kameleon/art/PortraitGrid";
 import { playKameleonSound } from "@/lib/kameleon/sound";
+import { getCommercialNode } from "@/lib/kameleon/live-content";
 import { cn } from "@/lib/cn";
 
 export function CommercialVideo({
@@ -36,6 +37,8 @@ export function CommercialVideo({
     onContinue();
   }
 
+  const commercial = getCommercialNode();
+
   return (
     <div className="flex flex-1 flex-col gap-4 px-4 pb-32">
       <KameleonFlowHeader
@@ -51,13 +54,15 @@ export function CommercialVideo({
       </div>
 
       <MockVideoPlayer
-        title="The Perfect Pour"
-        durationSeconds={30}
+        title={commercial?.title ?? "The Perfect Pour"}
+        durationSeconds={commercial?.durationSeconds ?? 30}
         posterLabel="Kameleon commercial — placeholder"
-        captionText="Four cities. Four lives. One moment."
+        captionText={commercial?.description ?? "Four cities. Four lives. One moment."}
         completionThreshold={1}
         onComplete={handleComplete}
         background={<PortraitGrid className="h-full w-full" />}
+        src={commercial?.videoSource}
+        posterSrc={commercial?.posterSource}
       />
 
       <p className="text-center text-[11px] uppercase tracking-widest text-kameleon-text-muted/70">

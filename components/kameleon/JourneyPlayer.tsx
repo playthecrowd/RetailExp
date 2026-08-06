@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { getNode, getPathway } from "@/lib/mock-data/kameleon-pathways";
+import { getNode, getPathway } from "@/lib/kameleon/live-content";
 import { getDecisionTiming, getRevealStage, type RevealStage } from "@/lib/kameleon/decision-timing";
 import type { ViewerProgress } from "@/lib/kameleon/pathway-model";
 import { MockVideoPlayer } from "./MockVideoPlayer";
@@ -218,6 +218,9 @@ export function JourneyPlayer({
               onComplete={handleVideoComplete}
               onProgress={handleProgress}
               background={pathway && <EnvironmentArt motif={pathway.motif} className="h-full w-full" priority />}
+              src={node.videoSource}
+              posterSrc={node.posterSource}
+              captionsSrc={node.captionsSource}
             />
 
             {!node.isTerminal && (

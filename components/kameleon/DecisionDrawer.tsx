@@ -1,6 +1,6 @@
 import type { VideoNode } from "@/lib/kameleon/pathway-model";
 import type { RevealStage } from "@/lib/kameleon/decision-timing";
-import { getNode } from "@/lib/mock-data/kameleon-pathways";
+import { getNode } from "@/lib/kameleon/live-content";
 import { getNodeMotif } from "@/lib/kameleon/production-assets";
 import { EnvironmentArt } from "./art/EnvironmentArt";
 import { CheckCircleIcon, ReplayIcon } from "./icons";

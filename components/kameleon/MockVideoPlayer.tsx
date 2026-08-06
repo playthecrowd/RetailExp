@@ -14,11 +14,14 @@ import {
 } from "./icons";
 
 /**
- * There is no real video source yet (see docs/RETAILEXP_PHASE_TRACKER.md,
- * Phase 3) — playback is a simulated timer driving real, functional
- * controls (play/pause, seek, mute, captions, fullscreen, loading/error/
- * replay/completion states). Real local placeholder media is wired in when
- * it's available; the touch-and-drag 360 engine itself is Phase 4 scope.
+ * Real playback (via the `src` prop) and a simulated fallback coexist here:
+ * pass `src` to render an actual `<video>` element wired to the same
+ * control surface below; omit it to keep the original simulated-timer
+ * behavior (see docs/RETAILEXP_PHASE_TRACKER.md, Phase 3) for any caller
+ * that doesn't have real media yet. Both modes write to the same
+ * `currentTime` state, so the seek bar, `onProgress`, and the completion
+ * effect are shared and source-agnostic. The touch-and-drag 360 engine
+ * itself is still Phase 4 scope in either mode.
  */
 export function MockVideoPlayer({
   title,
@@ -32,6 +35,9 @@ export function MockVideoPlayer({
   startPaused = false,
   onProgress,
   background,
+  src,
+  posterSrc,
+  captionsSrc,
 }: {
   title: string;
   durationSeconds: number;
@@ -46,6 +52,12 @@ export function MockVideoPlayer({
   startPaused?: boolean;
   onProgress?: (currentTime: number) => void;
   background?: React.ReactNode;
+  /** Real playable video URL. When set, renders an actual <video> element instead of the simulated timer. */
+  src?: string;
+  /** Real poster image URL for the <video> element. */
+  posterSrc?: string;
+  /** Real VTT captions URL for a <track> element. */
+  captionsSrc?: string;
 }) {
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [playing, setPlaying] = useState(false);
@@ -53,9 +65,11 @@ export function MockVideoPlayer({
   const [muted, setMuted] = useState(false);
   const [showCaptions, setShowCaptions] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const completedRef = useRef(initialTime >= durationSeconds * completionThreshold);
 
   useEffect(() => {
+    if (src) return;
     const loadTimer = window.setTimeout(() => {
       setStatus("ready");
       if (!startPaused) setPlaying(true);
@@ -65,6 +79,7 @@ export function MockVideoPlayer({
   }, []);
 
   useEffect(() => {
+    if (src) return;
     if (status !== "ready" || !playing) return;
     const interval = window.setInterval(() => {
       setCurrentTime((prev) => {
@@ -74,7 +89,26 @@ export function MockVideoPlayer({
       });
     }, 250);
     return () => window.clearInterval(interval);
-  }, [status, playing, durationSeconds]);
+  }, [src, status, playing, durationSeconds]);
+
+  // Real-<video> mode: keep the DOM element in sync with the `playing` state
+  // (button clicks, autoplay-policy rejections, OS media keys via onPlay/onPause below).
+  useEffect(() => {
+    if (!src || !videoRef.current) return;
+    if (playing) {
+      videoRef.current.play().catch(() => setPlaying(false));
+    } else {
+      videoRef.current.pause();
+    }
+  }, [src, playing]);
+
+  function handleVideoLoadedData() {
+    setStatus("ready");
+    if (videoRef.current && initialTime > 0) {
+      videoRef.current.currentTime = initialTime;
+    }
+    if (!startPaused) setPlaying(true);
+  }
 
   useEffect(() => {
     onProgress?.(currentTime);
@@ -89,12 +123,20 @@ export function MockVideoPlayer({
   function handleReplay() {
     completedRef.current = false;
     setCurrentTime(0);
+    if (src && videoRef.current) {
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
+    }
     setPlaying(true);
     setStatus("ready");
   }
 
   function handleSeek(event: React.ChangeEvent<HTMLInputElement>) {
-    setCurrentTime(Number(event.target.value));
+    const next = Number(event.target.value);
+    setCurrentTime(next);
+    if (src && videoRef.current) {
+      videoRef.current.currentTime = next;
+    }
   }
 
   async function handleFullscreen() {
@@ -129,7 +171,26 @@ export function MockVideoPlayer({
       ref={containerRef}
       className="relative flex aspect-[9/16] w-full flex-col overflow-hidden rounded-xl bg-gradient-to-br from-kameleon-surface-raised via-kameleon-surface to-black"
     >
-      {background && <div className="absolute inset-0">{background}</div>}
+      {src ? (
+        <video
+          ref={videoRef}
+          src={src}
+          poster={posterSrc}
+          muted={muted}
+          playsInline
+          className="absolute inset-0 h-full w-full object-cover"
+          onLoadedData={handleVideoLoadedData}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setCurrentTime(durationSeconds)}
+          onError={() => setStatus("error")}
+        >
+          {captionsSrc && <track kind="captions" src={captionsSrc} srcLang="en" label="English" default={showCaptions} />}
+        </video>
+      ) : (
+        background && <div className="absolute inset-0">{background}</div>
+      )}
 
       {is360 && (
         <span className="absolute right-3 top-3 z-10 rounded-full border border-kameleon-copper/50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-widest text-kameleon-copper-light">

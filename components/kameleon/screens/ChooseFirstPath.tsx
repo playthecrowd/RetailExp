@@ -1,4 +1,4 @@
-import { kameleonPathways, getNode } from "@/lib/mock-data/kameleon-pathways";
+import { kameleonPathways, getNode } from "@/lib/kameleon/live-content";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { DecanterIcon, ToastIcon, BrushIcon, FireworkIcon } from "@/components/kameleon/icons";
 import { cn } from "@/lib/cn";

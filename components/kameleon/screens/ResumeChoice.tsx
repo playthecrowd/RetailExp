@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/Button";
-import { getPathway } from "@/lib/mock-data/kameleon-pathways";
+import { getPathway } from "@/lib/kameleon/live-content";
 import type { ViewerProgress } from "@/lib/kameleon/pathway-model";
 
 /**

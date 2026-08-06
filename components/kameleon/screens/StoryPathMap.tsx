@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/Button";
 import { CheckCircleIcon, LockIcon } from "@/components/kameleon/icons";
 import { getNodeStatus, type NodeMapStatus } from "@/lib/kameleon/path-map";
 import { getChildren } from "@/lib/kameleon/tree-layout";
-import { getPathway, getNode } from "@/lib/mock-data/kameleon-pathways";
+import { getPathway, getNode } from "@/lib/kameleon/live-content";
 import type { ViewerProgress, VideoNode } from "@/lib/kameleon/pathway-model";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { getNodeMotif } from "@/lib/kameleon/production-assets";

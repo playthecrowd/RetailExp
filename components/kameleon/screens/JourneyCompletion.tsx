@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { KameleonEmblem } from "@/components/kameleon/art/Emblem";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { CheckCircleIcon } from "@/components/kameleon/icons";
-import { getPathway, getNode } from "@/lib/mock-data/kameleon-pathways";
+import { getPathway, getNode } from "@/lib/kameleon/live-content";
 import type { ViewerProgress } from "@/lib/kameleon/pathway-model";
 
 export function JourneyCompletion({

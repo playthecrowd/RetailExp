@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useKameleonSession } from "@/lib/kameleon/useKameleonSession";
 import { disposeKameleonSound, handleKameleonVisibilityChange } from "@/lib/kameleon/sound";
-import { LoadingState } from "@/components/ui/states";
+import { loadKameleonContent } from "@/lib/kameleon/live-content";
+import { LoadingState, ErrorState } from "@/components/ui/states";
 import { RestartExperience } from "@/components/kameleon/RestartExperience";
 import { SoundToggle } from "@/components/kameleon/SoundToggle";
 
@@ -46,6 +47,8 @@ const KameleonCameraKitExperience = dynamic(
 
 export default function KameleonExperiencePage() {
   const [state, dispatch] = useKameleonSession();
+  const [contentLoaded, setContentLoaded] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
 
   useEffect(() => {
     document.addEventListener("visibilitychange", handleKameleonVisibilityChange);
@@ -55,7 +58,32 @@ export default function KameleonExperiencePage() {
     };
   }, []);
 
-  if (!state.hydrated) {
+  useEffect(() => {
+    loadKameleonContent()
+      .then(() => setContentLoaded(true))
+      .catch((error) => setContentError(error instanceof Error ? error.message : String(error)));
+  }, []);
+
+  if (contentError) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <ErrorState
+          brand="kameleon"
+          title="Couldn't load Kameleon"
+          message={contentError}
+          retryLabel="Retry"
+          onRetry={() => {
+            setContentError(null);
+            loadKameleonContent()
+              .then(() => setContentLoaded(true))
+              .catch((error) => setContentError(error instanceof Error ? error.message : String(error)));
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (!state.hydrated || !contentLoaded) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <LoadingState brand="kameleon" message="Loading Kameleon…" />
