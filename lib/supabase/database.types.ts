@@ -451,27 +451,33 @@ export type Database = {
       }
       experience_user_rewards: {
         Row: {
+          claimed_at: string | null
           client_id: string
           experience_user_id: string
           id: string
           points_awarded: number
           reward_key: string
+          status: string
           unlocked_at: string
         }
         Insert: {
+          claimed_at?: string | null
           client_id: string
           experience_user_id: string
           id?: string
           points_awarded?: number
           reward_key: string
+          status?: string
           unlocked_at?: string
         }
         Update: {
+          claimed_at?: string | null
           client_id?: string
           experience_user_id?: string
           id?: string
           points_awarded?: number
           reward_key?: string
+          status?: string
           unlocked_at?: string
         }
         Relationships: [

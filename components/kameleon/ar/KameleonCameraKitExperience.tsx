@@ -152,11 +152,10 @@ function CameraKitStartScreen({ onStart, onSkip }: { onStart: () => void; onSkip
 
         <div>
           <h1 className="font-display text-2xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
-            Bring the bottle to life
+            Bring the Bottle to Life with AR Rewards
           </h1>
           <p className="mt-3 max-w-xs text-sm text-kameleon-text-muted">
-            Open your camera to see Kameleon come alive right where you&apos;re standing, powered
-            by Snap AR.
+            Access your camera to bring KAMELEON to life and begin unlocking AR rewards.
           </p>
         </div>
 
@@ -178,7 +177,7 @@ function CameraKitStartScreen({ onStart, onSkip }: { onStart: () => void; onSkip
 
       <div className="flex flex-col items-center gap-4">
         <Button brand="kameleon" size="lg" fullWidth onClick={onStart}>
-          Allow camera & begin AR
+          Access Camera & Begin AR Rewards
         </Button>
         <button
           type="button"

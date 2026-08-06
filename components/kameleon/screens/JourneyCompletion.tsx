@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { KameleonEmblem } from "@/components/kameleon/art/Emblem";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { CheckCircleIcon } from "@/components/kameleon/icons";
 import { getPathway, getNode } from "@/lib/kameleon/live-content";
+import { ensureFinalRewardPending } from "@/app/experience/kameleon/actions";
+import { RewardClaimPopup } from "@/components/kameleon/rewards/RewardClaimPopup";
 import type { ViewerProgress } from "@/lib/kameleon/pathway-model";
 
 export function JourneyCompletion({
@@ -18,6 +20,20 @@ export function JourneyCompletion({
   onReplay: () => void;
 }) {
   const [shareState, setShareState] = useState<"idle" | "shared" | "copied">("idle");
+  const [showClaimPopup, setShowClaimPopup] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensureFinalRewardPending()
+      .then((status) => {
+        if (!cancelled && status === "pending") setShowClaimPopup(true);
+      })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const pathway = progress.pathwayId ? getPathway(progress.pathwayId) : undefined;
   const chapters = progress.history.length + 1;
   const choices = progress.history.length;
@@ -99,6 +115,10 @@ export function JourneyCompletion({
           Your progress has been saved.
         </p>
       </div>
+
+      {showClaimPopup && (
+        <RewardClaimPopup rewardKey="atlanta_rooftop_gathering" onClose={() => setShowClaimPopup(false)} />
+      )}
     </div>
   );
 }

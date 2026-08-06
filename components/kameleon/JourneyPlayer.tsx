@@ -137,7 +137,10 @@ export function JourneyPlayer({
         playerStatus: "terminal-complete",
         currentNodeElapsedSeconds: node.duration,
       });
-      unlockKameleonReward("atlanta_rooftop_gathering").catch(console.error);
+      // The atlanta_rooftop_gathering reward is qualified by
+      // JourneyCompletion.tsx on mount instead of here, to avoid a race
+      // between this fire-and-forget call and the completion screen
+      // immediately needing to know whether to show the claim popup.
       playKameleonSound("journeyComplete");
       onTerminalComplete();
       return;
