@@ -31,7 +31,7 @@ export function CommercialVideo({
     onComplete();
   }
 
-  function handleAccessAr() {
+  function handleStartJourney() {
     if (activating) return; // prevent duplicate activation (double-tap, double Enter)
     setActivating(true);
     onContinue();
@@ -44,7 +44,8 @@ export function CommercialVideo({
       <KameleonFlowHeader
         steps={[
           { id: "commercial", label: "Commercial", status: "current" },
-          { id: "ar", label: "AR Intro", status: "upcoming" },
+          { id: "passport", label: "Passport", status: "upcoming" },
+          { id: "ar", label: "AR", status: "upcoming" },
           { id: "journey", label: "Journey", status: "upcoming" },
         ]}
       />
@@ -71,7 +72,7 @@ export function CommercialVideo({
 
       {/* Accessible announcement — screen readers hear this the moment the action becomes available. */}
       <div aria-live="polite" className="sr-only">
-        {completed ? "AR experience is now available." : ""}
+        {completed ? "Your journey is ready to begin." : ""}
       </div>
 
       {/* Bottom-fixed action tray, aligned to the same centered mobile frame as the rest of the app. */}
@@ -92,9 +93,9 @@ export function CommercialVideo({
             fullWidth
             disabled={!completed || activating}
             tabIndex={completed ? 0 : -1}
-            onClick={handleAccessAr}
+            onClick={handleStartJourney}
           >
-            Access AR Experience
+            Start Your Journey
           </Button>
         </div>
       </div>

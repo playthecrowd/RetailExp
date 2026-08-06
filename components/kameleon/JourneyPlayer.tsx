@@ -9,6 +9,7 @@ import { DecisionDrawer } from "./DecisionDrawer";
 import { EnvironmentArt } from "./art/EnvironmentArt";
 import { LoadingState } from "@/components/ui/states";
 import { playKameleonSound } from "@/lib/kameleon/sound";
+import { unlockKameleonReward } from "@/app/experience/kameleon/actions";
 
 /**
  * The continuous player for screens 08+09 combined. Stays mounted for the
@@ -93,6 +94,8 @@ export function JourneyPlayer({
     const choice = node.choices.find((c) => c.id === choiceId);
     if (!choice) return;
 
+    unlockKameleonReward("perfect_pour_fountain").catch(console.error);
+
     const completedNodeIds = progress.completedNodeIds.includes(node.id)
       ? progress.completedNodeIds
       : [...progress.completedNodeIds, node.id];
@@ -134,6 +137,7 @@ export function JourneyPlayer({
         playerStatus: "terminal-complete",
         currentNodeElapsedSeconds: node.duration,
       });
+      unlockKameleonReward("atlanta_rooftop_gathering").catch(console.error);
       playKameleonSound("journeyComplete");
       onTerminalComplete();
       return;

@@ -22,9 +22,17 @@ export function useKameleonSession(): [KameleonSessionState, React.Dispatch<Kame
       commercialCompleted: state.commercialCompleted,
       arAvailable: state.arAvailable,
       authed: state.authed,
+      arCompleted: state.arCompleted,
       enteredJourneyThisSession: state.enteredJourneyThisSession,
     });
-  }, [state.hydrated, state.commercialCompleted, state.arAvailable, state.authed, state.enteredJourneyThisSession]);
+  }, [
+    state.hydrated,
+    state.commercialCompleted,
+    state.arAvailable,
+    state.authed,
+    state.arCompleted,
+    state.enteredJourneyThisSession,
+  ]);
 
   useEffect(() => {
     if (!state.hydrated) return;

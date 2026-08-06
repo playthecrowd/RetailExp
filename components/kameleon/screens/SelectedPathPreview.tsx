@@ -67,7 +67,8 @@ export function SelectedPathPreview({
           </p>
           <p className="max-w-xs text-sm text-kameleon-text drop-shadow-[0_1px_6px_rgba(0,0,0,0.9)]">{pathway.description}</p>
           <p className="text-xs uppercase tracking-widest text-kameleon-text-muted">
-            360° Experience <span className="text-kameleon-red">•</span> {root ? Math.round(root.duration / 60) : 4} min{" "}
+            Interactive Experience <span className="text-kameleon-red">•</span>{" "}
+            {root ? Math.round(root.duration / 60) : 4} min{" "}
             <span className="text-kameleon-red">•</span> Headphones recommended
           </p>
 

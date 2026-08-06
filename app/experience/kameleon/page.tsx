@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useKameleonSession } from "@/lib/kameleon/useKameleonSession";
 import { disposeKameleonSound, handleKameleonVisibilityChange } from "@/lib/kameleon/sound";
 import { loadKameleonContent } from "@/lib/kameleon/live-content";
+import { unlockKameleonReward } from "@/app/experience/kameleon/actions";
 import { LoadingState, ErrorState } from "@/components/ui/states";
 import { RestartExperience } from "@/components/kameleon/RestartExperience";
 import { SoundToggle } from "@/components/kameleon/SoundToggle";
@@ -111,7 +112,7 @@ export default function KameleonExperiencePage() {
           <CommercialVideo
             completed={state.commercialCompleted}
             onComplete={() => dispatch({ type: "COMMERCIAL_COMPLETE" })}
-            onContinue={() => dispatch({ type: "CONTINUE_TO_AR" })}
+            onContinue={() => dispatch({ type: "CONTINUE_TO_ACCOUNT" })}
           />
         );
 
@@ -121,8 +122,14 @@ export default function KameleonExperiencePage() {
         // see components/kameleon/ar/KameleonCameraKitExperience.tsx.
         return (
           <KameleonCameraKitExperience
-            onEnterJourney={() => dispatch({ type: "ENTER_JOURNEY" })}
-            onSkipAr={() => dispatch({ type: "CONTINUE_WITHOUT_AR_FALLBACK" })}
+            onEnterJourney={() => {
+              unlockKameleonReward("ruby_portal").catch(console.error);
+              dispatch({ type: "ENTER_JOURNEY" });
+            }}
+            onSkipAr={() => {
+              unlockKameleonReward("ruby_portal").catch(console.error);
+              dispatch({ type: "CONTINUE_WITHOUT_AR_FALLBACK" });
+            }}
           />
         );
 

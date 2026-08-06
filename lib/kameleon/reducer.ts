@@ -44,10 +44,14 @@ export function kameleonReducer(
         hydrated: true,
       };
       let screen: KameleonSessionState["screen"] = "tap-to-begin";
-      if (next.commercialCompleted && next.authed) {
-        screen = postOpeningScreen(next);
-      } else if (next.commercialCompleted) {
+      if (!next.commercialCompleted) {
+        screen = "tap-to-begin";
+      } else if (!next.authed) {
+        screen = "quick-account";
+      } else if (!next.arCompleted) {
         screen = "ar-permission";
+      } else {
+        screen = postOpeningScreen(next);
       }
       return { ...next, screen };
     }
@@ -58,17 +62,19 @@ export function kameleonReducer(
     case "COMMERCIAL_COMPLETE":
       return { ...state, commercialCompleted: true };
 
-    case "CONTINUE_TO_AR":
+    case "CONTINUE_TO_ACCOUNT":
       if (!state.commercialCompleted) return state;
-      return { ...state, screen: "ar-permission" };
-
-    case "ENTER_JOURNEY":
-    case "CONTINUE_WITHOUT_AR_FALLBACK":
       return { ...state, screen: "quick-account" };
 
     case "COMPLETE_ACCOUNT": {
       const authedState = { ...state, authed: true };
-      return { ...authedState, screen: postOpeningScreen(authedState) };
+      return { ...authedState, screen: "ar-permission" };
+    }
+
+    case "ENTER_JOURNEY":
+    case "CONTINUE_WITHOUT_AR_FALLBACK": {
+      const arDoneState = { ...state, arCompleted: true };
+      return { ...arDoneState, screen: postOpeningScreen(arDoneState) };
     }
 
     case "RESUME_SAVED_JOURNEY": {

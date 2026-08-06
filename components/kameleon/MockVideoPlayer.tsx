@@ -194,7 +194,7 @@ export function MockVideoPlayer({
 
       {is360 && (
         <span className="absolute right-3 top-3 z-10 rounded-full border border-kameleon-copper/50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-widest text-kameleon-copper-light">
-          360°
+          Interactive Video
         </span>
       )}
 
@@ -228,11 +228,6 @@ export function MockVideoPlayer({
         </p>
       )}
 
-      {is360 && status === "ready" && (
-        <p className="relative mb-2 text-center text-[11px] uppercase tracking-widest text-kameleon-text-muted">
-          Move your phone or drag to look around
-        </p>
-      )}
 
       <div className="relative flex flex-col gap-2 px-4 pb-4">
         <div className="flex items-center gap-2 text-xs text-kameleon-text-muted">

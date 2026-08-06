@@ -46,6 +46,12 @@ export interface OpeningGateState {
   commercialCompleted: boolean;
   arAvailable: boolean;
   authed: boolean;
+  /**
+   * True once AR has been completed or explicitly skipped (Phase 7:
+   * account creation now happens before AR, so `authed` alone no longer
+   * implies AR is done — HYDRATE needs its own flag to resume correctly).
+   */
+  arCompleted: boolean;
   /** True once the viewer has passed the resume-choice gate this session. */
   enteredJourneyThisSession: boolean;
 }
@@ -55,6 +61,7 @@ export function createInitialOpeningGate(): OpeningGateState {
     commercialCompleted: false,
     arAvailable: true,
     authed: false,
+    arCompleted: false,
     enteredJourneyThisSession: false,
   };
 }

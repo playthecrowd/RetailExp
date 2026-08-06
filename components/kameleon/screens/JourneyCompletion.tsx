@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/Button";
+import { Button, LinkButton } from "@/components/ui/Button";
 import { KameleonEmblem } from "@/components/kameleon/art/Emblem";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { CheckCircleIcon } from "@/components/kameleon/icons";
@@ -76,6 +76,9 @@ export function JourneyCompletion({
         )}
 
         <div className="flex w-full max-w-sm flex-col gap-3">
+          <LinkButton brand="kameleon" size="lg" fullWidth href="/experience/kameleon/rewards">
+            Your Rewards
+          </LinkButton>
           <button
             type="button"
             onClick={onExploreAnother}

@@ -449,6 +449,48 @@ export type Database = {
           },
         ]
       }
+      experience_user_rewards: {
+        Row: {
+          client_id: string
+          experience_user_id: string
+          id: string
+          points_awarded: number
+          reward_key: string
+          unlocked_at: string
+        }
+        Insert: {
+          client_id: string
+          experience_user_id: string
+          id?: string
+          points_awarded?: number
+          reward_key: string
+          unlocked_at?: string
+        }
+        Update: {
+          client_id?: string
+          experience_user_id?: string
+          id?: string
+          points_awarded?: number
+          reward_key?: string
+          unlocked_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "experience_user_rewards_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "experience_user_rewards_experience_user_id_fkey"
+            columns: ["experience_user_id"]
+            isOneToOne: false
+            referencedRelation: "experience_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       experience_users: {
         Row: {
           auth_user_id: string | null

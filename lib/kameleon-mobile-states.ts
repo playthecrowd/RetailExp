@@ -12,7 +12,7 @@ export const kameleonMobileStates: string[] = [
   "Quick Account",
   "Choose First Path",
   "Selected Path Preview",
-  "360-Degree Video Player",
+  "Interactive Video Player",
   "End-of-Video Decision",
   "Loading Next Chapter",
   "Saved Story-Path Map",

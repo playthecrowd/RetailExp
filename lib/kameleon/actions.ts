@@ -5,7 +5,8 @@ export type KameleonAction =
   | { type: "HYDRATE"; openingGate: OpeningGateState; progress: ViewerProgress }
   | { type: "BEGIN" }
   | { type: "COMMERCIAL_COMPLETE" }
-  | { type: "CONTINUE_TO_AR" }
+  /** Commercial's "Start Your Journey" button — leads to Quick Account (Phase 7: account creation now precedes AR). */
+  | { type: "CONTINUE_TO_ACCOUNT" }
   /** AR placed (or the user chose to move on) — see KameleonARExperience's onEnterJourney. */
   | { type: "ENTER_JOURNEY" }
   /** AR skipped, exited mid-session, or unsupported and dismissed — see onSkipAr. Both this and ENTER_JOURNEY land on the same screen today; kept distinct for the Phase 5 analytics plan (AR completed vs. continued without AR). */

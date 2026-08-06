@@ -6,39 +6,60 @@ import { KameleonEmblem } from "@/components/kameleon/art/Emblem";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import { ProgressSteps, type ProgressStep } from "@/components/ui/ProgressSteps";
 import { kameleonPathways, getNode } from "@/lib/kameleon/live-content";
-import { saveLocalProfile } from "@/lib/kameleon/profile";
+import { createClient } from "@/lib/supabase/client";
+import { enrollKameleonUser } from "@/app/experience/kameleon/actions";
 
 const PASSPORT_STEPS: ProgressStep[] = [
   { id: "intro", label: "Intro Complete", status: "complete" },
   { id: "passport", label: "Create Passport", status: "current" },
-  { id: "journey", label: "Choose a Journey", status: "upcoming" },
-  { id: "rewards", label: "Earn Points & Rewards", status: "upcoming" },
+  { id: "ar", label: "AR Experience", status: "upcoming" },
+  { id: "rewards", label: "Earn Rewards", status: "upcoming" },
 ];
 
+type SubmitStatus = "idle" | "enrolling" | "created" | "error";
+
 /**
- * Local prototype persistence only (checkpoint 3.8) — no permanent account
- * is created, nothing is sent anywhere, and no password is collected or
- * stored. Real Supabase signup replaces this in Phase 7 (see
- * lib/kameleon/profile.ts for the adapter seam). The "PASSPORT CREATED"
- * transition below is presentational only — saveLocalProfile()/onComplete()
- * still fire exactly as before, just after a brief delay.
+ * Real identity as of Phase 7 Journey/Rewards: submit creates a genuine
+ * Supabase Anonymous Sign-In session (if none exists yet) and enrolls a
+ * real experience_users row via the enrollKameleonUser server action —
+ * replacing the old lib/kameleon/profile.ts localStorage mock outright
+ * (see docs/PHASE7_CHECKPOINT_7_3_AUTHENTICATION_PLAN.md). The
+ * "PASSPORT CREATED" transition only shows after that real enrollment
+ * succeeds; onComplete()/COMPLETE_ACCOUNT still fire exactly as before.
  */
 export function QuickAccount({ onComplete }: { onComplete: () => void }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [termsAccepted, setTermsAccepted] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [status, setStatus] = useState<SubmitStatus>("idle");
+  const [error, setError] = useState<string | null>(null);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const canSubmit = firstName.trim().length > 0 && lastName.trim().length > 0 && emailValid && termsAccepted;
+  const submitting = status === "enrolling";
 
-  function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!canSubmit || submitting) return;
-    saveLocalProfile({ firstName: firstName.trim(), lastName: lastName.trim(), email });
-    setSubmitting(true);
-    window.setTimeout(() => onComplete(), 1100);
+    setError(null);
+    setStatus("enrolling");
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        const { error: signInError } = await supabase.auth.signInAnonymously();
+        if (signInError) throw signInError;
+      }
+      await enrollKameleonUser({ firstName: firstName.trim(), lastName: lastName.trim(), email });
+      setStatus("created");
+      window.setTimeout(() => onComplete(), 1100);
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Something went wrong creating your passport. Please try again.");
+    }
   }
 
   const portraits = kameleonPathways
@@ -46,7 +67,7 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
     .map((pathway) => ({ id: pathway.id, name: pathway.label, src: getNode(pathway.rootNodeId)?.posterSource ?? "" }))
     .filter((p) => p.src);
 
-  if (submitting) {
+  if (status === "created") {
     return (
       <div className="relative flex flex-1 flex-col overflow-hidden">
         <EnvironmentArt motif="the-table" className="absolute inset-0" priority />
@@ -55,7 +76,7 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
           <p className="font-display text-xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
             Passport Created
           </p>
-          <p className="text-sm text-kameleon-text-muted">Your journey is ready.</p>
+          <p className="text-sm text-kameleon-text-muted">Continue to AR.</p>
         </div>
         <style>{`
           .passport-pulse { animation: kameleon-passport-pulse 1.1s ease-out; }
@@ -97,8 +118,8 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               Create Your KAMELEON Passport
             </p>
             <p className="mx-auto mt-2 max-w-xs text-sm text-kameleon-text-muted">
-              Four different lives. Four interactive pathways. Every choice you make shapes the
-              story that unfolds next — and every passport unlocks a new journey to explore.
+              Get ready to choose a journey. Four different lives. Four pathways. Earn points and
+              unlock rewards along the way.
             </p>
           </div>
 
@@ -120,7 +141,7 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
 
           <div className="flex items-center gap-2 rounded-lg border border-kameleon-copper/30 bg-kameleon-surface/70 px-3.5 py-2 text-left text-xs text-kameleon-text-muted">
             <span className="text-base" aria-hidden="true">✦</span>
-            <span>Earn points as you explore pathways — redeemable for rewards, coming soon.</span>
+            <span>Earn points as you explore pathways — redeemable for rewards.</span>
           </div>
 
           <form
@@ -137,9 +158,10 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
                   type="text"
                   autoComplete="given-name"
                   required
+                  disabled={submitting}
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
-                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
+                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring disabled:opacity-60"
                   placeholder="Jordan"
                 />
               </div>
@@ -152,9 +174,10 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
                   type="text"
                   autoComplete="family-name"
                   required
+                  disabled={submitting}
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
+                  className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring disabled:opacity-60"
                   placeholder="Rivera"
                 />
               </div>
@@ -169,9 +192,10 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
                 type="email"
                 autoComplete="email"
                 required
+                disabled={submitting}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring"
+                className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring disabled:opacity-60"
                 placeholder="you@example.com"
               />
             </div>
@@ -180,8 +204,9 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               <input
                 type="checkbox"
                 checked={termsAccepted}
+                disabled={submitting}
                 onChange={(e) => setTermsAccepted(e.target.checked)}
-                className="mt-0.5 h-4 w-4 shrink-0 rounded border-kameleon-border accent-kameleon-copper"
+                className="mt-0.5 h-4 w-4 shrink-0 rounded border-kameleon-border accent-kameleon-copper disabled:opacity-60"
               />
               <span>
                 I agree to the{" "}
@@ -196,13 +221,19 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               </span>
             </label>
 
-            <Button brand="kameleon" size="lg" fullWidth type="submit" disabled={!canSubmit}>
-              Create My Passport &amp; Choose a Journey
+            {error && (
+              <p role="alert" className="text-sm text-kameleon-red">
+                {error}
+              </p>
+            )}
+
+            <Button brand="kameleon" size="lg" fullWidth type="submit" disabled={!canSubmit || submitting}>
+              {submitting ? "Creating Your Passport…" : "Start Journey"}
             </Button>
 
             <p className="text-center text-xs text-kameleon-text-muted/70">
-              Next: choose Lena, Marcus, Julian, or Ashley. Preview mode — this saves your name
-              and email on this device only. No account or password is created.
+              Next: Continue to AR. This saves your name and email to your KAMELEON passport. No
+              password is created.
             </p>
           </form>
         </div>

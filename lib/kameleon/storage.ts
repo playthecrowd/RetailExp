@@ -27,6 +27,7 @@ function isValidOpeningGate(value: unknown): value is OpeningGateState {
     typeof v.commercialCompleted === "boolean" &&
     typeof v.arAvailable === "boolean" &&
     typeof v.authed === "boolean" &&
+    typeof v.arCompleted === "boolean" &&
     typeof v.enteredJourneyThisSession === "boolean"
   );
 }
