@@ -510,20 +510,75 @@ begin
 end $$;
 select pg_temp.act_as_ambient();
 
--- A deleted provider asset must drop out of the gallery too.
+-- PHYSICAL DELETION MUST BE RECORDED ON BOTH SIDES ---------------------------
+-- Live constraint (verified against the applied schema):
+--   CHECK ((media_deleted_at IS NULL) OR (provider_deletion_status IS NOT NULL))
+-- i.e. a one-way implication: claiming the media is gone REQUIRES saying what
+-- the provider reported. It imposes no value requirement — any non-null status
+-- satisfies it, so 'deleted' below is our convention, not something the
+-- constraint mandates.
+--
+-- Half-state: a timestamp with no provider status is rejected.
+select pg_temp.try_sql('deletion','a deletion timestamp without a provider status is rejected','blocked-23514',
+  $q$update public.testimonial_submissions
+       set media_deleted_at = now()
+     where id='00000000-0000-4000-8000-00000000f0a3'$q$);
+
+-- The constraint is deliberately ONE-WAY: a provider status without a
+-- timestamp is permitted, because a deletion that has been requested but not
+-- yet confirmed must be representable. Recorded as an observation, not as an
+-- assertion that the schema forbids it.
+select pg_temp.try_sql('deletion','a provider status without a timestamp is permitted (in-flight deletion)','ALLOWED',
+  $q$update public.testimonial_submissions
+       set provider_deletion_status = 'deletion_requested'
+     where id='00000000-0000-4000-8000-00000000f0a3'$q$);
+
+-- Reset, then set both atomically — the only way a row may claim its media is
+-- physically gone.
+update public.testimonial_submissions
+   set provider_deletion_status = null
+ where id='00000000-0000-4000-8000-00000000f0a3';
+
+select pg_temp.try_sql('deletion','both fields set atomically is accepted','ALLOWED',
+  $q$update public.testimonial_submissions
+       set provider_deletion_status = 'deleted',
+           media_deleted_at = now()
+     where id='00000000-0000-4000-8000-00000000f0a3'$q$);
+
 do $$
 declare n int;
 begin
-  update public.testimonial_submissions
-     set media_deleted_at = now()
-   where id='00000000-0000-4000-8000-00000000f0a3';
+  perform pg_temp.record('deletion','both deletion fields are recorded','true',
+    (select (media_deleted_at is not null and provider_deletion_status is not null)::text
+       from public.testimonial_submissions where id='00000000-0000-4000-8000-00000000f0a3'));
+
   perform pg_temp.act_as_anon();
   select count(*) into n from public.testimonial_gallery_items
    where submission_id='00000000-0000-4000-8000-00000000f0a3';
-  perform pg_temp.record('removal','a purged provider asset cannot appear in the gallery','0', n::text);
+  perform pg_temp.record('deletion','a purged provider asset cannot appear in the gallery','0', n::text);
   perform pg_temp.act_as_ambient();
 end $$;
 select pg_temp.act_as_ambient();
+
+-- Only the trusted processing/deletion tier may record physical deletion.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a1');
+  perform pg_temp.try_sql('deletion','a browser role cannot set media_deleted_at','blocked-42501',
+    $q$update public.testimonial_submissions set media_deleted_at = now() where id='00000000-0000-4000-8000-00000000f0a2'$q$);
+  perform pg_temp.try_sql('deletion','a browser role cannot set provider_deletion_status','blocked-42501',
+    $q$update public.testimonial_submissions set provider_deletion_status = 'deleted' where id='00000000-0000-4000-8000-00000000f0a2'$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
+
+do $$
+begin
+  perform pg_temp.record('deletion','authenticated has no UPDATE privilege on media_deleted_at','false',
+    has_column_privilege('authenticated','public.testimonial_submissions','media_deleted_at','UPDATE')::text);
+  perform pg_temp.record('deletion','authenticated has no UPDATE privilege on provider_deletion_status','false',
+    has_column_privilege('authenticated','public.testimonial_submissions','provider_deletion_status','UPDATE')::text);
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- Section 10 — Moderation queue and administrative access
