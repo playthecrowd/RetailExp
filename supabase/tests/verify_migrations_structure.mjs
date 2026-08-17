@@ -320,6 +320,145 @@ assert(
   "no fixture/test-only code leaked into the migrations directory",
 );
 
+// --- experience_users identity/tenant immutability -------------------------
+// Scoped to the corrective migration that introduces it, so these assertions
+// describe that file specifically rather than "somewhere in the schema".
+
+const identityMigrationFile = "20260817143000_protect_experience_user_identity.sql";
+assert(
+  files.includes(identityMigrationFile),
+  `the experience_users identity-protection migration exists (${identityMigrationFile})`,
+);
+
+const identitySql = files.includes(identityMigrationFile)
+  ? readFileSync(join(migrationsDir, identityMigrationFile), "utf8")
+  : "";
+const identitySqlWithoutComments = identitySql
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("--"))
+  .join("\n");
+
+assert(
+  /create or replace function public\.protect_experience_user_identity\(\)/.test(identitySql),
+  "protect_experience_user_identity() is defined",
+);
+assert(
+  /create or replace function public\.protect_experience_user_deletion\(\)/.test(identitySql),
+  "protect_experience_user_deletion() is defined",
+);
+assert(
+  (identitySql.match(/set search_path = public/g) || []).length >= 2,
+  "both experience_users protection functions pin an explicit search_path",
+);
+assert(
+  (identitySql.match(/auth\.role\(\) = 'service_role' or auth\.role\(\) is null/g) || []).length === 2,
+  "both protection functions use the strict auth.role() bypass (service_role OR no JWT/API role context), in both the UPDATE and DELETE paths",
+);
+assert(
+  !/auth\.uid\(\) is null/i.test(identitySql),
+  "the identity-protection migration never uses the rejected auth.uid() IS NULL bypass (it would match every real anonymous API request)",
+);
+// Every raise in this migration is an authorization failure, so every one of
+// them must carry 42501 rather than falling back to the generic P0001.
+const identityRaises = [...identitySql.matchAll(/raise exception[\s\S]*?;/g)];
+assert(
+  identityRaises.length >= 5 && identityRaises.every((m) => /errcode = '42501'/.test(m[0])),
+  `every RAISE EXCEPTION in the identity-protection migration uses SQLSTATE 42501 (found ${identityRaises.length})`,
+);
+// Deterministic ordering: Postgres fires BEFORE row triggers in name order, so
+// the protection triggers must sort ahead of the consistency trigger or a
+// client_id change would surface as the consistency trigger's generic P0001.
+assert(
+  /create trigger experience_users_00_protect_identity\s+before update on public\.experience_users/.test(identitySql),
+  "the identity trigger is BEFORE UPDATE and named to sort before experience_users_enforce_client_consistency",
+);
+assert(
+  /create trigger experience_users_00_protect_deletion\s+before delete on public\.experience_users/.test(identitySql),
+  "the deletion trigger is BEFORE DELETE and named to sort before experience_users_enforce_client_consistency",
+);
+assert(
+  "experience_users_00_protect_identity" < "experience_users_enforce_client_consistency",
+  "trigger name ordering actually places identity protection first (deterministic 42501)",
+);
+for (const column of ["id", "auth_user_id", "client_id", "experience_id"]) {
+  assert(
+    new RegExp(`new\\.${column} is distinct from old\\.${column}`).test(identitySql),
+    `experience_users.${column} is compared NEW vs OLD and rejected when changed`,
+  );
+}
+assert(
+  /revoke execute on function public\.protect_experience_user_identity\(\)[\s\S]*?from public, anon, authenticated/.test(identitySql) &&
+    /revoke execute on function public\.protect_experience_user_deletion\(\)[\s\S]*?from public, anon, authenticated/.test(identitySql),
+  "direct EXECUTE on both trigger-only protection functions is revoked from public/anon/authenticated",
+);
+assert(
+  !/execute\s+(format|'|")/i.test(identitySqlWithoutComments),
+  "the identity-protection migration contains no dynamic SQL",
+);
+
+// Privileges.
+assert(
+  /revoke update on public\.experience_users from anon, authenticated/.test(identitySql),
+  "table-level UPDATE on experience_users is revoked from anon and authenticated",
+);
+assert(
+  /revoke delete on public\.experience_users from anon, authenticated/.test(identitySql),
+  "DELETE on experience_users is revoked from anon and authenticated",
+);
+const grantMatch = identitySql.match(
+  /grant update \(([^)]*)\)\s*\n?\s*on public\.experience_users to authenticated/,
+);
+assert(
+  grantMatch !== null &&
+    grantMatch[1].split(",").map((c) => c.trim()).sort().join(",") ===
+      "display_name,email,phone_e164",
+  "authenticated is granted column-level UPDATE on exactly display_name, email and phone_e164",
+);
+assert(
+  !/grant update[\s\S]{0,120}to anon/.test(identitySql),
+  "anon is granted no UPDATE on experience_users",
+);
+assert(
+  !/(revoke|grant)\s+select[\s\S]{0,80}experience_users/i.test(identitySql),
+  "SELECT privileges on experience_users are left untouched (existing PII visibility unchanged)",
+);
+
+// Policies: the misleading FOR ALL policy is gone, replaced by explicit verbs.
+assert(
+  /drop policy if exists experience_users_write_own on public\.experience_users/.test(identitySql),
+  "the FOR ALL experience_users_write_own policy is dropped",
+);
+assert(
+  /create policy experience_users_insert_own on public\.experience_users\s+for insert/.test(identitySql),
+  "an explicit INSERT policy (experience_users_insert_own) replaces it",
+);
+assert(
+  /create policy experience_users_update_own on public\.experience_users\s+for update/.test(identitySql),
+  "an explicit UPDATE policy (experience_users_update_own) replaces it",
+);
+assert(
+  !/create policy[\s\S]{0,200}on public\.experience_users\s+for (delete|all)\b/.test(identitySql),
+  "no end-user DELETE (or FOR ALL) policy is created on experience_users",
+);
+for (const policy of ["experience_users_insert_own", "experience_users_update_own"]) {
+  const body = identitySql.slice(identitySql.indexOf(`create policy ${policy}`));
+  assert(
+    /publication_status = 'published'/.test(body.slice(0, 500)),
+    `${policy} retains the published-experience guard`,
+  );
+}
+assert(
+  /auth_user_id = auth\.uid\(\)/.test(identitySql),
+  "both replacement policies remain scoped to the caller's own row",
+);
+
+// The pre-existing tenant-consistency protection must survive untouched.
+assert(
+  !/drop trigger[\s\S]{0,120}experience_users_enforce_client_consistency/i.test(sql) &&
+    !/drop function[\s\S]{0,120}enforce_experience_user_client_consistency/i.test(sql),
+  "the experience_users tenant-consistency trigger and function are preserved, not dropped or replaced",
+);
+
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {
   console.error(`\n${failed} check(s) FAILED.`);
