@@ -459,6 +459,333 @@ assert(
   "the experience_users tenant-consistency trigger and function are preserved, not dropped or replaced",
 );
 
+// --- Testimonial submissions: direct-to-provider pipeline ------------------
+
+const testimonialMigrationFile = "20260817160000_testimonial_submissions.sql";
+assert(
+  files.includes(testimonialMigrationFile),
+  `the testimonial submissions migration exists (${testimonialMigrationFile})`,
+);
+
+const tsSql = files.includes(testimonialMigrationFile)
+  ? readFileSync(join(migrationsDir, testimonialMigrationFile), "utf8")
+  : "";
+const tsBody = tsSql
+  .split("\n")
+  .filter((line) => !line.trim().startsWith("--"))
+  .join("\n");
+
+// Capture-only scope.
+assert(!/\bsource_type\b/.test(tsBody), "no source_type column - capture is phone-camera only");
+assert(!/\boriginal_filename\b/.test(tsBody), "no original_filename column - there is no file picker");
+assert(
+  /capture_mode[\s\S]{0,120}check \(capture_mode in \('stream', 'native_input'\)\)/.test(tsSql),
+  "capture_mode is constrained to the two capture paths",
+);
+
+// NO Supabase media custody. The provider is quarantine, processing and delivery.
+assert(
+  !/storage\.buckets/.test(tsBody),
+  "the migration creates NO storage bucket - media never enters Supabase Storage",
+);
+assert(
+  !/on storage\.objects/.test(tsBody),
+  "the migration creates NO storage policies",
+);
+assert(
+  !/storage\.foldername/.test(tsBody),
+  "no storage path convention is encoded - there are no Supabase media paths",
+);
+for (const col of ["source_storage_path", "delivery_storage_path", "poster_storage_path"]) {
+  assert(!new RegExp(`\\b${col}\\b`).test(tsBody), `no Supabase media path column ${col} remains`);
+}
+assert(!/platform-media/.test(tsBody), "the existing platform-media bucket is untouched");
+
+// Provider-neutral identifiers, and never a credential.
+for (const col of [
+  "provider", "provider_asset_id", "provider_upload_id", "provider_processing_status",
+  "provider_delivery_id", "provider_poster_id", "provider_error_code",
+  "provider_deletion_status", "last_provider_event_id", "last_provider_event_at",
+  "delivery_ready_at", "poster_ready_at",
+]) {
+  assert(new RegExp(`\\n  ${col}\\s`).test(tsSql), `provider-neutral column ${col} exists`);
+}
+assert(
+  !/\b(api_token|api_key|webhook_secret|signing_secret|upload_url|signed_url|playback_token|access_token|bearer)\b/i.test(tsBody),
+  "no API token, webhook secret, one-time upload URL, signed URL or expiring token is ever stored",
+);
+assert(
+  /create unique index testimonial_submissions_provider_asset_unique/.test(tsSql),
+  "one provider asset may back at most one submission",
+);
+
+// Three independent lifecycles.
+for (const t of ["testimonial_upload_status", "testimonial_validation_status", "testimonial_moderation_status"]) {
+  assert(new RegExp(`create type public\\.${t} as enum`).test(tsSql), `${t} enum is defined`);
+}
+assert(
+  !/^\s{2}status\s+/m.test(tsBody),
+  "there is no overloaded generic status column",
+);
+
+// Provider completion is not validation, and validation is not publication.
+assert(
+  /validation requires a completed provider upload with an asset id/.test(tsSql),
+  "validation cannot be decided before the provider holds a completed asset",
+);
+assert(
+  /validation_status is conclusive and cannot be re-decided/.test(tsSql),
+  "a conclusive validation result cannot be re-decided",
+);
+assert(
+  /submission is not moderation-eligible/.test(tsSql) &&
+    /new\.validation_status <> 'valid'/.test(tsSql) &&
+    /new\.provider_asset_id is null/.test(tsSql),
+  "moderation requires uploaded + trusted-valid + a provider asset + trusted metadata, so a provider failure can never reach the queue",
+);
+assert(
+  /cannot be approved before a trusted delivery rendition is ready/.test(tsSql),
+  "an approved record without delivery readiness cannot publish",
+);
+assert(
+  /constraint testimonial_approved_requires_ready_delivery[\s\S]{0,320}published_at is not null/.test(tsSql),
+  "a CHECK constraint makes an approved-but-unservable row impossible to store",
+);
+assert(
+  /constraint testimonial_submission_key_unique[\s\S]{0,140}unique \(experience_user_id, client_submission_key\)/.test(tsSql),
+  "duplicate-submit protection: unique (experience_user_id, client_submission_key)",
+);
+assert(/upload_expires_at/.test(tsSql), "upload intents carry an expiry for orphan reconciliation");
+
+// The browser sets none of the trusted values.
+const trustedControls = [
+  ["upload completion", /new\.upload_status\s+:= 'initiated'/],
+  ["validation result", /new\.validation_status\s+:= 'pending'/],
+  ["provider references", /new\.provider_asset_id\s+:= null/],
+  ["delivery readiness", /new\.delivery_ready_at\s+:= null/],
+  ["moderation state", /new\.moderation_status := 'pending'/],
+  ["identity binding", /new\.auth_user_id := auth\.uid\(\)/],
+  ["review provenance", /new\.reviewed_by := auth\.uid\(\)/],
+];
+for (const [label, re] of trustedControls) {
+  assert(re.test(tsSql), `the triggers control ${label} server-side`);
+}
+for (const msg of [
+  "upload completion is recorded by a trusted component",
+  "validation results and trusted metadata cannot be self-reported",
+  "provider references and processing state are written only by the trusted server",
+  "moderation state and review provenance are server-controlled",
+  "recorded consent cannot be altered after submission",
+]) {
+  assert(tsSql.includes(msg), `browser identities are rejected for: ${msg}`);
+}
+
+// PUBLIC READ BOUNDARY.
+assert(
+  /revoke all on public\.testimonial_submissions from anon/.test(tsSql),
+  "anon has no privilege of any kind on the raw testimonial table",
+);
+assert(
+  /revoke select, update, delete on public\.testimonial_submissions from authenticated/.test(tsSql),
+  "authenticated cannot SELECT, UPDATE or DELETE the raw testimonial table",
+);
+assert(
+  !/create policy testimonial_submissions_select_approved/.test(tsSql),
+  "no direct public-approved row policy - RLS filters rows but cannot hide columns",
+);
+const tsGrant = tsSql.match(/grant update \(([\s\S]*?)\)\s*on public\.testimonial_submissions to authenticated/);
+assert(tsGrant !== null, "authenticated receives an explicit column-level UPDATE grant");
+if (tsGrant) {
+  const granted = tsGrant[1].split(",").map((c) => c.trim()).filter(Boolean);
+  assert(
+    granted.length === 1 && granted[0] === "caption",
+    `authenticated may update ONLY caption (found: ${granted.join(", ")})`,
+  );
+}
+
+// Sanitized gallery view.
+assert(/create view public\.testimonial_gallery_items/.test(tsSql), "a sanitized gallery view exists");
+assert(
+  /grant select on public\.testimonial_gallery_items to anon, authenticated/.test(tsSql),
+  "the gallery view is the surface granted to browser roles",
+);
+const galleryView = tsSql.slice(
+  tsSql.indexOf("create view public.testimonial_gallery_items"),
+  tsSql.indexOf("comment on view public.testimonial_gallery_items"),
+);
+for (const forbidden of [
+  "auth_user_id", "experience_user_id", "consent_version", "consented_at",
+  "reviewed_by", "moderation_note", "rejection_reason", "client_submission_key",
+  "detected_mime_type", "provider_upload_id", "validation_failure_reason",
+]) {
+  assert(!new RegExp(`\\b${forbidden}\\b`).test(galleryView), `the gallery view never selects ${forbidden}`);
+}
+for (const required of [
+  "moderation_status = 'approved'", "validation_status = 'valid'",
+  "published_at is not null", "delivery_ready_at is not null", "media_deleted_at is null",
+]) {
+  assert(galleryView.includes(required), `the gallery view requires ${required}`);
+}
+assert(
+  /create view public\.testimonial_moderation_queue[\s\S]*?validation_status = 'valid'/.test(tsSql),
+  "the moderation queue view contains only trusted-valid submissions",
+);
+assert(
+  !/grant select on public\.testimonial_moderation_queue to (anon|authenticated)/.test(tsSql),
+  "the moderation queue view is not granted to any browser role",
+);
+
+// Consent and attestations.
+assert(
+  /constraint testimonial_attestations_required[\s\S]{0,160}attested_no_minors and attested_subjects_consented/.test(tsSql),
+  "both attestations are mandatory - minors prohibited, enforced by CHECK not UI copy",
+);
+assert(
+  /consent_scope[\s\S]{0,220}check \(consent_scope in \('experience_gallery_display'\)\)/.test(tsSql),
+  "consent scope is limited to gallery display - marketing/social reuse is not covered",
+);
+assert(
+  /media_purge_after := now\(\) \+ interval '30 days'/.test(tsSql),
+  "rejected and removed media get a 30-day private retention deadline",
+);
+
+// Webhook replay protection.
+assert(
+  /create table public\.testimonial_processing_events/.test(tsSql),
+  "a provider event ledger exists for replay protection",
+);
+assert(
+  /constraint testimonial_processing_event_unique unique \(provider, provider_event_id\)/.test(tsSql),
+  "unique (provider, provider_event_id) is the replay-protection mechanism",
+);
+assert(
+  /alter table public\.testimonial_processing_events enable row level security/.test(tsSql) &&
+    /revoke all on public\.testimonial_processing_events from anon, authenticated/.test(tsSql) &&
+    !/create policy[\s\S]{0,140}on public\.testimonial_processing_events/.test(tsSql),
+  "the event ledger has RLS enabled, no policies and no browser privilege - service_role only",
+);
+assert(
+  /signature_verified_at timestamptz not null/.test(tsSql),
+  "signature_verified_at is NOT NULL - an unverified or stale-signed event cannot be recorded at all",
+);
+assert(
+  !/payload\s+jsonb/.test(tsSql) && /payload_hash\s+text not null/.test(tsSql),
+  "the ledger stores a payload HASH, never the full raw payload",
+);
+assert(
+  /constraint testimonial_processing_payload_hash_shape[\s\S]{0,120}\[0-9a-f\]\{64\}/.test(tsSql),
+  "payload_hash is constrained to a sha256 hex digest",
+);
+assert(
+  /read the raw body under a strict size limit/.test(tsSql) &&
+    /reject stale timestamps/.test(tsSql) &&
+    /constant-time comparison/.test(tsSql) &&
+    /writing NOTHING to the database/.test(tsSql),
+  "the handler contract requires size-limited raw read, stale-timestamp rejection and constant-time verification BEFORE any database write",
+);
+
+// --- Upload method contract: providers do not share one HTTP method --------
+
+assert(
+  /POST multipart\/form-data to the one-time upload URL/.test(tsSql),
+  "Images upload is documented as POST multipart/form-data, not PUT",
+);
+assert(
+  /It is NOT a PUT/.test(tsSql),
+  "the contract explicitly rules out PUT for the Images upload",
+);
+assert(
+  /basic upload\s+-> the provider's documented multipart POST/.test(tsSql) &&
+    /resumable\s+-> the TUS protocol/.test(tsSql),
+  "Stream basic vs resumable upload methods are documented separately",
+);
+assert(
+  /MUST NOT build a generic upload helper that assumes PUT/.test(tsSql),
+  "a generic PUT-assuming upload helper is explicitly forbidden",
+);
+assert(
+  !/phone (PUTs|puts) the/.test(tsSql),
+  "no statement claims the phone PUTs the captured file",
+);
+
+// --- Provider/media-type aware trusted metadata ----------------------------
+
+assert(
+  /provider_draft_cleared_at\s+timestamptz/.test(tsSql) &&
+    /provider_signed_urls_required boolean not null default false/.test(tsSql),
+  "every valid asset must be out of draft with signed delivery required",
+);
+assert(
+  /constraint testimonial_valid_requires_provider_evidence/.test(tsSql),
+  "a CHECK encodes provider/media-type aware validity",
+);
+const validityCheck = tsSql.slice(
+  tsSql.indexOf("constraint testimonial_valid_requires_provider_evidence"),
+  tsSql.indexOf("-- Both attestations are mandatory"),
+);
+assert(
+  /media_type = 'image'[\s\S]{0,40}or \(media_type = 'video'/.test(validityCheck),
+  "an IMAGE can become valid without size/MIME/dimension fields Images never exposes",
+);
+for (const f of ["validated_duration_seconds", "validated_size_bytes", "validated_width", "validated_height"]) {
+  assert(
+    new RegExp(`${f} is not null`).test(validityCheck),
+    `a VIDEO must carry trusted ${f} that Stream documents`,
+  );
+}
+assert(
+  !/new\.detected_mime_type is null/.test(tsSql),
+  "detected_mime_type is no longer required for eligibility (Images does not expose it)",
+);
+assert(
+  /a video is not moderation-eligible without the trusted duration, size and dimensions/.test(tsSql),
+  "the moderation gate enforces video-specific trusted metadata",
+);
+
+// --- Cost baseline documented with minimum billing increments -------------
+
+assert(
+  /purchased in MINIMUM BILLING INCREMENTS/.test(tsSql),
+  "the cost note states that both storage products have minimum billing increments",
+);
+for (const figure of ["$5 per 100,000 stored images", "$1 per 100,000 delivered images",
+                      "$5 per 1,000 stored minutes", "$1 per 1,000 delivered minutes",
+                      "~$11.60/month", "$10-15/month"]) {
+  assert(tsSql.includes(figure), `cost baseline documents ${figure}`);
+}
+
+// Protection functions and the strict bypass.
+for (const fn of ["protect_testimonial_insert", "protect_testimonial_update", "protect_testimonial_deletion"]) {
+  assert(new RegExp(`create or replace function public\\.${fn}\\(\\)`).test(tsSql), `${fn}() is defined`);
+  assert(
+    new RegExp(`revoke execute on function public\\.${fn}\\(\\)[\\s\\S]{0,80}from public, anon, authenticated`).test(tsSql),
+    `direct EXECUTE on ${fn}() is revoked`,
+  );
+}
+assert(
+  (tsSql.match(/auth\.role\(\) = 'service_role' or auth\.role\(\) is null/g) || []).length === 3,
+  "all three testimonial protection functions use the strict auth.role() bypass",
+);
+assert(!/auth\.uid\(\) is null/i.test(tsSql), "the rejected auth.uid() IS NULL bypass is never used");
+const tsRaises = [...tsSql.matchAll(/raise exception[\s\S]*?;/g)].filter((m) =>
+  /immutable|trusted component|trusted server|self-reported|server-controlled|transition|moderation-eligible|deleted through|caption can only|conclusive|requires a completed provider|before a trusted delivery|recorded consent/.test(m[0]),
+);
+assert(
+  tsRaises.length >= 12 && tsRaises.every((m) => /errcode = '42501'/.test(m[0])),
+  `every authorization/lifecycle RAISE EXCEPTION uses SQLSTATE 42501 (found ${tsRaises.length})`,
+);
+for (const trg of [
+  "testimonial_submissions_00_protect_insert",
+  "testimonial_submissions_00_protect_update",
+  "testimonial_submissions_00_protect_deletion",
+]) {
+  assert(new RegExp(`create trigger ${trg}\\b`).test(tsSql), `${trg} trigger is created`);
+  assert(
+    trg < "testimonial_submissions_enforce_client_consistency",
+    `${trg} sorts before the consistency trigger (deterministic 42501)`,
+  );
+}
+
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {
   console.error(`\n${failed} check(s) FAILED.`);
