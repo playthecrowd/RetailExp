@@ -50,9 +50,41 @@ create temporary table _eu_check_results (
   passed     boolean not null
 ) on commit drop;
 
+-- SECURITY DEFINER is required here and is deliberately as narrow as possible.
+--
+-- WHY: the sections below switch the database role to `authenticated` / `anon`
+-- so RLS and column privileges are genuinely enforced against the tested
+-- statements. _eu_check_results is a temporary table owned by the SQL Editor's
+-- ambient role, and those simulated roles hold no INSERT privilege on it — so
+-- recording a PASS/FAIL row would fail with 42501 even when the test itself
+-- behaved correctly. The correct fix is to elevate only the bookkeeping, NOT
+-- to grant a simulated role access to anything. Do not follow the Supabase
+-- hint and add a permanent GRANT: that would weaken a real role to satisfy a
+-- test harness.
+--
+-- SCOPE OF THE ELEVATION — this function:
+--   * writes ONLY to the temporary _eu_check_results collector,
+--   * touches no application table and no application data,
+--   * takes only result-label text arguments,
+--   * contains no dynamic SQL,
+--   * pins a fixed search_path so no temp object can redirect it, and
+--   * runs only AFTER the tested statement has already executed and its
+--     outcome has been captured by the caller.
+-- It therefore cannot make a prohibited application operation appear to
+-- succeed: the pass/fail value is computed from the tested statement's real
+-- result before this is ever called. The serial sequence behind `seq` is
+-- exercised inside this same function, so no sequence privilege is needed by
+-- anon or authenticated either.
+--
+-- The function exists only in pg_temp for this session and disappears with it;
+-- the final ROLLBACK discards the collector and every fixture.
 create or replace function pg_temp.record(
   p_section text, p_check text, p_expected text, p_actual text
-) returns void language plpgsql as $$
+) returns void
+language plpgsql
+security definer
+set search_path = pg_temp, pg_catalog
+as $$
 begin
   insert into _eu_check_results (section, check_name, expected, actual, passed)
   values (p_section, p_check, p_expected, p_actual, p_expected is not distinct from p_actual);
@@ -63,9 +95,14 @@ end $$;
 
 -- Informational only — never asserted. Used to record WHICH defence layer
 -- rejected an operation, since the column-privilege layer and the trigger both
--- raise 42501 and the assertion cannot distinguish them.
+-- raise 42501 and the assertion cannot distinguish them. Same narrow
+-- SECURITY DEFINER rationale as pg_temp.record() above.
 create or replace function pg_temp.note(p_section text, p_check text, p_value text)
-returns void language plpgsql as $$
+returns void
+language plpgsql
+security definer
+set search_path = pg_temp, pg_catalog
+as $$
 begin
   insert into _eu_check_results (section, check_name, expected, actual, passed)
   values (p_section, p_check, p_value, p_value, true);
@@ -446,6 +483,13 @@ select pg_temp.act_as_ambient();
 -- Both layers raise 42501, so the assertion is identical either way; the
 -- informational rows below record which message was produced, so a reader is
 -- never misled about which defence was exercised.
+-- DELIBERATELY SECURITY INVOKER (the default). This function EXECUTEs the
+-- statement under test, so it must run with the caller's simulated role —
+-- making it SECURITY DEFINER would run every tested UPDATE as the owner,
+-- bypassing RLS, the column privileges and the protection triggers, and every
+-- immutability check below would silently pass for the wrong reason. Only the
+-- pg_temp.record()/note() calls at the end are elevated, and only after the
+-- outcome has already been captured.
 create or replace function pg_temp.try_identity(p_label text, p_sql text)
 returns void language plpgsql as $$
 declare outcome text; layer text; msg text;
