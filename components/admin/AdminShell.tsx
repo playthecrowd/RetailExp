@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { adminNavItems } from "@/lib/admin-nav";
 import { MenuIcon, CloseIcon } from "./icons";
-import { DevAuthNotice } from "./DevAuthNotice";
+import { AdminSignOutButton } from "./AdminSignOutButton";
 import { cn } from "@/lib/cn";
 
 function isActive(pathname: string, href: string) {
@@ -59,13 +59,30 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
   );
 }
 
-export function AdminShell({ children }: { children: React.ReactNode }) {
+/**
+ * The DevAuthNotice banner that used to sit at the top of this shell has been
+ * removed: it declared the dashboard unauthenticated, which stopped being
+ * true when app/admin/(protected)/layout.tsx started gating every route
+ * beneath it. Leaving a stale security banner in place is worse than having
+ * none.
+ *
+ * `adminEmail` is passed down purely so the signed-in administrator can see
+ * which account they are using before they act on someone's submission. It
+ * is display-only and confers nothing — authorization is resolved
+ * server-side in lib/auth/admin.ts on every request.
+ */
+export function AdminShell({
+  children,
+  adminEmail,
+}: {
+  children: React.ReactNode;
+  adminEmail?: string | null;
+}) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <div className="flex min-h-screen flex-col bg-admin-bg text-admin-text">
-      <DevAuthNotice />
       <div className="flex min-h-0 flex-1">
         {/* Desktop sidebar */}
         <aside className="hidden w-64 shrink-0 border-r border-admin-border bg-admin-surface md:flex md:flex-col">
@@ -112,6 +129,14 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               <MenuIcon className="h-5 w-5" />
             </button>
             <span className="text-sm font-medium text-admin-text-muted md:hidden">RetailExp Admin</span>
+            <div className="ml-auto flex items-center gap-3">
+              {adminEmail && (
+                <span className="hidden max-w-[16rem] truncate text-sm text-admin-text-muted sm:inline">
+                  {adminEmail}
+                </span>
+              )}
+              <AdminSignOutButton />
+            </div>
           </header>
           <main className="min-w-0 flex-1 p-4 md:p-8">{children}</main>
         </div>

@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { clients } from "@/lib/mock-data/clients";
 import { formatDate } from "@/lib/format";
+import { requireAdminAccess } from "@/lib/auth/admin";
 
 export const metadata = { title: "Clients" };
 
@@ -12,7 +13,9 @@ const statusTone = {
   paused: "warning",
 } as const;
 
-export default function AdminClientsPage() {
+export default async function AdminClientsPage() {
+  await requireAdminAccess();
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <div>

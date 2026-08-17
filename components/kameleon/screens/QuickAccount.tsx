@@ -8,6 +8,7 @@ import { ProgressSteps, type ProgressStep } from "@/components/ui/ProgressSteps"
 import { kameleonPathways, getNode } from "@/lib/kameleon/live-content";
 import { createClient } from "@/lib/supabase/client";
 import { enrollKameleonUser } from "@/app/experience/kameleon/actions";
+import { isAnonymousVisitor, PERMANENT_ACCOUNT_MESSAGE } from "@/lib/kameleon/visitor-session";
 import { normalizePhoneInput } from "@/lib/kameleon/phone";
 
 const PASSPORT_STEPS: ProgressStep[] = [
@@ -60,9 +61,21 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
     try {
       const supabase = createClient();
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      // The old check here was `if (!session)`, which asked the wrong
+      // question: a signed-in administrator has a session, so
+      // signInAnonymously() was skipped and their own identity was used for
+      // the enrollment below. Ask about the identity, not its existence.
+      //
+      // Supplemental only — enrollKameleonUser refuses a permanent account
+      // server-side regardless of what happens here.
+      if (user && !isAnonymousVisitor(user)) {
+        throw new Error(PERMANENT_ACCOUNT_MESSAGE);
+      }
+
+      if (!user) {
         const { error: signInError } = await supabase.auth.signInAnonymously();
         if (signInError) throw signInError;
       }

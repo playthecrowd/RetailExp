@@ -3,15 +3,34 @@ import { type NextRequest, NextResponse } from "next/server";
 
 /**
  * Refreshes the Supabase Auth session cookie on every request to the
- * Kameleon experience — required for real sessions (Phase 7 Anonymous
- * Sign-In) to survive between the client-side sign-in and later
+ * Kameleon experience and the admin area — required for real sessions
+ * (Phase 7 Anonymous Sign-In for visitors, Phase 2.5 email/password for
+ * administrators) to survive between a client-side sign-in and later
  * server-action reads; without this, a session can silently go stale.
  * Scoped narrowly (see `config.matcher` below) rather than site-wide, so
  * routes that never need a session don't pay the extra request cost.
  * Standard `@supabase/ssr` Next.js App Router pattern, using this Next.js
  * version's `proxy` file convention (renamed from `middleware` in v16 —
  * see node_modules/next/dist/docs/.../proxy.md).
+ *
+ * IMPORTANT — this is NOT the authorization boundary.
+ *
+ * The redirect below is an optimistic pre-filter only: it checks whether an
+ * auth cookie is present, nothing more. It cannot tell an administrator from
+ * an anonymous Kameleon visitor, and it deliberately performs no database
+ * lookup, because proxy runs on prefetches too. Real authorization lives in
+ * app/admin/(protected)/layout.tsx and lib/auth/admin.ts, which re-check
+ * every request regardless of what happened here. Next.js's own guidance is
+ * explicit that proxy "should not be your only line of defense".
+ *
+ * Deleting this redirect would not create a security hole; deleting the
+ * layout gate would.
  */
+
+/** Public admin routes. They must never be redirected to the sign-in page —
+ *  /admin/login redirecting to /admin/login is the classic infinite loop. */
+const PUBLIC_ADMIN_PATHS = new Set(["/admin/login", "/admin/access-denied"]);
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -32,11 +51,28 @@ export async function proxy(request: NextRequest) {
     },
   );
 
-  await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const { pathname } = request.nextUrl;
+
+  if (pathname.startsWith("/admin") && !PUBLIC_ADMIN_PATHS.has(pathname)) {
+    // Only the total absence of a user is acted on here. An anonymous
+    // visitor session reaches the layout gate and is rejected there, by the
+    // component that can actually tell the difference — resolving that
+    // distinction in the proxy would mean trusting a check that runs on
+    // prefetch requests and CDN-cached paths.
+    if (!user) {
+      const signInUrl = new URL("/admin/login", request.url);
+      signInUrl.searchParams.set("next", pathname);
+      return NextResponse.redirect(signInUrl);
+    }
+  }
 
   return response;
 }
 
 export const config = {
-  matcher: ["/experience/kameleon/:path*"],
+  matcher: ["/experience/kameleon/:path*", "/admin/:path*"],
 };

@@ -29,9 +29,11 @@ export async function createClient() {
             });
           } catch {
             // Called from a Server Component that can't set cookies — safe
-            // to ignore as long as session refresh also runs in
-            // middleware (added when auth is actually wired up, Checkpoint
-            // 7.3 — not yet present in this checkpoint).
+            // to ignore because session refresh also runs in proxy.ts, whose
+            // matcher covers both /experience/kameleon/:path* and
+            // /admin/:path*. If a third authenticated area is ever added,
+            // its path must be added to that matcher or sessions there will
+            // silently go stale at the JWT expiry.
           }
         },
       },

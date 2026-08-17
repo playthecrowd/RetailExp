@@ -10,6 +10,7 @@ import { getClientBySlug, mockAnalyticsByClientSlug } from "@/lib/mock-data/clie
 import { kameleonPathways } from "@/lib/mock-data/kameleon-pathways";
 import { kameleonMobileStates } from "@/lib/kameleon-mobile-states";
 import { formatDateTime, formatPercent } from "@/lib/format";
+import { requireAdminAccess } from "@/lib/auth/admin";
 
 export const metadata = { title: "Kameleon" };
 
@@ -25,7 +26,9 @@ const assetStatusLabel = {
   ready: "Ready",
 } as const;
 
-export default function KameleonClientPage() {
+export default async function KameleonClientPage() {
+  await requireAdminAccess();
+
   const client = getClientBySlug("kameleon");
   if (!client) notFound();
 

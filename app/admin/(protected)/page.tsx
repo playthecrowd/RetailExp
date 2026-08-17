@@ -5,10 +5,17 @@ import { MockDataNote } from "@/components/admin/MockDataNote";
 import { clients, mockAnalyticsByClientSlug } from "@/lib/mock-data/clients";
 import { mockRecentActivity } from "@/lib/mock-data/admin-activity";
 import { formatDateTime, formatPercent } from "@/lib/format";
+import { requireAdminAccess } from "@/lib/auth/admin";
 
 export const metadata = { title: "Overview" };
 
-export default function AdminOverviewPage() {
+export default async function AdminOverviewPage() {
+  // Repeated deliberately. The layout above already gated this route, but a
+  // page that depends on a parent for its own authorization is one refactor
+  // away from being reachable. Request-cached, so this costs no extra
+  // round trip.
+  await requireAdminAccess();
+
   const activeClients = clients.filter((c) => c.status === "active");
   const kameleon = clients.find((c) => c.slug === "kameleon");
   const kameleonAnalytics = kameleon ? mockAnalyticsByClientSlug[kameleon.slug] : undefined;

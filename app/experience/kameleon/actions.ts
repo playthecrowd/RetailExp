@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { REWARD_CATALOG } from "@/lib/kameleon/rewards";
 import { normalizePhoneInput } from "@/lib/kameleon/phone";
+import { isAnonymousVisitor, PERMANENT_ACCOUNT_MESSAGE } from "@/lib/kameleon/visitor-session";
 
 const KAMELEON_EXPERIENCE_SLUG = "kameleon";
 
@@ -90,6 +91,7 @@ async function getOrCreateExperienceUser(
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) throw new Error("No authenticated session — sign in before enrolling.");
+  if (!isAnonymousVisitor(user)) throw new Error(PERMANENT_ACCOUNT_MESSAGE);
 
   // Validate before any write round-trip, so a malformed submission never
   // reaches the database and never half-creates a row.
@@ -219,6 +221,10 @@ export async function unlockKameleonReward(rewardKey: string): Promise<void> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return;
+  // Same rule as enrollment, repeated rather than assumed: a permanent
+  // account must never accumulate visitor rewards. It would already find no
+  // experience_users row, but this must not depend on that being true.
+  if (!isAnonymousVisitor(user)) return;
 
   const { data: experience } = await supabase
     .from("experiences")
@@ -283,6 +289,7 @@ export async function claimKameleonReward(rewardKey: string): Promise<ClaimRewar
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) throw new Error("No authenticated session.");
+  if (!isAnonymousVisitor(user)) throw new Error(PERMANENT_ACCOUNT_MESSAGE);
 
   const { data: experience } = await supabase
     .from("experiences")
@@ -349,6 +356,8 @@ export async function getKameleonRewardState(): Promise<KameleonRewardState | nu
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return null;
+  // A permanent account has no visitor passport and must not be shown one.
+  if (!isAnonymousVisitor(user)) return null;
 
   const { data: experience } = await supabase
     .from("experiences")
