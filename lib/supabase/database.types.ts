@@ -506,6 +506,7 @@ export type Database = {
           email: string | null
           experience_id: string
           id: string
+          phone_e164: string | null
         }
         Insert: {
           auth_user_id?: string | null
@@ -515,6 +516,7 @@ export type Database = {
           email?: string | null
           experience_id: string
           id?: string
+          phone_e164?: string | null
         }
         Update: {
           auth_user_id?: string | null
@@ -524,6 +526,7 @@ export type Database = {
           email?: string | null
           experience_id?: string
           id?: string
+          phone_e164?: string | null
         }
         Relationships: [
           {

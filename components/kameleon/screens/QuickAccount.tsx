@@ -8,6 +8,7 @@ import { ProgressSteps, type ProgressStep } from "@/components/ui/ProgressSteps"
 import { kameleonPathways, getNode } from "@/lib/kameleon/live-content";
 import { createClient } from "@/lib/supabase/client";
 import { enrollKameleonUser } from "@/app/experience/kameleon/actions";
+import { normalizePhoneInput } from "@/lib/kameleon/phone";
 
 const PASSPORT_STEPS: ProgressStep[] = [
   { id: "intro", label: "Intro Complete", status: "complete" },
@@ -31,12 +32,24 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [status, setStatus] = useState<SubmitStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const canSubmit = firstName.trim().length > 0 && lastName.trim().length > 0 && emailValid && termsAccepted;
+  // Phone is optional: an empty field is a valid submission ("empty"), and
+  // only an actively malformed entry blocks the button. The message is held
+  // back until blur so a half-typed number never scolds mid-keystroke.
+  const phoneResult = normalizePhoneInput(phone);
+  const phoneError = phoneTouched && phoneResult.status === "invalid" ? phoneResult.message : null;
+  const canSubmit =
+    firstName.trim().length > 0 &&
+    lastName.trim().length > 0 &&
+    emailValid &&
+    phoneResult.status !== "invalid" &&
+    termsAccepted;
   const submitting = status === "enrolling";
 
   async function handleSubmit(event: React.FormEvent) {
@@ -53,7 +66,12 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
         const { error: signInError } = await supabase.auth.signInAnonymously();
         if (signInError) throw signInError;
       }
-      await enrollKameleonUser({ firstName: firstName.trim(), lastName: lastName.trim(), email });
+      await enrollKameleonUser({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email,
+        phone,
+      });
       setStatus("created");
       window.setTimeout(() => onComplete(), 1100);
     } catch (err) {
@@ -200,6 +218,39 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
               />
             </div>
 
+            <div>
+              <label
+                htmlFor="quick-phone"
+                className="mb-1.5 flex items-baseline justify-between gap-2 text-sm text-kameleon-text-muted"
+              >
+                <span>Phone number</span>
+                <span className="text-xs text-kameleon-text-muted/70">Optional</span>
+              </label>
+              <input
+                id="quick-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                disabled={submitting}
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
+                aria-invalid={phoneError ? true : undefined}
+                aria-describedby={phoneError ? "quick-phone-error" : "quick-phone-hint"}
+                className="w-full rounded-md border border-kameleon-copper/40 bg-kameleon-surface px-3 py-2.5 text-sm text-kameleon-text placeholder:text-kameleon-text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-focus-ring disabled:opacity-60"
+                placeholder="(212) 555-0123"
+              />
+              {phoneError ? (
+                <p id="quick-phone-error" role="alert" className="mt-1.5 text-sm text-kameleon-red">
+                  {phoneError}
+                </p>
+              ) : (
+                <p id="quick-phone-hint" className="mt-1.5 text-xs text-kameleon-text-muted/80">
+                  You can add a mobile number to your KAMELEON profile.
+                </p>
+              )}
+            </div>
+
             <label className="flex items-start gap-2.5 text-sm text-kameleon-text-muted">
               <input
                 type="checkbox"
@@ -232,8 +283,9 @@ export function QuickAccount({ onComplete }: { onComplete: () => void }) {
             </Button>
 
             <p className="text-center text-xs text-kameleon-text-muted/70">
-              Next: Continue to AR. This saves your name and email to your KAMELEON passport. No
-              password is created.
+              Next: Continue to AR. This saves your name, email, and phone number (if you add one)
+              to your KAMELEON passport, used only for your KAMELEON experience — see the Privacy
+              Policy above. No password is created.
             </p>
           </form>
         </div>
