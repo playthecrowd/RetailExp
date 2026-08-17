@@ -86,7 +86,10 @@ security definer
 set search_path = pg_temp, pg_catalog
 as $$
 begin
-  insert into _eu_check_results (section, check_name, expected, actual, passed)
+  -- Explicitly schema-qualified. An unqualified name here resolved to nothing
+  -- (42P01) inside the SECURITY DEFINER helper's restricted execution context,
+  -- so the collector is never left to implicit search_path resolution.
+  insert into pg_temp._eu_check_results (section, check_name, expected, actual, passed)
   values (p_section, p_check, p_expected, p_actual, p_expected is not distinct from p_actual);
   raise notice '[%] % | expected=% actual=% | %',
     p_section, p_check, p_expected, p_actual,
@@ -104,7 +107,10 @@ security definer
 set search_path = pg_temp, pg_catalog
 as $$
 begin
-  insert into _eu_check_results (section, check_name, expected, actual, passed)
+  -- Explicitly schema-qualified. An unqualified name here resolved to nothing
+  -- (42P01) inside the SECURITY DEFINER helper's restricted execution context,
+  -- so the collector is never left to implicit search_path resolution.
+  insert into pg_temp._eu_check_results (section, check_name, expected, actual, passed)
   values (p_section, p_check, p_value, p_value, true);
   raise notice '[%] % | %', p_section, p_check, p_value;
 end $$;
@@ -799,9 +805,9 @@ select pg_temp.act_as_ambient();
 do $$
 declare failed int;
 begin
-  select count(*) into failed from _eu_check_results where not passed;
+  select count(*) into failed from pg_temp._eu_check_results where not passed;
   if failed = 0 then
-    raise notice '=== ALL CHECKS PASSED (% total) ===', (select count(*) from _eu_check_results);
+    raise notice '=== ALL CHECKS PASSED (% total) ===', (select count(*) from pg_temp._eu_check_results);
   else
     raise warning '=== % CHECK(S) FAILED — see rows where result = FAIL ===', failed;
   end if;
@@ -809,7 +815,7 @@ end $$;
 
 select seq, section, check_name, expected, actual,
        case when passed then 'PASS' else 'FAIL' end as result
-  from _eu_check_results
+  from pg_temp._eu_check_results
  order by seq;
 
 -- ----------------------------------------------------------------------------
