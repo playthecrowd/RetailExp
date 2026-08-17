@@ -55,9 +55,17 @@ function assert(condition, message) {
   }
 }
 
-// --- Exactly nine migration files exist -------------------------------------
+// --- The expected number of migration files exist ---------------------------
+//
+// This asserted 9 from the phase in which it was written and has been failing
+// ever since as migrations were legitimately added — reported as a known stale
+// assertion at each checkpoint rather than silently adjusted. Corrected here,
+// as part of an explicit instruction to update the structural migration
+// assertions, to the real current count. A mismatch now means a migration was
+// added or removed without updating this file, which is the signal it was
+// always meant to give.
 
-assert(files.length === 9, `exactly 9 migration files exist (found ${files.length})`);
+assert(files.length === 17, `exactly 17 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -961,6 +969,106 @@ assert(
   /create or replace function public\.protect_testimonial_update/.test(rpcSql) &&
     !/drop trigger[\s\S]{0,80}testimonial_submissions_00_protect_update/.test(rpcSql),
   "the guard is superseded with CREATE OR REPLACE, not dropped or edited in place",
+);
+
+// --- Profile privilege hardening -------------------------------------------
+// The Phase 2.5A audit found public.profiles carrying Supabase's inherited
+// default privileges: anon and authenticated held DELETE, INSERT, REFERENCES,
+// SELECT, TRIGGER, TRUNCATE and UPDATE, with column-level UPDATE reaching
+// is_platform_admin. The escalation trigger was the only barrier, and the
+// UPDATE policy had no WITH CHECK.
+
+const profileMigrationFile = "20260818094500_protect_profile_privileges.sql";
+assert(files.includes(profileMigrationFile), `the profile privilege migration exists (${profileMigrationFile})`);
+
+const profSql = files.includes(profileMigrationFile)
+  ? readFileSync(join(migrationsDir, profileMigrationFile), "utf8")
+  : "";
+
+assert(
+  /revoke all on public\.profiles from public, anon, authenticated;/.test(profSql),
+  "inherited default privileges are revoked from public, anon AND authenticated",
+);
+assert(
+  /grant select on public\.profiles to anon, authenticated;/.test(profSql),
+  "SELECT is re-granted, so the existing profile read policy keeps working",
+);
+assert(
+  /grant update \(display_name, avatar_url\) on public\.profiles to authenticated;/.test(profSql),
+  "UPDATE is re-granted as COLUMN privileges on display_name and avatar_url only",
+);
+assert(
+  !/grant update[^;]*is_platform_admin/.test(profSql),
+  "is_platform_admin is never re-granted to any browser role",
+);
+assert(
+  !/grant (insert|delete|truncate|references|trigger)[^;]*on public\.profiles/i.test(profSql),
+  "INSERT, DELETE, TRUNCATE, REFERENCES and TRIGGER are never re-granted on profiles",
+);
+assert(
+  !/\bto (anon|authenticated|public)\b[^;]*\bmaintain\b/i.test(profSql) && !/grant maintain/i.test(profSql),
+  "MAINTAIN is never granted to a browser role",
+);
+// Strip -- comments AND `comment on ... ;` statements. Both legitimately
+// mention service_role and handle_new_user in prose; what must be absent is a
+// PRIVILEGE statement naming service_role, or any redefinition of the trigger
+// function.
+const profExec = profSql
+  .replace(/--[^\n]*/g, "")
+  .replace(/comment on [\s\S]*?;/gi, "");
+
+assert(
+  !/\b(grant|revoke|alter)\b[^;]*service_role/i.test(profExec),
+  "no grant, revoke or alter statement names service_role, so its trusted access is untouched",
+);
+assert(
+  !/(create|drop|alter)\s+(or replace\s+)?function[^;]*handle_new_user/i.test(profExec) &&
+    !/(create|drop)\s+trigger[^;]*handle_new_user/i.test(profExec),
+  "handle_new_user() is neither redefined nor detached",
+);
+
+// The UPDATE policy gains its missing half.
+assert(
+  /drop policy if exists profiles_update_own on public\.profiles;/.test(profSql),
+  "the old UPDATE policy is superseded explicitly",
+);
+assert(
+  /create policy profiles_update_own on public\.profiles[\s\S]{0,200}using \(id = auth\.uid\(\)\)[\s\S]{0,80}with check \(id = auth\.uid\(\)\)/.test(profSql),
+  "the replacement policy has BOTH using and with check on id = auth.uid()",
+);
+assert(
+  /create policy profiles_update_own on public\.profiles\s*\n\s*for update\s*\n\s*to authenticated\b/.test(profSql),
+  "the replacement policy is scoped TO authenticated, not left applying to PUBLIC",
+);
+assert(
+  !/create policy profiles_update_own[\s\S]{0,200}\bto (public|anon)\b/i.test(profSql),
+  "the policy is never granted to public or anon",
+);
+
+// TRUNCATE hardening across exactly the audited tables.
+const TRUNCATE_TABLES = [
+  "brand_settings", "choices", "client_memberships", "clients", "content_nodes",
+  "engagement_events", "experience_user_rewards", "experience_users", "experiences",
+  "journey_progress", "media_assets", "pathways", "profiles", "publication_versions",
+];
+const revokeBlock = profSql.slice(profSql.indexOf("revoke truncate on"));
+for (const t of TRUNCATE_TABLES) {
+  assert(
+    new RegExp(`public\\.${t}\\b`).test(revokeBlock),
+    `TRUNCATE is revoked on public.${t}`,
+  );
+}
+assert(
+  /revoke truncate on[\s\S]*?from public, anon, authenticated;/.test(profSql),
+  "TRUNCATE is revoked from public, anon AND authenticated",
+);
+assert(
+  TRUNCATE_TABLES.length === 14,
+  "the revoke covers exactly the 14 audited tables",
+);
+assert(
+  !/revoke (select|insert|update|delete)[^;]*on\s+public\.(brand_settings|choices|clients|content_nodes|engagement_events|experience_user_rewards|experience_users|experiences|journey_progress|media_assets|pathways|publication_versions)/i.test(profSql),
+  "no verb other than TRUNCATE is altered on the other 13 tables",
 );
 
 console.log(`\n${files.length} migration files checked.`);
