@@ -786,6 +786,183 @@ for (const trg of [
   );
 }
 
+// --- Corrective migration: testimonial privileges --------------------------
+// Supabase grants a broad default privilege set on new public-schema objects to
+// anon/authenticated. 20260817160000 revoked on the base table and granted
+// SELECT on the views, but never revoked those inherited defaults - leaving
+// TRUNCATE on the base table and full access on all three views.
+
+const privMigrationFile = "20260817193000_protect_testimonial_privileges.sql";
+assert(files.includes(privMigrationFile), `the testimonial privilege correction exists (${privMigrationFile})`);
+
+const privSql = files.includes(privMigrationFile)
+  ? readFileSync(join(migrationsDir, privMigrationFile), "utf8")
+  : "";
+
+for (const obj of [
+  "testimonial_submissions",
+  "testimonial_processing_events",
+  "testimonial_gallery_items",
+  "testimonial_my_submissions",
+  "testimonial_moderation_queue",
+]) {
+  assert(
+    new RegExp(`revoke all on public\\.${obj}\\s+from public, anon, authenticated`).test(privSql),
+    `ALL privileges are revoked from public/anon/authenticated on ${obj}`,
+  );
+}
+assert(
+  /grant select on public\.testimonial_gallery_items to anon, authenticated/.test(privSql),
+  "the gallery view is re-granted SELECT to anon and authenticated",
+);
+assert(
+  /grant select on public\.testimonial_my_submissions to authenticated/.test(privSql) &&
+    !/grant select on public\.testimonial_my_submissions to [^;]*anon/.test(privSql),
+  "my_submissions is re-granted SELECT to authenticated only, never anon",
+);
+assert(
+  !/grant [\s\S]{0,80}on public\.testimonial_moderation_queue to/.test(privSql),
+  "the moderation queue is re-granted to NO browser role",
+);
+assert(
+  /grant insert on public\.testimonial_submissions to authenticated/.test(privSql) &&
+    /grant update \(caption\) on public\.testimonial_submissions to authenticated/.test(privSql),
+  "the base table keeps only INSERT and column-level UPDATE(caption) for authenticated",
+);
+assert(
+  !/grant[^;]*\b(truncate|references|trigger)\b[^;]*on public\.testimonial/i.test(privSql),
+  "TRUNCATE/REFERENCES/TRIGGER are never re-granted on any testimonial object",
+);
+assert(
+  /alter view public\.testimonial_gallery_items\s+set \(security_barrier = true\)/.test(privSql) &&
+    /alter view public\.testimonial_my_submissions set \(security_barrier = true\)/.test(privSql),
+  "both browser-readable views are hardened with security_barrier",
+);
+assert(
+  !/create table|drop table|drop view|alter table public\.testimonial_submissions (add|drop) column/i.test(privSql),
+  "the correction changes privileges only - it does not alter the applied schema",
+);
+assert(
+  /TRUNCATE is not subject to RLS[\s\S]{0,60}does not[\s\S]{0,40}fire/i.test(privSql),
+  "the migration records why TRUNCATE was the severe part of the finding",
+);
+
+// --- Moderation provenance RPC ---------------------------------------------
+// 20260817160000 revoked browser UPDATE, so moderation could only run as
+// service_role - where auth.uid() is NULL and reviewed_by would always be lost.
+// The fix keeps reviewed_by := auth.uid() as the ONLY writer of that column and
+// makes the real administrator's JWT the calling context instead.
+
+const rpcMigrationFile = "20260817193500_add_testimonial_moderation_rpc.sql";
+assert(files.includes(rpcMigrationFile), `the moderation RPC migration exists (${rpcMigrationFile})`);
+
+const rpcSql = files.includes(rpcMigrationFile)
+  ? readFileSync(join(migrationsDir, rpcMigrationFile), "utf8")
+  : "";
+
+assert(
+  /create or replace function public\.moderate_testimonial_submission\(/.test(rpcSql),
+  "moderate_testimonial_submission() is defined",
+);
+assert(/security definer/.test(rpcSql), "the RPC is SECURITY DEFINER");
+assert(
+  /set search_path = public, pg_catalog/.test(rpcSql),
+  "the RPC pins a fixed safe search_path",
+);
+assert(
+  /revoke all on function public\.moderate_testimonial_submission[\s\S]{0,160}from public, anon/.test(rpcSql),
+  "EXECUTE is revoked from PUBLIC and anon",
+);
+assert(
+  /grant execute on function public\.moderate_testimonial_submission[\s\S]{0,160}to authenticated/.test(rpcSql),
+  "EXECUTE is granted only to authenticated",
+);
+
+// Parameter surface: decisions and notes only.
+const rpcSig = rpcSql.slice(
+  rpcSql.indexOf("create or replace function public.moderate_testimonial_submission("),
+  rpcSql.indexOf("returns table"),
+);
+for (const forbidden of [
+  "reviewed_by", "client_id", "experience_id", "experience_user_id", "auth_user_id",
+  "provider", "validation", "upload", "published_at", "media_deleted_at",
+]) {
+  assert(
+    !new RegExp(`\\b${forbidden}\\b`).test(rpcSig),
+    `the RPC signature never accepts ${forbidden}`,
+  );
+}
+assert(
+  /p_submission_id\s+uuid/.test(rpcSig) && /p_decision\s+public\.testimonial_moderation_status/.test(rpcSig),
+  "the RPC takes a submission id and a typed decision",
+);
+
+// Authorization inside the function.
+assert(
+  /if auth\.uid\(\) is null then[\s\S]{0,200}errcode = '42501'/.test(rpcSql),
+  "the RPC rejects a null auth.uid()",
+);
+assert(
+  /is_anonymous[\s\S]{0,300}anonymous identities cannot moderate/.test(rpcSql),
+  "the RPC rejects anonymous Supabase identities",
+);
+assert(
+  /can_view_experience_user_pii\(v_client_id\) or public\.is_platform_admin\(\)/.test(rpcSql),
+  "authorization uses the owner/admin PII boundary, so editors and viewers are excluded",
+);
+assert(
+  /select s\.client_id into v_client_id/.test(rpcSql),
+  "the tenant is resolved internally from the submission, never supplied by the caller",
+);
+assert(
+  /p_decision not in \('approved', 'rejected', 'removed'\)/.test(rpcSql),
+  "only approved/rejected/removed are accepted - pending is never a decision",
+);
+assert(
+  /v_client_id is null\s*\n\s*or not \(public\.can_view_experience_user_pii/.test(rpcSql),
+  "absent and unauthorized return the SAME error, so the RPC cannot probe which ids exist",
+);
+
+// The update itself writes exactly three fields on exactly one row.
+const rpcUpdate = rpcSql.slice(rpcSql.indexOf("update public.testimonial_submissions s"), rpcSql.indexOf("returning s.id"));
+assert(
+  /set moderation_status = p_decision/.test(rpcUpdate) &&
+    /moderation_note   = coalesce\(p_moderation_note/.test(rpcUpdate) &&
+    /rejection_reason  = coalesce\(p_rejection_reason/.test(rpcUpdate),
+  "the RPC writes exactly moderation_status, moderation_note and rejection_reason",
+);
+assert(
+  !/reviewed_by\s*=/.test(rpcUpdate),
+  "the RPC never writes reviewed_by - the trigger does, from auth.uid()",
+);
+assert(
+  /where s\.id = p_submission_id/.test(rpcUpdate),
+  "the RPC updates only the exact submission id",
+);
+
+// Provenance remains database-written and unsuppliable.
+assert(
+  /new\.reviewed_by := auth\.uid\(\)/.test(rpcSql),
+  "the superseded trigger still sets reviewed_by from auth.uid() unconditionally",
+);
+assert(
+  !/new\.reviewed_by := coalesce/.test(rpcSql),
+  "no caller-supplied reviewer is ever preserved",
+);
+assert(
+  /moderator := \(not trusted\)[\s\S]{0,200}can_view_experience_user_pii/.test(rpcSql),
+  "the trigger gains a moderator tier scoped to owner/admin of the row's tenant",
+);
+assert(
+  /physical deletion is recorded only by the trusted deletion tier/.test(rpcSql),
+  "a moderator still cannot record physical deletion",
+);
+assert(
+  /create or replace function public\.protect_testimonial_update/.test(rpcSql) &&
+    !/drop trigger[\s\S]{0,80}testimonial_submissions_00_protect_update/.test(rpcSql),
+  "the guard is superseded with CREATE OR REPLACE, not dropped or edited in place",
+);
+
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {
   console.error(`\n${failed} check(s) FAILED.`);

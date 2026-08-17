@@ -53,6 +53,20 @@ begin
     case when p_expected is not distinct from p_actual then 'PASS' else 'FAIL' end;
 end $$;
 
+-- Informational only -- always passes. Records a value worth seeing without
+-- asserting a schema guarantee that does not exist.
+create or replace function pg_temp.note(p_section text, p_check text, p_value text)
+returns void
+language plpgsql
+security definer
+set search_path = pg_temp, pg_catalog
+as $$
+begin
+  insert into pg_temp._ts_check_results (section, check_name, expected, actual, passed)
+  values (p_section, p_check, p_value, p_value, true);
+  raise notice '[%] % | %', p_section, p_check, p_value;
+end $$;
+
 create or replace function pg_temp.act_as(p_user uuid) returns void language plpgsql as $$
 begin
   perform set_config('request.jwt.claims',
@@ -111,12 +125,16 @@ insert into auth.users
   (id, instance_id, aud, role, email, encrypted_password,
    email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
 values
-  ('00000000-0000-4000-8000-0000000000a1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a1@example.com','', now(), now(), now(), '{}', '{}'),
+  ('00000000-0000-4000-8000-0000000000a1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a1@example.com','', now(), now(), now(), '{}', '{}'),  -- marked anonymous below
   ('00000000-0000-4000-8000-0000000000a2','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a2@example.com','', now(), now(), now(), '{}', '{}'),
   ('00000000-0000-4000-8000-0000000000a3','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a3@example.com','', now(), now(), now(), '{}', '{}'),
   ('00000000-0000-4000-8000-0000000000a4','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a4@example.com','', now(), now(), now(), '{}', '{}'),
   ('00000000-0000-4000-8000-0000000000a5','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-a5@example.com','', now(), now(), now(), '{}', '{}'),
   ('00000000-0000-4000-8000-0000000000b1','00000000-0000-0000-0000-000000000000','authenticated','authenticated','ts-b1@example.com','', now(), now(), now(), '{}', '{}');
+
+-- a1 is the visitor identity: mark it anonymous so the RPC's anonymous-identity
+-- rejection is exercised against a real is_anonymous flag rather than assumed.
+update auth.users set is_anonymous = true where id = '00000000-0000-4000-8000-0000000000a1';
 
 insert into public.clients (id, slug, name, status) values
   ('00000000-0000-4000-8000-00000000c0a0','ts-fixture-tenant-a','TS Fixture Tenant A','active'),
@@ -166,6 +184,12 @@ values
   ('00000000-0000-4000-8000-00000000f0a4','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a2','00000000-0000-4000-8000-0000000000a2','image','key-approved','uploaded','valid','fixture-provider','asset-approved','delivery-approved','poster-approved', now(), true, null, null, null, null, null, now(), 'approved caption','ts-consent-fixture', now(), now(), true, true),
   -- f0a5 provider FAILURE
   ('00000000-0000-4000-8000-00000000f0a5','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a1','00000000-0000-4000-8000-0000000000a1','video','key-invalid','uploaded','invalid','fixture-provider','asset-invalid', null, null, null, false, null, null, null, null, null, null, 'invalid caption','ts-consent-fixture', now(), now(), true, true),
+  -- f0a8 IMAGE, fully eligible + delivery ready, PENDING -- RPC approve/remove subject
+  ('00000000-0000-4000-8000-00000000f0a8','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a2','00000000-0000-4000-8000-0000000000a2','image','key-rpc-approve','uploaded','valid','fixture-provider','asset-rpc-approve','delivery-rpc-approve', null, now(), true, null, null, null, null, null, now(), 'rpc approve caption','ts-consent-fixture', now(), now(), true, true),
+  -- f0a9 IMAGE, fully eligible, PENDING -- RPC reject subject
+  ('00000000-0000-4000-8000-00000000f0a9','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a2','00000000-0000-4000-8000-0000000000a2','image','key-rpc-reject','uploaded','valid','fixture-provider','asset-rpc-reject','delivery-rpc-reject', null, now(), true, null, null, null, null, null, now(), 'rpc reject caption','ts-consent-fixture', now(), now(), true, true),
+  -- f0a7 IMAGE, fully eligible and still PENDING -- the pending->rejected subject
+  ('00000000-0000-4000-8000-00000000f0a7','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a2','00000000-0000-4000-8000-0000000000a2','image','key-pending','uploaded','valid','fixture-provider','asset-pending','delivery-pending', null, now(), true, null, null, null, null, null, now(), 'pending caption','ts-consent-fixture', now(), now(), true, true),
   -- f0a6 VIDEO awaiting validation, used to prove video needs trusted metadata
   ('00000000-0000-4000-8000-00000000f0a6','00000000-0000-4000-8000-00000000c0a0','00000000-0000-4000-8000-00000000e0a0','00000000-0000-4000-8000-00000000d0a2','00000000-0000-4000-8000-0000000000a2','video','key-video','uploaded','pending','fixture-provider','asset-video', null, null, null, false, null, null, null, null, null, null, 'video caption','ts-consent-fixture', now(), now(), true, true);
 
@@ -188,14 +212,14 @@ declare ids text[] := array[
   '00000000-0000-4000-8000-00000000d0a1','00000000-0000-4000-8000-00000000d0a2',
   '00000000-0000-4000-8000-00000000f0a1','00000000-0000-4000-8000-00000000f0a2',
   '00000000-0000-4000-8000-00000000f0a3','00000000-0000-4000-8000-00000000f0a4',
-  '00000000-0000-4000-8000-00000000f0a5','00000000-0000-4000-8000-00000000f0a6'];
+  '00000000-0000-4000-8000-00000000f0a5','00000000-0000-4000-8000-00000000f0a6','00000000-0000-4000-8000-00000000f0a7','00000000-0000-4000-8000-00000000f0a8','00000000-0000-4000-8000-00000000f0a9'];
   bad int := 0; i text;
 begin
   foreach i in array ids loop
     begin perform i::uuid; exception when others then bad := bad + 1; end;
   end loop;
   perform pg_temp.record('fixtures','every fixture UUID parses as uuid','0', bad::text);
-  perform pg_temp.record('fixtures','fixture UUID count','18', array_length(ids,1)::text);
+  perform pg_temp.record('fixtures','fixture UUID count','21', array_length(ids,1)::text);
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -216,11 +240,24 @@ begin
     (select count(*)::text from storage.buckets where id='platform-media'));
 
   -- No credential-shaped column may exist anywhere on the table.
-  perform pg_temp.record('no-secrets','no token/secret/url column exists','0',
+  -- Forbid columns that could STORE a credential: TEXT-typed columns whose name
+  -- suggests a token, secret, API key or URL. provider_signed_urls_required is
+  -- deliberately not caught -- it is a boolean security-control flag
+  -- ("delivery must be signed"), not a stored URL. Renaming a legitimate
+  -- boolean to satisfy an over-broad predicate would be the wrong fix.
+  perform pg_temp.record('no-secrets','no TEXT column could store a token/secret/key/url','0',
     (select count(*)::text from information_schema.columns
       where table_schema='public' and table_name='testimonial_submissions'
+        and data_type in ('text','character varying')
         and (column_name like '%token%' or column_name like '%secret%'
-             or column_name like '%_url%' or column_name like '%api_key%')));
+             or column_name like '%url%' or column_name like '%api_key%')));
+  perform pg_temp.record('no-secrets','provider_signed_urls_required is a boolean flag','boolean',
+    (select data_type from information_schema.columns
+      where table_schema='public' and table_name='testimonial_submissions'
+        and column_name='provider_signed_urls_required'));
+  perform pg_temp.record('no-secrets','...and holds no URL value','0',
+    (select count(*)::text from public.testimonial_submissions
+      where provider_signed_urls_required::text like '%://%'));
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -475,17 +512,62 @@ end $$;
 -- ----------------------------------------------------------------------------
 -- Section 9 — Rejection retention and removal
 -- ----------------------------------------------------------------------------
-select pg_temp.try_sql('retention','pending -> rejected is allowed','ALLOWED',
-  $q$update public.testimonial_submissions set moderation_status='rejected' where id='00000000-0000-4000-8000-00000000f0a4'$q$);
+-- pending -> rejected, exercised on a fixture that is genuinely still pending.
+-- The earlier version used f0a4, which Section 1 had already promoted to
+-- approved, so it was really testing approved -> rejected and was correctly
+-- refused by the lifecycle machine with 42501.
+--
+-- Run at the trusted tier, which is how the real moderation path works: a
+-- server action verifies the caller is a non-anonymous owner/admin through the
+-- PII authorization boundary, then performs the update as service_role. Browser
+-- roles are separately proven unable to moderate directly, below.
+select pg_temp.try_sql('moderation','trusted tier: pending -> rejected is allowed','ALLOWED',
+  $q$update public.testimonial_submissions
+       set moderation_status='rejected', rejection_reason='fixture reason'
+     where id='00000000-0000-4000-8000-00000000f0a7'$q$);
 
 do $$
 begin
-  -- f0a4 was approved in Section 1, so it cannot be rejected: rejected is not
-  -- reachable from approved, only removed is.
-  perform pg_temp.record('retention','approved cannot be rejected (only removed)','approved',
+  perform pg_temp.record('moderation','rejection recorded','rejected',
+    (select moderation_status::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a7'));
+  perform pg_temp.record('moderation','rejection sets reviewed_at','true',
+    (select (reviewed_at is not null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a7'));
+  perform pg_temp.record('moderation','rejection sets the 30-day purge deadline','true',
+    (select (media_purge_after is not null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a7'));
+  -- reviewed_by is auth.uid(), which is null at the ambient/service_role tier.
+  -- Recorded as an observation, not asserted -- see the report's note on review
+  -- provenance under server-mediated moderation.
+  perform pg_temp.note('moderation','reviewed_by at trusted tier',
+    coalesce((select reviewed_by::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a7'),
+      'NULL (auth.uid() is null for service_role/ambient)'));
+end $$;
+
+select pg_temp.try_sql('moderation','rejected cannot become approved','blocked-42501',
+  $q$update public.testimonial_submissions set moderation_status='approved'
+      where id='00000000-0000-4000-8000-00000000f0a7'$q$);
+
+do $$
+begin
+  -- f0a4 is approved: rejected is unreachable from there, only removed is.
+  perform pg_temp.record('moderation','approved cannot be rejected (only removed)','approved',
     (select moderation_status::text from public.testimonial_submissions
       where id='00000000-0000-4000-8000-00000000f0a4'));
 end $$;
+
+-- A browser role must not be able to moderate directly, at any tier.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');   -- tenant OWNER
+  perform pg_temp.try_sql('moderation','even a tenant owner cannot moderate through a browser role','blocked-42501',
+    $q$update public.testimonial_submissions set moderation_status='rejected'
+        where id='00000000-0000-4000-8000-00000000f0a2'$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
 
 select pg_temp.try_sql('removal','approved -> removed is allowed','ALLOWED',
   $q$update public.testimonial_submissions set moderation_status='removed' where id='00000000-0000-4000-8000-00000000f0a4'$q$);
@@ -602,6 +684,255 @@ begin
       where table_schema='public' and table_name='testimonial_moderation_queue'
         and column_name='provider_upload_id'));
 end $$;
+
+-- ----------------------------------------------------------------------------
+-- Section 10b — FULL privilege matrix (not just SELECT/INSERT/UPDATE/DELETE)
+-- ----------------------------------------------------------------------------
+-- The original assertions only probed four verbs and therefore missed TRUNCATE,
+-- REFERENCES, TRIGGER and MAINTAIN inherited from Supabase's default privileges.
+-- TRUNCATE is the dangerous one: it is not subject to RLS and does not fire row
+-- triggers, so a holder could empty the table past every other protection.
+do $$
+declare
+  obj text;
+  role_name text;
+  verb text;
+  leaked text := '';
+begin
+  foreach obj in array array['testimonial_submissions','testimonial_processing_events',
+                             'testimonial_moderation_queue']
+  loop
+    foreach role_name in array array['anon','authenticated'] loop
+      foreach verb in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
+        -- testimonial_submissions legitimately keeps INSERT and column-UPDATE
+        -- for authenticated; everything else must be absent.
+        if not (obj = 'testimonial_submissions' and role_name = 'authenticated'
+                and verb in ('INSERT','UPDATE')) then
+          if has_table_privilege(role_name, 'public.' || obj, verb) then
+            leaked := leaked || role_name || ':' || obj || ':' || verb || ' ';
+          end if;
+        end if;
+      end loop;
+    end loop;
+  end loop;
+  perform pg_temp.record('privilege-matrix','no browser role holds an unintended privilege','NONE',
+    case when leaked = '' then 'NONE' else leaked end);
+end $$;
+
+do $$
+begin
+  -- The specific hole found in the live schema, called out individually.
+  perform pg_temp.record('privilege-matrix','authenticated has NO TRUNCATE on the base table','false',
+    has_table_privilege('authenticated','public.testimonial_submissions','TRUNCATE')::text);
+  perform pg_temp.record('privilege-matrix','anon has NO TRUNCATE on the base table','false',
+    has_table_privilege('anon','public.testimonial_submissions','TRUNCATE')::text);
+
+  -- PUBLIC must hold nothing on any testimonial object, so a future
+  -- "grant ... to public" cannot be inherited silently.
+  perform pg_temp.record('privilege-matrix','PUBLIC has no moderation-queue access','false',
+    has_table_privilege('public','public.testimonial_moderation_queue','SELECT')::text);
+  perform pg_temp.record('privilege-matrix','PUBLIC has no raw-table access','false',
+    has_table_privilege('public','public.testimonial_submissions','SELECT')::text);
+
+  -- The three views' intended permission matrix.
+  perform pg_temp.record('view-matrix','gallery: anon may read','true',
+    has_table_privilege('anon','public.testimonial_gallery_items','SELECT')::text);
+  perform pg_temp.record('view-matrix','gallery: authenticated may read','true',
+    has_table_privilege('authenticated','public.testimonial_gallery_items','SELECT')::text);
+  perform pg_temp.record('view-matrix','gallery: anon cannot write','false',
+    has_table_privilege('anon','public.testimonial_gallery_items','UPDATE')::text);
+  perform pg_temp.record('view-matrix','gallery: anon cannot delete','false',
+    has_table_privilege('anon','public.testimonial_gallery_items','DELETE')::text);
+
+  perform pg_temp.record('view-matrix','my_submissions: anon may NOT read','false',
+    has_table_privilege('anon','public.testimonial_my_submissions','SELECT')::text);
+  perform pg_temp.record('view-matrix','my_submissions: authenticated may read','true',
+    has_table_privilege('authenticated','public.testimonial_my_submissions','SELECT')::text);
+  perform pg_temp.record('view-matrix','my_submissions: authenticated cannot write','false',
+    has_table_privilege('authenticated','public.testimonial_my_submissions','UPDATE')::text);
+
+  perform pg_temp.record('view-matrix','queue: anon may NOT read','false',
+    has_table_privilege('anon','public.testimonial_moderation_queue','SELECT')::text);
+  perform pg_temp.record('view-matrix','queue: authenticated may NOT read','false',
+    has_table_privilege('authenticated','public.testimonial_moderation_queue','SELECT')::text);
+  perform pg_temp.record('view-matrix','queue: anon cannot write','false',
+    has_table_privilege('anon','public.testimonial_moderation_queue','UPDATE')::text);
+end $$;
+
+-- Direct reads must actually fail, not merely lack a privilege on paper.
+do $$
+begin
+  perform pg_temp.act_as_anon();
+  perform pg_temp.try_sql('view-matrix','anon SELECT from the moderation queue fails','blocked-42501',
+    $q$select count(*) from public.testimonial_moderation_queue$q$);
+  perform pg_temp.try_sql('view-matrix','anon SELECT from my_submissions fails','blocked-42501',
+    $q$select count(*) from public.testimonial_my_submissions$q$);
+  perform pg_temp.try_sql('view-matrix','anon SELECT from the gallery still succeeds','ALLOWED',
+    $q$select count(*) from public.testimonial_gallery_items$q$);
+  perform pg_temp.act_as_ambient();
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a1');
+  perform pg_temp.try_sql('view-matrix','authenticated SELECT from the moderation queue fails','blocked-42501',
+    $q$select count(*) from public.testimonial_moderation_queue$q$);
+  perform pg_temp.try_sql('view-matrix','authenticated SELECT from my_submissions still succeeds','ALLOWED',
+    $q$select count(*) from public.testimonial_my_submissions$q$);
+  perform pg_temp.try_sql('view-matrix','authenticated cannot TRUNCATE the base table','blocked-42501',
+    $q$truncate public.testimonial_submissions$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
+
+
+-- ----------------------------------------------------------------------------
+-- Section 10c — Moderation RPC: authorization and provenance
+-- ----------------------------------------------------------------------------
+do $$
+declare v_def text; v_cfg text[]; v_args text;
+begin
+  perform pg_temp.record('rpc','moderate_testimonial_submission exists','1',
+    (select count(*)::text from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname='moderate_testimonial_submission'));
+
+  select p.prosecdef::text, p.proconfig, pg_get_function_identity_arguments(p.oid)
+    into v_def, v_cfg, v_args
+    from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+   where n.nspname='public' and p.proname='moderate_testimonial_submission';
+
+  perform pg_temp.record('rpc','function is SECURITY DEFINER','true', coalesce(v_def,'MISSING'));
+  perform pg_temp.record('rpc','function pins a search_path','true',
+    (coalesce(array_to_string(v_cfg,','),'') like 'search_path=%')::text);
+  perform pg_temp.record('rpc','signature accepts NO reviewed_by','0',
+    (case when coalesce(v_args,'') like '%reviewed_by%' then 1 else 0 end)::text);
+  perform pg_temp.record('rpc','signature accepts no client/experience/provider field','0',
+    (case when coalesce(v_args,'') ~ '(client_id|experience_id|provider|validation|upload|published)' then 1 else 0 end)::text);
+
+  perform pg_temp.record('rpc','authenticated may EXECUTE','true',
+    has_function_privilege('authenticated',
+      'public.moderate_testimonial_submission(uuid,public.testimonial_moderation_status,text,text)','EXECUTE')::text);
+  perform pg_temp.record('rpc','anon may NOT EXECUTE','false',
+    has_function_privilege('anon',
+      'public.moderate_testimonial_submission(uuid,public.testimonial_moderation_status,text,text)','EXECUTE')::text);
+  perform pg_temp.record('rpc','PUBLIC may NOT EXECUTE','false',
+    has_function_privilege('public',
+      'public.moderate_testimonial_submission(uuid,public.testimonial_moderation_status,text,text)','EXECUTE')::text);
+end $$;
+
+-- An anonymous Supabase identity is never a moderator.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a1');   -- anonymous visitor
+  perform pg_temp.try_sql('rpc','anonymous identity cannot moderate','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','approved')$q$);
+  perform pg_temp.act_as_ambient();
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a4');   -- editor
+  perform pg_temp.try_sql('rpc','editor cannot moderate','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','approved')$q$);
+  perform pg_temp.act_as_ambient();
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a5');   -- viewer
+  perform pg_temp.try_sql('rpc','viewer cannot moderate','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','approved')$q$);
+  perform pg_temp.act_as_ambient();
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000b1');   -- cross-tenant owner
+  perform pg_temp.try_sql('rpc','cross-tenant owner cannot moderate','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','approved')$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
+
+-- `pending` is not a decision.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');   -- tenant OWNER
+  perform pg_temp.try_sql('rpc','pending is refused as a decision','other-error:22023',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','pending')$q$);
+  perform pg_temp.try_sql('rpc','an unknown submission id is refused without leaking existence','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000ffff','approved')$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
+
+-- Same-client owner CAN approve, and provenance records the real administrator.
+do $$
+declare v_reviewer uuid; v_before jsonb; v_after jsonb;
+begin
+  select to_jsonb(t) - 'moderation_status' - 'moderation_note' - 'rejection_reason'
+         - 'reviewed_at' - 'reviewed_by' - 'published_at' - 'removed_at'
+         - 'media_purge_after' - 'updated_at'
+    into v_before
+    from public.testimonial_submissions t where t.id='00000000-0000-4000-8000-00000000f0a8';
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');
+  perform pg_temp.try_sql('rpc','same-client owner can approve','ALLOWED',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','approved','fixture note')$q$);
+  perform pg_temp.act_as_ambient();
+
+  select reviewed_by into v_reviewer from public.testimonial_submissions
+   where id='00000000-0000-4000-8000-00000000f0a8';
+  perform pg_temp.record('rpc','reviewed_by is the REAL authenticated administrator',
+    '00000000-0000-4000-8000-0000000000a3', coalesce(v_reviewer::text,'NULL'));
+  perform pg_temp.record('rpc','reviewed_at is recorded','true',
+    (select (reviewed_at is not null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a8'));
+  perform pg_temp.record('rpc','published_at is set on approval','true',
+    (select (published_at is not null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a8'));
+
+  select to_jsonb(t) - 'moderation_status' - 'moderation_note' - 'rejection_reason'
+         - 'reviewed_at' - 'reviewed_by' - 'published_at' - 'removed_at'
+         - 'media_purge_after' - 'updated_at'
+    into v_after
+    from public.testimonial_submissions t where t.id='00000000-0000-4000-8000-00000000f0a8';
+  perform pg_temp.record('rpc','the RPC changed no unrelated field','true', (v_before = v_after)::text);
+end $$;
+select pg_temp.act_as_ambient();
+
+-- Same-client owner CAN remove an approved item; illegal transitions stay blocked.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');
+  perform pg_temp.try_sql('rpc','approved -> rejected stays illegal through the RPC','blocked-42501',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','rejected')$q$);
+  perform pg_temp.try_sql('rpc','same-client owner can remove an approved item','ALLOWED',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a8','removed')$q$);
+  perform pg_temp.act_as_ambient();
+  perform pg_temp.record('rpc','removal clears published_at','true',
+    (select (published_at is null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a8'));
+end $$;
+select pg_temp.act_as_ambient();
+
+-- Same-client owner CAN reject a pending item, and rejection gets the deadline.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');
+  perform pg_temp.try_sql('rpc','same-client owner can reject','ALLOWED',
+    $q$select public.moderate_testimonial_submission('00000000-0000-4000-8000-00000000f0a9','rejected','note','fixture reason')$q$);
+  perform pg_temp.act_as_ambient();
+  perform pg_temp.record('rpc','rejection via RPC sets the 30-day purge deadline','true',
+    (select (media_purge_after is not null)::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a9'));
+  perform pg_temp.record('rpc','rejection via RPC records the real reviewer',
+    '00000000-0000-4000-8000-0000000000a3',
+    coalesce((select reviewed_by::text from public.testimonial_submissions
+      where id='00000000-0000-4000-8000-00000000f0a9'),'NULL'));
+end $$;
+select pg_temp.act_as_ambient();
+
+-- A moderator still cannot bypass the RPC with a direct statement, and cannot
+-- record physical deletion.
+do $$
+begin
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000a3');
+  perform pg_temp.try_sql('rpc','owner still cannot moderate by direct UPDATE','blocked-42501',
+    $q$update public.testimonial_submissions set moderation_status='approved' where id='00000000-0000-4000-8000-00000000f0a2'$q$);
+  perform pg_temp.try_sql('rpc','owner cannot record physical deletion','blocked-42501',
+    $q$update public.testimonial_submissions set media_deleted_at=now() where id='00000000-0000-4000-8000-00000000f0a8'$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+select pg_temp.act_as_ambient();
 
 -- ----------------------------------------------------------------------------
 -- Section 11 — Webhook replay protection
