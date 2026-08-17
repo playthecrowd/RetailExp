@@ -898,9 +898,461 @@ export type Database = {
           },
         ]
       }
+      testimonial_processing_events: {
+        Row: {
+          applied: boolean
+          applied_at: string | null
+          error_code: string | null
+          event_type: string
+          id: string
+          payload_hash: string
+          provider: string
+          provider_asset_id: string | null
+          provider_event_id: string
+          received_at: string
+          signature_verified_at: string
+          submission_id: string | null
+        }
+        Insert: {
+          applied?: boolean
+          applied_at?: string | null
+          error_code?: string | null
+          event_type: string
+          id?: string
+          payload_hash: string
+          provider: string
+          provider_asset_id?: string | null
+          provider_event_id: string
+          received_at?: string
+          signature_verified_at: string
+          submission_id?: string | null
+        }
+        Update: {
+          applied?: boolean
+          applied_at?: string | null
+          error_code?: string | null
+          event_type?: string
+          id?: string
+          payload_hash?: string
+          provider?: string
+          provider_asset_id?: string | null
+          provider_event_id?: string
+          received_at?: string
+          signature_verified_at?: string
+          submission_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "testimonial_processing_events_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_gallery_items"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_processing_events_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_moderation_queue"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_processing_events_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_my_submissions"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_processing_events_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_submissions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      testimonial_submissions: {
+        Row: {
+          attested_no_minors: boolean
+          attested_subjects_consented: boolean
+          auth_user_id: string | null
+          caption: string | null
+          capture_mode: string
+          client_id: string
+          client_submission_key: string
+          consent_scope: string
+          consent_version: string
+          consented_at: string
+          created_at: string
+          delivery_ready_at: string | null
+          detected_mime_type: string | null
+          experience_id: string
+          experience_user_id: string
+          id: string
+          last_provider_event_at: string | null
+          last_provider_event_id: string | null
+          media_deleted_at: string | null
+          media_purge_after: string | null
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          moderation_note: string | null
+          moderation_status: Database["public"]["Enums"]["testimonial_moderation_status"]
+          poster_ready_at: string | null
+          provider: string | null
+          provider_asset_id: string | null
+          provider_deletion_status: string | null
+          provider_delivery_id: string | null
+          provider_draft_cleared_at: string | null
+          provider_error_code: string | null
+          provider_poster_id: string | null
+          provider_processing_status: string | null
+          provider_signed_urls_required: boolean
+          provider_upload_id: string | null
+          published_at: string | null
+          rejection_reason: string | null
+          removed_at: string | null
+          reported_duration_seconds: number | null
+          reported_mime_type: string | null
+          reported_size_bytes: number | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          submitted_at: string | null
+          updated_at: string
+          upload_expires_at: string
+          upload_failure_reason: string | null
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+          uploaded_at: string | null
+          validated_at: string | null
+          validated_by: string | null
+          validated_codec: string | null
+          validated_duration_seconds: number | null
+          validated_height: number | null
+          validated_size_bytes: number | null
+          validated_width: number | null
+          validation_failure_reason: string | null
+          validation_status: Database["public"]["Enums"]["testimonial_validation_status"]
+        }
+        Insert: {
+          attested_no_minors?: boolean
+          attested_subjects_consented?: boolean
+          auth_user_id?: string | null
+          caption?: string | null
+          capture_mode?: string
+          client_id: string
+          client_submission_key: string
+          consent_scope?: string
+          consent_version: string
+          consented_at: string
+          created_at?: string
+          delivery_ready_at?: string | null
+          detected_mime_type?: string | null
+          experience_id: string
+          experience_user_id: string
+          id?: string
+          last_provider_event_at?: string | null
+          last_provider_event_id?: string | null
+          media_deleted_at?: string | null
+          media_purge_after?: string | null
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          moderation_note?: string | null
+          moderation_status?: Database["public"]["Enums"]["testimonial_moderation_status"]
+          poster_ready_at?: string | null
+          provider?: string | null
+          provider_asset_id?: string | null
+          provider_deletion_status?: string | null
+          provider_delivery_id?: string | null
+          provider_draft_cleared_at?: string | null
+          provider_error_code?: string | null
+          provider_poster_id?: string | null
+          provider_processing_status?: string | null
+          provider_signed_urls_required?: boolean
+          provider_upload_id?: string | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          removed_at?: string | null
+          reported_duration_seconds?: number | null
+          reported_mime_type?: string | null
+          reported_size_bytes?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          submitted_at?: string | null
+          updated_at?: string
+          upload_expires_at?: string
+          upload_failure_reason?: string | null
+          upload_status?: Database["public"]["Enums"]["testimonial_upload_status"]
+          uploaded_at?: string | null
+          validated_at?: string | null
+          validated_by?: string | null
+          validated_codec?: string | null
+          validated_duration_seconds?: number | null
+          validated_height?: number | null
+          validated_size_bytes?: number | null
+          validated_width?: number | null
+          validation_failure_reason?: string | null
+          validation_status?: Database["public"]["Enums"]["testimonial_validation_status"]
+        }
+        Update: {
+          attested_no_minors?: boolean
+          attested_subjects_consented?: boolean
+          auth_user_id?: string | null
+          caption?: string | null
+          capture_mode?: string
+          client_id?: string
+          client_submission_key?: string
+          consent_scope?: string
+          consent_version?: string
+          consented_at?: string
+          created_at?: string
+          delivery_ready_at?: string | null
+          detected_mime_type?: string | null
+          experience_id?: string
+          experience_user_id?: string
+          id?: string
+          last_provider_event_at?: string | null
+          last_provider_event_id?: string | null
+          media_deleted_at?: string | null
+          media_purge_after?: string | null
+          media_type?: Database["public"]["Enums"]["testimonial_media_type"]
+          moderation_note?: string | null
+          moderation_status?: Database["public"]["Enums"]["testimonial_moderation_status"]
+          poster_ready_at?: string | null
+          provider?: string | null
+          provider_asset_id?: string | null
+          provider_deletion_status?: string | null
+          provider_delivery_id?: string | null
+          provider_draft_cleared_at?: string | null
+          provider_error_code?: string | null
+          provider_poster_id?: string | null
+          provider_processing_status?: string | null
+          provider_signed_urls_required?: boolean
+          provider_upload_id?: string | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          removed_at?: string | null
+          reported_duration_seconds?: number | null
+          reported_mime_type?: string | null
+          reported_size_bytes?: number | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          submitted_at?: string | null
+          updated_at?: string
+          upload_expires_at?: string
+          upload_failure_reason?: string | null
+          upload_status?: Database["public"]["Enums"]["testimonial_upload_status"]
+          uploaded_at?: string | null
+          validated_at?: string | null
+          validated_by?: string | null
+          validated_codec?: string | null
+          validated_duration_seconds?: number | null
+          validated_height?: number | null
+          validated_size_bytes?: number | null
+          validated_width?: number | null
+          validation_failure_reason?: string | null
+          validation_status?: Database["public"]["Enums"]["testimonial_validation_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "testimonial_submissions_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "testimonial_submissions_experience_id_fkey"
+            columns: ["experience_id"]
+            isOneToOne: false
+            referencedRelation: "experiences"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "testimonial_submissions_experience_user_id_fkey"
+            columns: ["experience_user_id"]
+            isOneToOne: false
+            referencedRelation: "experience_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
-      [_ in never]: never
+      testimonial_gallery_items: {
+        Row: {
+          caption: string | null
+          delivery_provider: string | null
+          duration_seconds: number | null
+          experience_id: string | null
+          height: number | null
+          media_type:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          provider_delivery_id: string | null
+          provider_poster_id: string | null
+          published_at: string | null
+          submission_id: string | null
+          width: number | null
+        }
+        Insert: {
+          caption?: string | null
+          delivery_provider?: string | null
+          duration_seconds?: number | null
+          experience_id?: string | null
+          height?: number | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          provider_delivery_id?: string | null
+          provider_poster_id?: string | null
+          published_at?: string | null
+          submission_id?: string | null
+          width?: number | null
+        }
+        Update: {
+          caption?: string | null
+          delivery_provider?: string | null
+          duration_seconds?: number | null
+          experience_id?: string | null
+          height?: number | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          provider_delivery_id?: string | null
+          provider_poster_id?: string | null
+          published_at?: string | null
+          submission_id?: string | null
+          width?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "testimonial_submissions_experience_id_fkey"
+            columns: ["experience_id"]
+            isOneToOne: false
+            referencedRelation: "experiences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      testimonial_moderation_queue: {
+        Row: {
+          caption: string | null
+          client_id: string | null
+          detected_mime_type: string | null
+          experience_id: string | null
+          media_type:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_note: string | null
+          moderation_status:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          provider: string | null
+          provider_delivery_id: string | null
+          provider_poster_id: string | null
+          published_at: string | null
+          rejection_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          submission_id: string | null
+          submitted_at: string | null
+          validated_codec: string | null
+          validated_duration_seconds: number | null
+          validated_height: number | null
+          validated_size_bytes: number | null
+          validated_width: number | null
+        }
+        Insert: {
+          caption?: string | null
+          client_id?: string | null
+          detected_mime_type?: string | null
+          experience_id?: string | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_note?: string | null
+          moderation_status?:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          provider?: string | null
+          provider_delivery_id?: string | null
+          provider_poster_id?: string | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          submission_id?: string | null
+          submitted_at?: string | null
+          validated_codec?: string | null
+          validated_duration_seconds?: number | null
+          validated_height?: number | null
+          validated_size_bytes?: number | null
+          validated_width?: number | null
+        }
+        Update: {
+          caption?: string | null
+          client_id?: string | null
+          detected_mime_type?: string | null
+          experience_id?: string | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_note?: string | null
+          moderation_status?:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          provider?: string | null
+          provider_delivery_id?: string | null
+          provider_poster_id?: string | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          submission_id?: string | null
+          submitted_at?: string | null
+          validated_codec?: string | null
+          validated_duration_seconds?: number | null
+          validated_height?: number | null
+          validated_size_bytes?: number | null
+          validated_width?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "testimonial_submissions_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "testimonial_submissions_experience_id_fkey"
+            columns: ["experience_id"]
+            isOneToOne: false
+            referencedRelation: "experiences"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      testimonial_my_submissions: {
+        Row: {
+          caption: string | null
+          media_type:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_status:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          published_at: string | null
+          rejection_reason: string | null
+          submission_id: string | null
+          submitted_at: string | null
+          upload_status:
+            | Database["public"]["Enums"]["testimonial_upload_status"]
+            | null
+          validation_status:
+            | Database["public"]["Enums"]["testimonial_validation_status"]
+            | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       can_edit_client: { Args: { check_client_id: string }; Returns: boolean }
@@ -915,6 +1367,20 @@ export type Database = {
       is_client_member: { Args: { check_client_id: string }; Returns: boolean }
       is_client_owner: { Args: { check_client_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
+      moderate_testimonial_submission: {
+        Args: {
+          p_decision: Database["public"]["Enums"]["testimonial_moderation_status"]
+          p_moderation_note?: string
+          p_rejection_reason?: string
+          p_submission_id: string
+        }
+        Returns: {
+          moderation_status: Database["public"]["Enums"]["testimonial_moderation_status"]
+          published_at: string
+          reviewed_at: string
+          submission_id: string
+        }[]
+      }
     }
     Enums: {
       client_status: "active" | "inactive" | "archived"
@@ -933,6 +1399,18 @@ export type Database = {
         | "terminal_complete"
       processing_status: "pending" | "processing" | "ready" | "failed"
       publication_status: "draft" | "published" | "archived"
+      testimonial_media_type: "image" | "video"
+      testimonial_moderation_status:
+        | "pending"
+        | "approved"
+        | "rejected"
+        | "removed"
+      testimonial_upload_status:
+        | "initiated"
+        | "uploaded"
+        | "failed"
+        | "abandoned"
+      testimonial_validation_status: "pending" | "valid" | "invalid"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1081,6 +1559,20 @@ export const Constants = {
       ],
       processing_status: ["pending", "processing", "ready", "failed"],
       publication_status: ["draft", "published", "archived"],
+      testimonial_media_type: ["image", "video"],
+      testimonial_moderation_status: [
+        "pending",
+        "approved",
+        "rejected",
+        "removed",
+      ],
+      testimonial_upload_status: [
+        "initiated",
+        "uploaded",
+        "failed",
+        "abandoned",
+      ],
+      testimonial_validation_status: ["pending", "valid", "invalid"],
     },
   },
 } as const
