@@ -11,6 +11,12 @@ export type KameleonAction =
   | { type: "ENTER_JOURNEY" }
   /** AR skipped, exited mid-session, or unsupported and dismissed — see onSkipAr. Both this and ENTER_JOURNEY land on the same screen today; kept distinct for the Phase 5 analytics plan (AR completed vs. continued without AR). */
   | { type: "CONTINUE_WITHOUT_AR_FALLBACK" }
+  // Phase 4B. CHOOSE_AR is the only route into the untouched AR screen.
+  | { type: "CHOOSE_AR" }
+  | { type: "CHOOSE_TESTIMONIAL" }
+  | { type: "CANCEL_TESTIMONIAL" }
+  // Sets testimonialSubmitted only. Never arCompleted, never an AR reward.
+  | { type: "TESTIMONIAL_SUBMITTED" }
   | { type: "COMPLETE_ACCOUNT" }
   | { type: "RESUME_SAVED_JOURNEY" }
   | { type: "START_NEW_JOURNEY" }

@@ -32,13 +32,30 @@ function isValidOpeningGate(value: unknown): value is OpeningGateState {
   );
 }
 
+/**
+ * Adds fields introduced after a stored session was written.
+ *
+ * testimonialSubmitted arrived in Phase 4B. Requiring it in the type guard
+ * would invalidate every session saved before it existed and drop a visitor
+ * mid-experience back to the start, so it is normalized instead — and
+ * normalized to FALSE unless explicitly true, which is the fail-closed
+ * reading: an old session cannot have submitted a testimonial.
+ */
+function withDefaults(gate: OpeningGateState): OpeningGateState {
+  return {
+    ...gate,
+    testimonialSubmitted:
+      (gate as Partial<OpeningGateState>).testimonialSubmitted === true,
+  };
+}
+
 export function loadOpeningGate(): OpeningGateState {
   if (typeof window === "undefined") return createInitialOpeningGate();
   try {
     const raw = window.sessionStorage.getItem(SESSION_KEY);
     if (!raw) return createInitialOpeningGate();
     const parsed = JSON.parse(raw);
-    return isValidOpeningGate(parsed) ? parsed : createInitialOpeningGate();
+    return isValidOpeningGate(parsed) ? withDefaults(parsed) : createInitialOpeningGate();
   } catch {
     return createInitialOpeningGate();
   }

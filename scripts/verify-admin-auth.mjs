@@ -55,6 +55,21 @@ function stripComments(source) {
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/**
+ * The SQL equivalent, for absence checks against a migration.
+ *
+ * A migration explains its own decisions in `--` comments and in /** *\/
+ * blocks above each function, so those explanations routinely NAME the thing
+ * being searched for — "security_invoker is NOT set", "an earlier draft
+ * granted this to authenticated". Without stripping them, a well-documented
+ * migration fails the very checks that document it.
+ */
+function stripSqlComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--[^\n]*/g, "");
+}
+
 function walk(dir, out = []) {
   const full = join(root, dir);
   if (!existsSync(full)) return out;
@@ -976,6 +991,623 @@ assert(
 assert(
   modLoader.indexOf("requireAdminAccess()") < modLoader.indexOf("createSecretClient()"),
   "authorization still precedes creation of the trusted client in the moderation loader",
+);
+
+console.log("\n--- Phase 4B - visitor testimonial capture ---\n");
+
+const capReducer = read("lib/kameleon/reducer.ts");
+const capTypes = read("lib/kameleon/types.ts");
+const capActionsUnion = read("lib/kameleon/actions.ts");
+const capPage = read("app/experience/kameleon/page.tsx");
+const capChoice = read("components/kameleon/screens/ExperienceChoice.tsx");
+const capUi = read("components/kameleon/testimonials/TestimonialCapture.tsx");
+const capServer = read("app/experience/kameleon/testimonial-actions.ts");
+const capGate = read("lib/testimonials/feature-gate.ts");
+const capLimits = read("lib/testimonials/limits.ts");
+const capContracts = read("lib/cloudflare/contracts.ts");
+const capMigration = read("supabase/migrations/20260819103000_testimonial_capture_intents.sql");
+
+// --- The AR flow is untouched ---------------------------------------------
+const arComponent = read("components/kameleon/ar/KameleonCameraKitExperience.tsx");
+assert(arComponent.length > 0, "the AR component still exists");
+assert(
+  /onEnterJourney=\{\(\) => \{[\s\S]{0,200}unlockKameleonReward\("ruby_portal"\)/.test(capPage),
+  "the AR path still awards ruby_portal on entering the journey",
+);
+assert(
+  /onSkipAr=\{\(\) => \{[\s\S]{0,200}unlockKameleonReward\("ruby_portal"\)/.test(capPage),
+  "the AR fallback path still awards ruby_portal",
+);
+assert(
+  /case "CHOOSE_AR":[\s\S]{0,120}screen: "ar-permission"/.test(capReducer),
+  "CHOOSE_AR is the only route into the untouched AR screen",
+);
+assert(
+  /case "ENTER_JOURNEY":\s*\n\s*case "CONTINUE_WITHOUT_AR_FALLBACK": \{[\s\S]{0,160}arCompleted: true/.test(capReducer),
+  "the two AR completion actions still set arCompleted exactly as before",
+);
+
+// --- Testimonial is NOT AR -------------------------------------------------
+// Comments stripped: the case documents that it does NOT set arCompleted,
+// and that explanation would otherwise fail the check that it does not.
+const testimonialCase = stripComments(
+  capReducer.slice(
+    capReducer.indexOf('case "TESTIMONIAL_SUBMITTED"'),
+    // Ends at the NEXT case, not a distant one: reaching as far as
+    // RESUME_SAVED_JOURNEY swallowed the ENTER_JOURNEY case, which sets
+    // arCompleted legitimately, and made this look like a leak.
+    capReducer.indexOf('case "ENTER_JOURNEY"'),
+  ),
+);
+assert(
+  /testimonialSubmitted: true/.test(testimonialCase),
+  "TESTIMONIAL_SUBMITTED sets its own flag",
+);
+assert(
+  !/arCompleted/.test(testimonialCase),
+  "TESTIMONIAL_SUBMITTED never sets arCompleted",
+);
+assert(
+  !/ruby_portal|unlockKameleonReward/.test(testimonialCase),
+  "TESTIMONIAL_SUBMITTED awards no AR reward",
+);
+assert(
+  !/unlockKameleonReward/.test(stripComments(capUi)) && !/ruby_portal/.test(capUi),
+  "the capture UI awards no reward at all",
+);
+assert(
+  /postOpeningScreen\(submitted\)/.test(testimonialCase),
+  "a submitted testimonial can continue into the journey",
+);
+assert(
+  /case "CANCEL_TESTIMONIAL":[\s\S]{0,120}screen: "experience-choice"/.test(capReducer),
+  "cancelling returns to the choice screen, so AR is still reachable",
+);
+assert(
+  /testimonialSubmitted: boolean/.test(capTypes) && /testimonialSubmitted: false/.test(capTypes),
+  "the testimonial flag is a distinct, initially-false part of the opening gate",
+);
+assert(
+  /!next\.arCompleted && !next\.testimonialSubmitted/.test(capReducer),
+  "either route satisfies the opening gate on hydrate",
+);
+for (const a of ["CHOOSE_AR", "CHOOSE_TESTIMONIAL", "CANCEL_TESTIMONIAL", "TESTIMONIAL_SUBMITTED"]) {
+  assert(new RegExp('"' + a + '"').test(capActionsUnion), "the action union declares " + a);
+}
+
+// --- Feature gate ----------------------------------------------------------
+assert(
+  /KAMELEON_TESTIMONIAL_CAPTURE_ENABLED/.test(capGate),
+  "the gate reads the approved variable name",
+);
+assert(
+  !/NEXT_PUBLIC_KAMELEON_TESTIMONIAL/.test(capGate + capServer + capUi + capPage),
+  "the gate is never exposed as a NEXT_PUBLIC_ variable",
+);
+assert(
+  /import "server-only"/.test(capGate),
+  "the gate is evaluated server-only",
+);
+assert(
+  /if \(typeof raw !== "string"\) return false/.test(capGate),
+  "a missing flag defaults to FALSE",
+);
+assert(
+  /value === "true" \|\| value === "1"/.test(capGate),
+  "only an explicit affirmative enables capture - anything else is off",
+);
+assert(
+  (capServer.match(/requireEnabledVisitor\(\)/g) || []).length >= 6,
+  "every visitor action passes through the gate before doing anything",
+);
+assert(
+  /isTestimonialCaptureEnabled\(\)/.test(capServer),
+  "the server actions re-check the gate rather than trusting the UI",
+);
+assert(
+  /disabled=\{!captureAvailable\}/.test(capChoice) && /Coming soon/.test(capChoice),
+  "the choice is visibly unavailable with honest copy when disabled",
+);
+
+// --- Identity and tenancy --------------------------------------------------
+assert(
+  /isAnonymousVisitor\(user\)/.test(capServer),
+  "only an explicitly anonymous visitor may act - permanent accounts are refused",
+);
+// The secret client IS now used in the visitor path, deliberately: the capture
+// RPCs are service_role-only precisely so a browser cannot reach them. What
+// matters is the ORDER - identity is verified with the visitor's own session
+// first, and the trusted client is only used afterwards. That ordering is
+// asserted in the trusted-caller block below.
+assert(
+  /createSecretClient\(\)/.test(capServer) &&
+    capServer.indexOf("getUser()") < capServer.indexOf("createSecretClient()"),
+  "the trusted client is used only AFTER the session identity is verified",
+);
+for (const forbidden of ["p_client_id", "p_experience_id", "p_auth_user_id", "p_provider", "p_submission_key"]) {
+  assert(
+    !new RegExp(forbidden).test(capServer) && !new RegExp(forbidden).test(capMigration),
+    "no RPC accepts " + forbidden + " from the browser",
+  );
+}
+assert(
+  /encode\(gen_random_bytes\(16\), 'hex'\)/.test(capMigration),
+  "the submission key is generated server-side, not supplied",
+);
+assert(
+  /where eu\.auth_user_id = v_uid/.test(capMigration),
+  "tenancy is resolved from the caller's own enrollment",
+);
+
+// --- Database gates --------------------------------------------------------
+assert(
+  /testimonial_capture_enabled boolean not null default false/.test(capMigration),
+  "the per-experience capture gate defaults to false",
+);
+assert(
+  /v_is_anonymous is distinct from true/.test(capMigration),
+  "the RPC guard requires an explicit anonymous identity, refusing NULL",
+);
+assert(
+  /v_enabled is distinct from true/.test(capMigration),
+  "the RPC guard refuses unless capture is explicitly enabled",
+);
+assert(
+  /check \(upload_attempt_count between 0 and 3\)/.test(capMigration),
+  "three attempts maximum is a database constraint, not a client counter",
+);
+assert(
+  /v_attempts >= 3/.test(capMigration),
+  "the retry RPC refuses a fourth attempt",
+);
+assert(
+  /environment_marker is null or environment_marker in \('preview', 'production'\)/.test(capMigration),
+  "the environment marker is constrained to known values",
+);
+assert(
+  /char_length\(v_caption\) > 300/.test(capMigration),
+  "the 300-character caption limit is enforced in the database",
+);
+assert(
+  /v_status <> 'pending'/.test(capMigration),
+  "a caption cannot be edited after moderation",
+);
+for (const fn of [
+  "assert_testimonial_visitor",
+  "create_testimonial_intent",
+  "retry_testimonial_upload",
+  "abandon_testimonial_submission",
+  "update_testimonial_caption",
+]) {
+  assert(
+    new RegExp("revoke all on function public\\." + fn + "[\\s\\S]{0,160}from public, anon").test(capMigration),
+    fn + " revokes PUBLIC and anon execution",
+  );
+  // assert_testimonial_visitor is INTERNAL: it is called from other SECURITY
+  // DEFINER functions, which execute as owner, so it is granted to nobody.
+  // The four visitor-callable RPCs are granted to authenticated.
+  // assert_testimonial_visitor is INTERNAL: called only from other SECURITY
+  // DEFINER functions, which execute as owner, so it is granted to nobody.
+  // The four visitor-callable RPCs are granted to authenticated.
+  //
+  // Plain string matching, not a regex: the escaping for a dotted schema
+  // name kept collapsing through the tooling and produced a pattern that
+  // silently matched nothing.
+  const grantLine = "grant execute on function public." + fn;
+  if (fn === "assert_testimonial_visitor") {
+    assert(
+      !capMigration.includes(grantLine),
+      fn + " is granted to nobody - it is internal only",
+    );
+  } else {
+    // service_role ONLY. Granting these to `authenticated` is exactly what
+    // let a Preview browser skip the environment gate by calling PostgREST
+    // directly; making them unreachable from any browser role is what makes
+    // that gate independent.
+    const at = capMigration.indexOf(grantLine);
+    assert(
+      at !== -1 && capMigration.slice(at, at + 220).includes("to service_role"),
+      fn + " grants execute to service_role only",
+    );
+    assert(
+      at !== -1 && !capMigration.slice(at, at + 220).includes("to authenticated"),
+      fn + " is NOT granted to authenticated",
+    );
+  }
+}
+assert(
+  (capMigration.match(/set search_path = public, pg_catalog/g) || []).length >= 5,
+  "every SECURITY DEFINER RPC pins a safe search_path",
+);
+assert(
+  !/grant[^;]*on public\.testimonial_submissions/i.test(capMigration),
+  "the migration grants no new privilege on the submissions table",
+);
+
+// --- Nothing fabricates an upload -----------------------------------------
+assert(
+  /throw new Error\(\s*"No media provider is configured/.test(capContracts),
+  "the provider accessor refuses rather than returning a stub",
+);
+assert(
+  !/api\.cloudflare\.com|imagedelivery|videodelivery/.test(stripComments(capContracts) + stripComments(capServer) + stripComments(capUi)),
+  "no Cloudflare endpoint or hostname is constructed anywhere in Phase 4B",
+);
+assert(
+  !/uploadUrl\s*[:=]\s*["'`]/.test(capServer),
+  "no mock upload URL is returned",
+);
+assert(
+  !/provider_asset_id|provider_delivery_id|provider_upload_id/.test(stripComments(capServer)),
+  "no provider identifier is written or returned by the visitor actions",
+);
+assert(
+  /Uploading isn't switched on yet/.test(capServer),
+  "the upload step stops truthfully instead of pretending to succeed",
+);
+
+// --- Consent ---------------------------------------------------------------
+for (const line of [
+  "I confirm that no minors appear.",
+  "I confirm that every person shown consented.",
+  "I consent to displaying this submission in the Kameleon experience Gallery if approved.",
+]) {
+  assert(capUi.includes(line), "the consent step includes: " + line);
+}
+assert(
+  /const EMPTY_CONSENT: Consent = \{\s*noMinors: false,\s*subjectsConsented: false,\s*galleryDisplay: false,/.test(capUi),
+  "no consent box is pre-checked",
+);
+assert(
+  /consent\.noMinors && consent\.subjectsConsented && consent\.galleryDisplay/.test(capUi),
+  "submit requires all three attestations explicitly",
+);
+assert(
+  /disabled=\{!consentComplete/.test(capUi),
+  "the submit control is disabled until consent is complete",
+);
+assert(
+  !/marketing|advertis|social media|social-media/i.test(stripComments(capUi)),
+  "no marketing, advertising or social-media reuse consent appears",
+);
+assert(
+  /Terms and Privacy documents are not available yet/.test(capUi),
+  "Terms and Privacy are marked unavailable and launch-blocking",
+);
+assert(
+  /LEGAL_DOCUMENTS_UNAVAILABLE/.test(capServer) && !/p_consent_version/.test(capServer),
+  "no consent version is sent from the application - the RPC resolves it from the registry",
+);
+
+// --- Capture method --------------------------------------------------------
+// Comments stripped: the component explains WHY it uses a native file input
+// instead of MediaRecorder, and naming the thing it avoids must not fail the
+// check that it avoids it.
+assert(
+  !/MediaRecorder|getUserMedia/.test(stripComments(capUi)),
+  "Phase 4B implements no MediaRecorder or getUserMedia path",
+);
+assert(
+  /accept=\{CAPTURE_ACCEPT\[mediaType\]\}/.test(capUi) && /capture=\{CAPTURE_FACING\[mediaType\]\}/.test(capUi),
+  "capture uses a native file input with accept and capture",
+);
+assert(
+  /image: "environment"/.test(capLimits) && /video: "user"/.test(capLimits),
+  "the approved capture facing values are used",
+);
+assert(
+  /URL\.revokeObjectURL/.test(capUi),
+  "local preview object URLs are revoked rather than leaked per retake",
+);
+assert(
+  /event\.target\.value = ""/.test(capUi),
+  "the input is reset so retaking the same file still fires a change",
+);
+
+// --- Product limits --------------------------------------------------------
+const limitChecks = [
+  ["MAX_PHOTO_BYTES = 8 \\* 1024 \\* 1024", "photo 8 MB"],
+  ["MAX_VIDEO_BYTES = 100 \\* 1024 \\* 1024", "video 100 MB"],
+  ["MAX_PHOTO_DIMENSION_PX = 12_000", "photo 12,000 px"],
+  ["MAX_VIDEO_DURATION_SECONDS = 60", "video 60 seconds"],
+  ["MAX_CAPTION_LENGTH = 300", "caption 300"],
+  ["MAX_UPLOAD_ATTEMPTS = 3", "3 attempts"],
+  ["UPLOAD_INTENT_EXPIRY_MINUTES = 30", "30 minute intent expiry"],
+  ["ABANDON_GRACE_MINUTES = 15", "15 minute abandon grace"],
+];
+for (const [re, label] of limitChecks) {
+  assert(new RegExp(re).test(capLimits), "approved limit present: " + label);
+}
+assert(
+  !/image\/svg/.test(capLimits),
+  "SVG is excluded from accepted image formats",
+);
+
+console.log("\n--- Phase 4B corrections: the UI is not the boundary ---\n");
+
+// --- The direct-INSERT bypass is closed -----------------------------------
+assert(
+  /revoke insert on public\.testimonial_submissions from authenticated;/.test(capMigration),
+  "table-level INSERT is revoked, so create_testimonial_intent is the ONLY creation path",
+);
+assert(
+  !/grant insert on public\.testimonial_submissions/i.test(capMigration),
+  "INSERT is never re-granted to a browser role",
+);
+
+// --- Legal gate: an authoritative registry, not a negative check ----------
+assert(
+  /create table if not exists public\.consent_document_versions/.test(capMigration),
+  "consent versions come from an authoritative registry",
+);
+assert(
+  /revoke all on public\.consent_document_versions from public, anon, authenticated/.test(capMigration),
+  "no browser role can read or write the consent registry",
+);
+assert(
+  /consent_document_versions_single_active/.test(capMigration),
+  "at most one consent version can be active, so 'the active version' is unambiguous",
+);
+assert(
+  /check \(not is_active or \(published_at is not null/.test(capMigration),
+  "an active version must point at published documents",
+);
+assert(
+  /select public\.active_consent_version\(\) into v_consent_version/.test(capMigration) &&
+    /if v_consent_version is null then[\s\S]{0,120}raise exception/.test(capMigration),
+  "the intent RPC resolves the version itself and fails closed when none is active",
+);
+assert(
+  !/p_consent_version/.test(capMigration),
+  "no consent version is accepted from a caller",
+);
+// Comments stripped: the code explains what the sentinel WAS and why it went,
+// and that history must not read as the sentinel still being live.
+assert(
+  !/unavailable-pending-legal-documents/.test(stripComments(capServer) + stripComments(capMigration)),
+  "the sentinel version string exists in no executable code - it can never be stored",
+);
+assert(
+  /revoke all on function public\.active_consent_version\(\)\s+from public, anon, authenticated, service_role;/.test(capMigration),
+  "the registry resolver is revoked from every role INCLUDING service_role - a new function is PUBLIC-executable by default, so 'never granted' would not have made it unreachable",
+);
+
+// --- Environment marker: trusted-only, immutable, Production-only Gallery --
+assert(
+  !/p_environment/.test(capMigration) && !/p_environment/.test(capServer),
+  "no environment marker is accepted from the visitor, browser or intent RPC",
+);
+assert(
+  !/VERCEL_ENV/.test(stripComments(capServer)),
+  "the server actions do not derive an environment marker either - even a server-derived one would be asserted by the creator",
+);
+assert(
+  /true, true,\s*\n\s*(--[^\n]*\n\s*)*null\s*\n?\s*\)/.test(capMigration),
+  "a new intent begins with NO environment marker",
+);
+assert(
+  /check \(validation_status <> 'valid' or environment_marker is not null\)/.test(capMigration),
+  "nothing can become valid without a trusted environment marker",
+);
+assert(
+  /s\.environment_marker = 'production'/.test(capMigration),
+  "the public Gallery requires the production marker",
+);
+assert(
+  /create trigger testimonial_submissions_01_protect_capture_columns/.test(capMigration),
+  "a guard protects the new columns from untrusted writes",
+);
+assert(
+  /the environment marker is immutable once set/.test(capMigration),
+  "even trusted code may stamp the marker only once",
+);
+
+// --- Concurrency and state guards ----------------------------------------
+assert(
+  (capMigration.match(/for update;/g) || []).length === 3,
+  "retry, abandon and caption all take a row lock before deciding",
+);
+assert(
+  /v_expires \+ interval '15 minutes' < now\(\)/.test(capMigration),
+  "expiry plus the 15-minute grace is enforced",
+);
+for (const [pattern, label] of [
+  ["v_validation = 'valid'", "a validated submission cannot be retried"],
+  ["v_moderation <> 'pending'", "a moderated submission cannot be retried"],
+  ["v_deleted is not null", "a provider-deleted submission cannot be retried"],
+  ["v_status <> 'failed'", "only a failed upload can be retried"],
+]) {
+  assert(capMigration.includes(pattern), label);
+}
+assert(
+  /if v_upload not in \('initiated', 'uploaded'\) then/.test(capMigration),
+  "caption edits are limited to the explicitly approved upload states",
+);
+
+// --- Internal guard is not directly callable ------------------------------
+assert(
+  // String matching, not a regex: an escaped newline in the pattern kept
+  // being written as a real newline and made the literal unterminated.
+  capMigration.includes(
+    "revoke all on function public.assert_testimonial_visitor(uuid, uuid)",
+  ) &&
+    capMigration
+      .slice(capMigration.indexOf("revoke all on function public.assert_testimonial_visitor"))
+      .slice(0, 200)
+      .includes("from public, anon, authenticated, service_role"),
+  "the internal visitor guard is revoked from every role, including service_role",
+);
+assert(
+  !/grant execute on function public\.assert_testimonial_visitor/.test(capMigration),
+  "the internal guard is granted to nobody",
+);
+
+// --- TESTIMONIAL_SUBMITTED is unreachable, by contract --------------------
+// Comments stripped: the component documents why the prop was removed.
+assert(
+  !/onSubmitted/.test(stripComments(capUi)),
+  "the capture component has no success callback at all",
+);
+assert(
+  !/TESTIMONIAL_SUBMITTED/.test(stripComments(capPage)),
+  "no code path in Phase 4B dispatches TESTIMONIAL_SUBMITTED",
+);
+assert(
+  /TESTIMONIAL_SUBMITTED/.test(capActionsUnion),
+  "the action remains declared for Phase 4C, but unreachable today",
+);
+assert(
+  !/onSubmitted/.test(capPage),
+  "the page passes no success callback",
+);
+
+// --- Three independent gates, each blocking both paths -------------------
+assert(
+  /isTestimonialCaptureEnabled\(\)/.test(capServer),
+  "gate 1 (environment) blocks the Server Actions",
+);
+
+// --- The trusted-caller boundary ------------------------------------------
+assert(
+  !/grant execute[^;]*to authenticated/.test(capMigration),
+  "no capture RPC is executable by authenticated - a browser cannot reach any of them",
+);
+assert(
+  (capMigration.match(/grant execute[^;]*to service_role/g) || []).length === 5,
+  "exactly the five visitor-facing RPCs are granted, and only to service_role (four mutators plus the status read that replaced browser SELECT on the view)",
+);
+assert(
+  (capMigration.match(/p_visitor_id uuid/g) || []).length === 6,
+  "every capture function takes the verified visitor id explicitly",
+);
+assert(
+  /v_uid          uuid := p_visitor_id/.test(capMigration),
+  "the guard re-resolves the supplied id rather than trusting it",
+);
+assert(
+  /select u\.is_anonymous into v_is_anonymous from auth\.users u where u\.id = v_uid/.test(capMigration),
+  "the supplied id is looked up in auth.users, not taken on the caller's word",
+);
+assert(
+  /v_is_anonymous is distinct from true/.test(capMigration),
+  "the re-resolved identity must be explicitly anonymous",
+);
+assert(
+  /createSecretClient\(\)/.test(capServer),
+  "the Server Actions invoke the RPCs through the trusted client",
+);
+assert(
+  capServer.indexOf("isAnonymousVisitor(user)") < capServer.indexOf("createSecretClient()"),
+  "identity is verified with the visitor's own session BEFORE the trusted client is used",
+);
+assert(
+  /p_visitor_id: gate\.visitorId/.test(capServer),
+  "the id passed to the RPC is the one that was verified, never a browser value",
+);
+assert(
+  !/p_visitor_id: [^g]/.test(capServer),
+  "no visitor id reaches an RPC from any other source",
+);
+assert(
+  /coalesce\(auth\.uid\(\), new\.auth_user_id\)/.test(capMigration),
+  "submission ownership survives a trusted insert, where auth.uid() is null",
+);
+assert(
+  /a testimonial submission requires an owning identity/.test(capMigration),
+  "an unattributable submission is refused outright",
+);
+
+// --- Consent predicate, verbatim ------------------------------------------
+assert(
+  (capMigration.match(/published_at is not null/g) || []).length >= 2,
+  "both the registry constraint and the resolver require published_at IS NOT NULL",
+);
+assert(
+  !/is_active and v\.published_at is null/.test(capMigration),
+  "the resolver never accepts an unpublished version",
+);
+assert(
+  /terms_url   ~ .\^https:/.test(capMigration) && /privacy_url ~ .\^https:/.test(capMigration),
+  "an active version requires real https:// document URLs, not merely non-empty strings",
+);
+
+// --- Environment stamping: exactly one trusted transition -----------------
+assert(
+  /if not trusted then[\s\S]{0,320}environment_marker is distinct from old\.environment_marker/.test(capMigration),
+  "an untrusted caller cannot change the environment marker at all",
+);
+assert(
+  /old\.environment_marker is not null[\s\S]{0,160}is distinct from old\.environment_marker[\s\S]{0,160}immutable once set/.test(capMigration),
+  "even a trusted caller may stamp the marker only once - NULL to value, never value to value",
+);
+assert(
+  /auth\.role\(\) = 'service_role' or auth\.role\(\) is null/.test(capMigration),
+  "the trusted tier is the established service_role-or-no-JWT test, so the future validator is not blocked",
+);
+assert(
+  /v_enabled is distinct from true/.test(capMigration),
+  "gate 2 (database) blocks direct RPC calls",
+);
+assert(
+  /if v_consent_version is null then/.test(capMigration),
+  "gate 3 (legal registry) blocks direct RPC calls",
+);
+assert(
+  /testimonial_capture_enabled boolean not null default false/.test(capMigration) &&
+    !/update public\.experiences set testimonial_capture_enabled = true/.test(capMigration),
+  "the database gate defaults false and this migration enables it nowhere",
+);
+
+// --- The status read moved behind the trusted boundary too -----------------
+// This was the last browser-reachable surface in the feature. The view is not
+// security_invoker, so it read the base table as OWNER with RLS bypassed, and
+// its auth.uid() predicate enforced OWNERSHIP but never ANONYMITY - a
+// permanent account with an enrollment row could have read status straight
+// from PostgREST, skipping isAnonymousVisitor() entirely.
+assert(
+  /revoke all on public\.testimonial_my_submissions from public, anon, authenticated;/.test(capMigration) &&
+    !/grant\s+select\s+on\s+public\.testimonial_my_submissions/i.test(capMigration),
+  "the status view is revoked from every browser role and re-granted to none",
+);
+assert(
+  // Comments stripped: section 8 EXPLAINS that security_invoker is not set,
+  // and that explanation must not read as the setting being applied.
+  !/security_invoker/i.test(stripSqlComments(capMigration)),
+  "no view has its security mode flipped, so the revoke is what closes the view - not a mode change",
+);
+assert(
+  /create or replace function public\.list_my_testimonial_submissions\(p_visitor_id uuid\)/.test(capMigration),
+  "the status read is served by a function that takes the verified visitor id explicitly",
+);
+assert(
+  /select u\.is_anonymous into v_is_anonymous from auth\.users u where u\.id = p_visitor_id;/.test(capMigration) &&
+    /if v_is_anonymous is distinct from true then/.test(capMigration),
+  "the status read re-resolves the id against auth.users and demands an explicit true - the rule the view could not express",
+);
+assert(
+  /join public\.experience_users eu on eu\.id = s\.experience_user_id\s+where eu\.auth_user_id = p_visitor_id/.test(capMigration),
+  "the status read confines rows to the caller's own enrollment",
+);
+for (const forbidden of ["auth_user_id", "experience_user_id", "provider_asset_id",
+                         "provider_delivery_id", "reviewed_by", "moderation_note"]) {
+  const at = capMigration.indexOf("create or replace function public.list_my_testimonial_submissions");
+  const body = capMigration.slice(at, capMigration.indexOf("end $fn$;", at));
+  assert(
+    !new RegExp("s\." + forbidden + "\b").test(body),
+    `the status read never selects ${forbidden}`,
+  );
+}
+
+// The Server Action must reach it through the trusted client, using the id it
+// verified - and must NOT gate a status read on the capture feature flag.
+assert(
+  /list_my_testimonial_submissions/.test(capServer) &&
+    !/from\("testimonial_my_submissions"\)/.test(capServer),
+  "the Server Action reads status through the RPC, not through the view",
+);
+assert(
+  /requireAnonymousVisitor\(\)/.test(capServer),
+  "status reads verify identity without requiring the capture feature gate",
 );
 
 console.log(

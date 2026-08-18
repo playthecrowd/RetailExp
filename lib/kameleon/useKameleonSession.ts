@@ -23,10 +23,12 @@ export function useKameleonSession(): [KameleonSessionState, React.Dispatch<Kame
       arAvailable: state.arAvailable,
       authed: state.authed,
       arCompleted: state.arCompleted,
+      testimonialSubmitted: state.testimonialSubmitted,
       enteredJourneyThisSession: state.enteredJourneyThisSession,
     });
   }, [
     state.hydrated,
+    state.testimonialSubmitted,
     state.commercialCompleted,
     state.arAvailable,
     state.authed,

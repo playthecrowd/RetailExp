@@ -48,8 +48,10 @@ export function kameleonReducer(
         screen = "tap-to-begin";
       } else if (!next.authed) {
         screen = "quick-account";
-      } else if (!next.arCompleted) {
-        screen = "ar-permission";
+      } else if (!next.arCompleted && !next.testimonialSubmitted) {
+        // Either route satisfies the opening gate, so a visitor who shared a
+        // story is not sent back to AR on reload.
+        screen = "experience-choice";
       } else {
         screen = postOpeningScreen(next);
       }
@@ -68,7 +70,26 @@ export function kameleonReducer(
 
     case "COMPLETE_ACCOUNT": {
       const authedState = { ...state, authed: true };
-      return { ...authedState, screen: "ar-permission" };
+      return { ...authedState, screen: "experience-choice" };
+    }
+
+    // The ONLY route into the AR screen. Its component, callbacks, rewards and
+    // fallback behaviour are unchanged; this just moves the user in front of it.
+    case "CHOOSE_AR":
+      return { ...state, screen: "ar-permission" };
+
+    case "CHOOSE_TESTIMONIAL":
+      return { ...state, screen: "testimonial-capture" };
+
+    // Cancelling returns to the choice, so AR is still reachable afterwards.
+    case "CANCEL_TESTIMONIAL":
+      return { ...state, screen: "experience-choice" };
+
+    case "TESTIMONIAL_SUBMITTED": {
+      // Deliberately does NOT set arCompleted and awards no reward. Sharing a
+      // story opens the journey on its own terms; it is not AR completion.
+      const submitted = { ...state, testimonialSubmitted: true };
+      return { ...submitted, screen: postOpeningScreen(submitted) };
     }
 
     case "ENTER_JOURNEY":

@@ -27,7 +27,12 @@ import type { ViewerProgress } from "./pathway-model";
 export type KameleonScreen =
   | "tap-to-begin"
   | "commercial"
+  // Phase 4B: a choice between the AR experience and sharing a testimonial.
+  // Inserted BEFORE ar-permission so the AR screen, its component, callbacks,
+  // rewards and fallback behaviour are all untouched.
+  | "experience-choice"
   | "ar-permission"
+  | "testimonial-capture"
   | "quick-account"
   | "resume-choice"
   | "choose-path"
@@ -52,6 +57,14 @@ export interface OpeningGateState {
    * implies AR is done — HYDRATE needs its own flag to resume correctly).
    */
   arCompleted: boolean;
+  /**
+   * True once a testimonial has been successfully submitted this session.
+   *
+   * Deliberately SEPARATE from arCompleted. Sharing a story is not doing AR:
+   * it must not set the AR flag and must not award any AR reward. Either flag
+   * opens the journey, but they are never conflated.
+   */
+  testimonialSubmitted: boolean;
   /** True once the viewer has passed the resume-choice gate this session. */
   enteredJourneyThisSession: boolean;
 }
@@ -62,6 +75,7 @@ export function createInitialOpeningGate(): OpeningGateState {
     arAvailable: true,
     authed: false,
     arCompleted: false,
+    testimonialSubmitted: false,
     enteredJourneyThisSession: false,
   };
 }

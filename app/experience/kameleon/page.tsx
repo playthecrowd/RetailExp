@@ -19,6 +19,9 @@ import { SelectedPathPreview } from "@/components/kameleon/screens/SelectedPathP
 import { JourneyPlayer } from "@/components/kameleon/JourneyPlayer";
 import { StoryPathMap } from "@/components/kameleon/screens/StoryPathMap";
 import { JourneyCompletion } from "@/components/kameleon/screens/JourneyCompletion";
+import { ExperienceChoice } from "@/components/kameleon/screens/ExperienceChoice";
+import { TestimonialCapture } from "@/components/kameleon/testimonials/TestimonialCapture";
+import { isCaptureAvailableAction } from "@/app/experience/kameleon/testimonial-actions";
 
 /**
  * The embedded Snap Camera Kit AR experience must never run during SSR (it
@@ -50,6 +53,26 @@ export default function KameleonExperiencePage() {
   const [state, dispatch] = useKameleonSession();
   const [contentLoaded, setContentLoaded] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
+
+  // Server-evaluated feature gate. Defaults FALSE and stays false unless the
+  // server says otherwise, so a failed lookup degrades to "coming soon" rather
+  // than offering a flow whose actions would reject anyway. Hiding is never
+  // the control - every testimonial action re-checks the gate server-side.
+  const [captureAvailable, setCaptureAvailable] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    isCaptureAvailableAction()
+      .then((enabled) => {
+        if (active) setCaptureAvailable(enabled);
+      })
+      .catch(() => {
+        if (active) setCaptureAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     document.addEventListener("visibilitychange", handleKameleonVisibilityChange);
@@ -114,6 +137,23 @@ export default function KameleonExperiencePage() {
             onComplete={() => dispatch({ type: "COMMERCIAL_COMPLETE" })}
             onContinue={() => dispatch({ type: "CONTINUE_TO_ACCOUNT" })}
           />
+        );
+
+      case "experience-choice":
+        return (
+          <ExperienceChoice
+            captureAvailable={captureAvailable}
+            onChooseAr={() => dispatch({ type: "CHOOSE_AR" })}
+            onChooseTestimonial={() => dispatch({ type: "CHOOSE_TESTIMONIAL" })}
+          />
+        );
+
+      case "testimonial-capture":
+        return (
+          // TESTIMONIAL_SUBMITTED is intentionally NOT dispatched anywhere in
+          // Phase 4B. It may fire only after a real Cloudflare upload and
+          // authoritative provider confirmation, neither of which exists yet.
+          <TestimonialCapture onCancel={() => dispatch({ type: "CANCEL_TESTIMONIAL" })} />
         );
 
       case "ar-permission":
