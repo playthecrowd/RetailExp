@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 18, `exactly 18 migration files exist (found ${files.length})`);
+assert(files.length === 19, `exactly 19 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -1156,6 +1156,204 @@ assert(
 assert(
   !/security_invoker/i.test(viewExec),
   "security_invoker is left at its existing value rather than being flipped",
+);
+
+// --- Phase 4B visitor capture surface ---------------------------------------
+
+const captureMigrationFile = "20260819103000_testimonial_capture_intents.sql";
+assert(files.includes(captureMigrationFile), `the capture migration exists (${captureMigrationFile})`);
+
+const capSql = files.includes(captureMigrationFile)
+  ? readFileSync(join(migrationsDir, captureMigrationFile), "utf8")
+  : "";
+const capExec = capSql.replace(/--[^\n]*/g, "").replace(/comment on [\s\S]*?;/gi, "");
+
+assert(
+  /testimonial_capture_enabled boolean not null default false/.test(capExec),
+  "the per-experience capture gate defaults to false, so applying this enables nothing",
+);
+assert(
+  /check \(upload_attempt_count between 0 and 3\)/.test(capExec),
+  "the three-attempt cap is a database constraint",
+);
+assert(
+  /environment_marker in \('preview', 'production'\)/.test(capExec),
+  "the environment marker is constrained to known values",
+);
+assert(
+  !/grant[^;]*on public\.testimonial_submissions/i.test(capExec),
+  "no new table privilege is granted on testimonial_submissions",
+);
+assert(
+  !/security_invoker/i.test(capExec),
+  "no view security mode is flipped",
+);
+assert(
+  /create or replace view public\.testimonial_my_submissions/.test(capExec) &&
+    !/drop view/i.test(capExec),
+  "the visitor status view is superseded with CREATE OR REPLACE, never dropped",
+);
+assert(
+  /revoke all on public\.testimonial_my_submissions from public, anon, authenticated;/.test(capExec),
+  "the visitor status view is revoked from every browser role",
+);
+assert(
+  !/grant\s+select\s+on\s+public\.testimonial_my_submissions/i.test(capExec),
+  "the visitor status view is granted to NO browser role - status reads go through the trusted tier",
+);
+for (const forbidden of [
+  "auth_user_id",
+  "experience_user_id",
+  "provider_asset_id",
+  "provider_delivery_id",
+  "email",
+  "phone_e164",
+  "display_name",
+]) {
+  // Scoped to the SELECT list. The view WHERE clause legitimately joins on
+  // s.experience_user_id to restrict rows to the caller; that is the row
+  // filter, not a selected column, and must not read as an exposure.
+  const viewStart = capExec.indexOf("create or replace view public.testimonial_my_submissions");
+  const viewBlock = capExec.slice(
+    viewStart,
+    capExec.indexOf("from public.testimonial_submissions s", viewStart),
+  );
+  assert(
+    !new RegExp("s\\." + forbidden + "\\b").test(viewBlock),
+    `the visitor status view never selects ${forbidden}`,
+  );
+}
+assert(
+  (capExec.match(/set search_path = public, pg_catalog/g) || []).length >= 5,
+  "every SECURITY DEFINER function pins a safe search_path",
+);
+const newFunctions = [
+  "assert_testimonial_visitor",
+  "active_consent_version",
+  "create_testimonial_intent",
+  "retry_testimonial_upload",
+  "abandon_testimonial_submission",
+  "update_testimonial_caption",
+];
+for (const fn of newFunctions) {
+  const revokeLine = "revoke all on function public." + fn;
+  const at = capExec.indexOf(revokeLine);
+  assert(
+    at !== -1 && /from public, anon/.test(capExec.slice(at, at + 200)),
+    `PUBLIC and anon execution is revoked on ${fn}`,
+  );
+}
+
+// --- Phase 4B trusted-caller contract ---------------------------------------
+// The grants ARE the contract. Every gate inside the capture RPCs is optional
+// if a browser role can reach the table or the functions directly, so these
+// assert the boundary itself rather than the logic behind it.
+
+assert(
+  /revoke insert on public\.testimonial_submissions from authenticated;/.test(capExec),
+  "direct INSERT is revoked from authenticated, so the RPC is the only creation path",
+);
+
+const captureRpcs = [
+  "create_testimonial_intent",
+  "retry_testimonial_upload",
+  "abandon_testimonial_submission",
+  "update_testimonial_caption",
+  // The status read joined them when browser SELECT on the view was revoked.
+  "list_my_testimonial_submissions",
+];
+for (const fn of captureRpcs) {
+  const grants = capExec.match(
+    new RegExp("grant execute on function public\\." + fn + "[^;]*;", "g"),
+  ) || [];
+  assert(grants.length === 1, `${fn} is granted exactly once`);
+  assert(
+    grants.every((g) => /to service_role;\s*$/.test(g)),
+    `${fn} is granted to service_role and to no other role`,
+  );
+}
+
+// The two internal helpers are callable by nobody at all — they run as owner
+// from inside the RPCs, so not even the trusted tier needs EXECUTE. Each must
+// be revoked from service_role EXPLICITLY as well: "never granted" is not the
+// same as "not callable", because PostgreSQL hands EXECUTE to PUBLIC by
+// default and service_role inherits it along with everyone else.
+for (const fn of ["assert_testimonial_visitor", "active_consent_version"]) {
+  assert(
+    !new RegExp("grant execute on function public\\." + fn).test(capExec),
+    `${fn} is granted to nobody, not even service_role`,
+  );
+  const revoke = capExec.match(
+    new RegExp("revoke all on function public\\." + fn + "\\([^)]*\\)[^;]*;"),
+  );
+  assert(
+    revoke !== null && /service_role/.test(revoke[0]),
+    `${fn} revokes the default PUBLIC grant from service_role too`,
+  );
+}
+
+// --- No new function may keep PostgreSQL's default PUBLIC EXECUTE ----------
+// Every function this migration creates or replaces, including the trigger
+// functions, must name PUBLIC in a revoke. A missing entry here is a function
+// that every browser role can call the moment the migration is applied.
+const declaredFunctions = [
+  ...capExec.matchAll(/create or replace function public\.([a-z_]+)\s*\(/g),
+].map((m) => m[1]);
+assert(declaredFunctions.length >= 8, "the migration's function list was found for the PUBLIC sweep");
+for (const fn of new Set(declaredFunctions)) {
+  const revokes = capExec.match(
+    new RegExp("revoke all on function public\\." + fn + "\\([^)]*\\)[^;]*;", "g"),
+  ) || [];
+  assert(
+    revokes.length > 0 && revokes.some((r) => /\bpublic\b/.test(r.split("from")[1] || "")),
+    `${fn} explicitly revokes the default PUBLIC EXECUTE grant`,
+  );
+}
+
+// --- The environment marker can never be set at creation -------------------
+assert(
+  /new\.environment_marker := null;/.test(capExec),
+  "the insert guard clears the environment marker, so 'NULL -> value once' cannot be sidestepped at INSERT",
+);
+
+// --- The insert guard must keep running for the trusted inserter ------------
+// 20260817160000 opened protect_testimonial_insert() with an early return for
+// service_role / no-JWT callers. 20260819103000 removes it, and that removal
+// is load-bearing twice over: without it create_testimonial_intent() never
+// stamps upload_expires_at, so the "reuse a live intent" filter
+// (upload_expires_at > now()) is never true for NULL and idempotency fails
+// OPEN — every reload mints another submission. It also stops trusted code
+// creating a submission that is already uploaded, valid or provider-attached.
+// Restoring the early return would reintroduce both, silently.
+const insertGuardStart = capExec.indexOf("create or replace function public.protect_testimonial_insert()");
+const insertGuardBody = capExec.slice(
+  insertGuardStart,
+  capExec.indexOf("create or replace function public.assert_testimonial_visitor", insertGuardStart),
+);
+
+assert(insertGuardStart !== -1, "the insert guard is superseded by this migration");
+assert(
+  !/if auth\.role\(\) = 'service_role' or auth\.role\(\) is null then\s*return new;/.test(insertGuardBody),
+  "the insert guard no longer short-circuits for the trusted inserter",
+);
+assert(
+  /new\.auth_user_id := coalesce\(auth\.uid\(\), new\.auth_user_id\);/.test(insertGuardBody),
+  "ownership survives a trusted insert, where auth.uid() is null",
+);
+assert(
+  /if new\.auth_user_id is null then/.test(insertGuardBody) &&
+    /raise exception/.test(insertGuardBody),
+  "an insert that would leave no owner is refused outright",
+);
+assert(
+  /new\.upload_expires_at\s*:= now\(\) \+ interval '30 minutes';/.test(insertGuardBody),
+  "the guard stamps the upload window that intent idempotency depends on",
+);
+
+// --- The Gallery is Production-only ----------------------------------------
+assert(
+  /and s\.environment_marker = 'production'/.test(capExec),
+  "the public Gallery view filters on the production environment marker",
 );
 
 console.log(`\n${files.length} migration files checked.`);

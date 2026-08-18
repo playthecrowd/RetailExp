@@ -764,6 +764,90 @@ values
    'uploaded', now(), 'valid', now(),
    'aa-provider','aa-asset-b1','aa-delivery-b1', now(), true, now(), now(), 'AA other tenant caption');
 
+-- A fourth same-tenant row. Section 17 needs a submission whose environment
+-- marker is still NULL, because every other fixture is promoted below and
+-- therefore already carries one.
+--
+-- It is promoted only PART of the way (see the second UPDATE below): uploaded
+-- and provider-complete, but still validation_status 'pending' and unmarked.
+-- That precise state is what isolates the environment constraint. A row left
+-- fully raw would instead trip protect_testimonial_update()'s "validation
+-- requires a completed provider upload with an asset id" - a 42501 raised by
+-- the TRIGGER before any CHECK is ever evaluated - and section 17 would then
+-- be asserting the wrong failure for the right-looking reason.
+insert into public.testimonial_submissions
+  (id, client_id, experience_id, experience_user_id, auth_user_id,
+   media_type, client_submission_key, consent_version, consented_at,
+   attested_no_minors, attested_subjects_consented)
+values
+  ('00000000-0000-4000-8000-00000000fa04','00000000-0000-4000-8000-00000000ca01',
+   '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+   '00000000-0000-4000-8000-0000000000f1',
+   'image','aa-key-4','v1', now(), true, true);
+
+-- ---------------------------------------------------------------------------
+-- FIXTURE PROMOTION — required by 20260819103000 section 2d.
+--
+-- The INSERTs above are written as if they land ready-made: uploaded, valid,
+-- provider identifiers attached. That was true while protect_testimonial_insert()
+-- opened with a trusted-path early return, which let an ambient inserter write
+-- those columns verbatim.
+--
+-- 20260819103000 removes that early return, so the guard now runs for EVERY
+-- inserter. Each row above therefore lands as a fresh pending intent with its
+-- provider, validation, moderation and upload columns reset - and sections 10,
+-- 11, 14 and 17 would cascade into failure on state that no longer exists.
+--
+-- Promoting with an explicit UPDATE is also the more honest fixture: it is the
+-- same two-step the real system performs, where creation and trusted
+-- validation are genuinely separate events.
+--
+-- The environment marker is set HERE because the new
+-- testimonial_valid_requires_environment CHECK forbids validation_status
+-- 'valid' without one. fa03 is marked 'preview' precisely so section 17 can
+-- prove a Preview submission never reaches the Production Gallery.
+update public.testimonial_submissions s
+-- upload_expires_at is deliberately NOT touched: the column is NOT NULL, so
+-- clearing it here would abort the whole transaction at fixture time. It is
+-- irrelevant once upload_status is 'uploaded'.
+set upload_status                 = 'uploaded',
+    uploaded_at                   = now(),
+    validation_status             = 'valid',
+    validated_at                  = now(),
+    provider                      = 'aa-provider',
+    -- Derived from the id so each stays unique, matching the per-row values
+    -- the INSERTs above intended: aa-asset-fa01, aa-delivery-fb01, and so on.
+    provider_asset_id             = 'aa-asset-' || right(s.id::text, 4),
+    provider_delivery_id          = 'aa-delivery-' || right(s.id::text, 4),
+    provider_draft_cleared_at     = now(),
+    provider_signed_urls_required = true,
+    delivery_ready_at             = now(),
+    environment_marker            = case s.id
+      when '00000000-0000-4000-8000-00000000fa03'::uuid then 'preview'
+      else 'production'
+    end
+where s.id in (
+  '00000000-0000-4000-8000-00000000fa01',
+  '00000000-0000-4000-8000-00000000fa02',
+  '00000000-0000-4000-8000-00000000fa03',
+  '00000000-0000-4000-8000-00000000fb01'
+);
+
+-- fa04: uploaded and provider-complete, but NOT validated and NOT marked.
+-- validation_status stays 'pending', which satisfies
+-- testimonial_validation_requires_provider_asset on its own, so the row is
+-- legal while leaving both of section 17's subjects untouched.
+update public.testimonial_submissions s
+set upload_status                 = 'uploaded',
+    uploaded_at                   = now(),
+    provider                      = 'aa-provider',
+    provider_asset_id             = 'aa-asset-fa04',
+    provider_delivery_id          = 'aa-delivery-fa04',
+    provider_draft_cleared_at     = now(),
+    provider_signed_urls_required = true,
+    delivery_ready_at             = now()
+where s.id = '00000000-0000-4000-8000-00000000fa04';
+
 -- ===========================================================================
 -- SECTION 9b — cross-client leakage through the trusted read path
 -- ===========================================================================
@@ -837,8 +921,14 @@ begin
 
   -- Nothing above changed anything.
   perform pg_temp.act_as_ambient();
+  -- Scoped to the three moderation-eligible fixtures by id. A bare client-wide
+  -- count would also sweep in fa04, the unpromoted pending intent, and would
+  -- then be measuring the fixture set rather than the effect of the denials.
   select count(*) into n from public.testimonial_submissions
-  where client_id = '00000000-0000-4000-8000-00000000ca01' and moderation_status = 'pending';
+  where moderation_status = 'pending'
+    and id in ('00000000-0000-4000-8000-00000000fa01',
+               '00000000-0000-4000-8000-00000000fa02',
+               '00000000-0000-4000-8000-00000000fa03');
   perform pg_temp.record('10 moderation', 'all three remain pending after the denied attempts', '3', n::text);
 
   -- --- OWNER approves ----------------------------------------------------
@@ -911,6 +1001,581 @@ begin
     and column_name in ('auth_user_id','experience_user_id','email','phone_e164',
                         'reviewed_by','moderation_note','rejection_reason','consent_version');
   perform pg_temp.record('11 transitions', 'gallery view exposes no reviewer or contact fields', '0', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 12 — Phase 4B visitor capture surface
+--
+-- REQUIRES migration 20260819103000. Fails by design until it is applied.
+-- ===========================================================================
+do $$
+declare n int; v text;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- --- gate defaults ------------------------------------------------------
+  select count(*) into n from information_schema.columns
+  where table_schema='public' and table_name='experiences'
+    and column_name='testimonial_capture_enabled' and column_default='false';
+  perform pg_temp.record('12 capture', 'per-experience capture gate exists and defaults false', '1', n::text);
+
+  select count(*) into n from public.experiences where testimonial_capture_enabled;
+  perform pg_temp.record('12 capture', 'capture is enabled for NO experience yet', '0', n::text);
+
+  -- --- new columns --------------------------------------------------------
+  foreach v in array array['upload_attempt_count','environment_marker'] loop
+    select count(*) into n from information_schema.columns
+    where table_schema='public' and table_name='testimonial_submissions' and column_name=v;
+    perform pg_temp.record('12 capture', 'testimonial_submissions has ' || v, '1', n::text);
+  end loop;
+
+  -- --- function privileges ------------------------------------------------
+  -- Direct PostgREST execution must be impossible for BOTH browser roles.
+  -- This is the check that proves the environment gate is independent: if
+  -- `authenticated` could execute these, a Preview browser could skip the
+  -- Server Action entirely once the shared database gate was enabled.
+  -- Includes the trigger functions and the status-read RPC. PostgreSQL grants
+  -- EXECUTE to PUBLIC by default on every new function, so each one needs an
+  -- explicit revoke; "we never granted it" does not make it unreachable.
+  foreach v in array array[
+    'assert_testimonial_visitor','active_consent_version','create_testimonial_intent',
+    'retry_testimonial_upload','abandon_testimonial_submission','update_testimonial_caption',
+    'list_my_testimonial_submissions',
+    'protect_testimonial_capture_columns','protect_testimonial_insert'
+  ] loop
+    perform pg_temp.record('12 capture', v || ': authenticated may NOT execute', 'false',
+      has_function_privilege('authenticated', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('12 capture', v || ': anon may NOT execute', 'false',
+      has_function_privilege('anon', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('12 capture', v || ': PUBLIC may NOT execute', 'false',
+      has_function_privilege('public', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('12 capture', v || ' is SECURITY DEFINER', 'true',
+      p.prosecdef::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+  end loop;
+
+  -- The trusted tier retains exactly the five visitor-facing RPCs: four that
+  -- mutate, plus the status read that replaced direct view access.
+  foreach v in array array['create_testimonial_intent','retry_testimonial_upload',
+                           'abandon_testimonial_submission','update_testimonial_caption',
+                           'list_my_testimonial_submissions'] loop
+    perform pg_temp.record('12 capture', v || ': service_role MAY execute', 'true',
+      has_function_privilege('service_role', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+  end loop;
+
+  -- The internal helpers are callable by nobody at all, not even service_role:
+  -- both are reached as OWNER from inside the RPCs above.
+  foreach v in array array['assert_testimonial_visitor','active_consent_version'] loop
+    perform pg_temp.record('12 capture', v || ' is callable by nobody, including service_role', 'false',
+      has_function_privilege('service_role', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+  end loop;
+
+  -- --- the status view is no longer browser-reachable ---------------------
+  foreach v in array array['anon','authenticated'] loop
+    perform pg_temp.record('12 capture', v || ' has NO select on testimonial_my_submissions', 'false',
+      has_table_privilege(v,'public.testimonial_my_submissions','SELECT')::text);
+  end loop;
+
+  -- It is kept rather than dropped, and keeps its ownership predicate as
+  -- defence in depth against a future privilege drift.
+  perform pg_temp.record('12 capture', 'the status view still exists', '1',
+    (select count(*) from information_schema.views
+     where table_schema='public' and table_name='testimonial_my_submissions')::text);
+  perform pg_temp.record('12 capture', 'the status view still filters on auth.uid()', 'true',
+    (pg_get_viewdef('public.testimonial_my_submissions'::regclass, true)
+      like '%auth.uid()%')::text);
+
+  -- --- the visitor status view stays sanitized ----------------------------
+  foreach v in array array['auth_user_id','experience_user_id','provider_asset_id',
+                           'provider_delivery_id','email','phone_e164','client_id'] loop
+    select count(*) into n from information_schema.columns
+    where table_schema='public' and table_name='testimonial_my_submissions' and column_name=v;
+    perform pg_temp.record('12 capture', 'my_submissions does NOT expose ' || v, '0', n::text);
+  end loop;
+
+  foreach v in array array['upload_expires_at','upload_attempt_count'] loop
+    select count(*) into n from information_schema.columns
+    where table_schema='public' and table_name='testimonial_my_submissions' and column_name=v;
+    perform pg_temp.record('12 capture', 'my_submissions exposes ' || v, '1', n::text);
+  end loop;
+end $$;
+
+-- ===========================================================================
+-- SECTION 13 — capture RPCs refuse the wrong callers
+-- ===========================================================================
+do $$
+begin
+  -- Every check in this section runs as a BROWSER role, which post-4B holds
+  -- no EXECUTE on these RPCs at all. So the 42501 each one expects is now
+  -- raised by PRIVILEGE, before the function body runs - not by the capture
+  -- gate or the ownership guard inside it. That is the stronger result, but
+  -- it means these checks no longer exercise the in-function gates; section
+  -- 12 proves the grants, and the in-function gates are reachable only from
+  -- the trusted tier. Do not read a PASS here as evidence the capture gate
+  -- fired.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('13 capture rpc', 'anonymous visitor refused while capture is disabled',
+    'blocked-42501',
+    $q$select public.create_testimonial_intent('00000000-0000-4000-8000-0000000000f1'::uuid, 'image'::public.testimonial_media_type)$q$);
+
+  -- A permanent account is refused regardless of the gate.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f2');
+  perform pg_temp.try_sql('13 capture rpc', 'permanent account refused',
+    'blocked-42501',
+    $q$select public.create_testimonial_intent('00000000-0000-4000-8000-0000000000f1'::uuid, 'image'::public.testimonial_media_type)$q$);
+
+  -- Signed out.
+  perform pg_temp.act_as_anon();
+  perform pg_temp.try_sql('13 capture rpc', 'signed-out caller refused',
+    'blocked-42501',
+    $q$select public.create_testimonial_intent('00000000-0000-4000-8000-0000000000f1'::uuid, 'image'::public.testimonial_media_type)$q$);
+
+  -- NOTE: this section previously carried two more checks - "unknown
+  -- environment marker rejected" and "empty consent version rejected", both
+  -- expecting 22023. They were written against the SUPERSEDED three-argument
+  -- signature, in which the caller supplied the marker and the consent
+  -- version. The corrected RPC takes neither: the marker is never set at
+  -- creation, and the version is resolved from the registry. With no such
+  -- parameters to malform, both calls were byte-identical to the checks above
+  -- and could only ever return 42501, so they were removed rather than left
+  -- asserting an unreachable SQLSTATE. What they were reaching for is covered
+  -- properly by section 16 (a caller cannot supply either value at all) and
+  -- section 17 (the marker cannot be self-asserted).
+
+  -- Cross-visitor access: a submission id that is not yours is refused with
+  -- the SAME error as one that does not exist, so ids cannot be probed.
+  perform pg_temp.try_sql('13 capture rpc', 'abandoning an unknown submission is refused',
+    'blocked-42501',
+    $q$select public.abandon_testimonial_submission('00000000-0000-4000-8000-0000000000f1'::uuid, '00000000-0000-4000-8000-00000000dead'::uuid)$q$);
+  perform pg_temp.try_sql('13 capture rpc', 'captioning an unknown submission is refused',
+    'blocked-42501',
+    $q$select public.update_testimonial_caption('00000000-0000-4000-8000-0000000000f1'::uuid, '00000000-0000-4000-8000-00000000dead'::uuid, 'hi')$q$);
+  perform pg_temp.try_sql('13 capture rpc', 'retrying an unknown submission is refused',
+    'blocked-42501',
+    $q$select public.retry_testimonial_upload('00000000-0000-4000-8000-0000000000f1'::uuid, '00000000-0000-4000-8000-00000000dead'::uuid)$q$);
+
+  perform pg_temp.act_as_ambient();
+end $$;
+
+-- ===========================================================================
+-- SECTION 14 — the browser still cannot write privileged columns
+-- ===========================================================================
+do $$
+declare c text;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- UPDATE(caption) only. 20260817193000 also left `authenticated` with
+  -- INSERT; section 0 of 20260819103000 revokes it, and section 15 asserts
+  -- that revocation directly. The new columns are unreachable because no
+  -- column privilege was granted on them.
+  foreach c in array array['upload_status','validation_status','provider_asset_id',
+                           'provider_delivery_id','upload_attempt_count',
+                           'environment_marker','moderation_status','reviewed_by'] loop
+    perform pg_temp.record('14 capture privs', 'authenticated cannot UPDATE ' || c, 'false',
+      has_column_privilege('authenticated','public.testimonial_submissions',c,'UPDATE')::text);
+  end loop;
+
+  perform pg_temp.record('14 capture privs', 'authenticated CAN still update caption', 'true',
+    has_column_privilege('authenticated','public.testimonial_submissions','caption','UPDATE')::text);
+  -- Post-4B this is FALSE. The RPC is the only creation path; see section 15.
+  perform pg_temp.record('14 capture privs', 'authenticated no longer has INSERT', 'false',
+    has_table_privilege('authenticated','public.testimonial_submissions','INSERT')::text);
+  perform pg_temp.record('14 capture privs', 'authenticated has NO raw SELECT', 'false',
+    has_table_privilege('authenticated','public.testimonial_submissions','SELECT')::text);
+
+  -- Exactly ONE row is Gallery-eligible at this point, and it is fa01:
+  -- approved in section 10 and marked 'production' at fixture promotion.
+  -- fa02 was rejected, fa04 is an unpromoted pending intent, fb01 was never
+  -- moderated, and fa03 - though approved - is marked 'preview' and is
+  -- therefore excluded by the environment predicate added in 2c. A count of 2
+  -- here would mean that predicate is not doing its job.
+  perform pg_temp.record('14 capture privs', 'only the production submission is gallery-eligible', '1',
+    (select count(*) from public.testimonial_gallery_items)::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 15 — the corrected capture surface
+--
+-- REQUIRES migration 20260819103000 (corrected). Fails by design until applied.
+-- ===========================================================================
+do $$
+declare n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- The direct-INSERT bypass is closed: the RPC is the only creation path.
+  perform pg_temp.record('15 corrections', 'authenticated has NO INSERT on submissions', 'false',
+    has_table_privilege('authenticated','public.testimonial_submissions','INSERT')::text);
+  perform pg_temp.record('15 corrections', 'anon has NO INSERT on submissions', 'false',
+    has_table_privilege('anon','public.testimonial_submissions','INSERT')::text);
+
+  -- Consent registry: exists, empty, unreachable.
+  select count(*) into n from information_schema.tables
+  where table_schema='public' and table_name='consent_document_versions';
+  perform pg_temp.record('15 corrections', 'the consent registry exists', '1', n::text);
+
+  select count(*) into n from public.consent_document_versions where is_active;
+  perform pg_temp.record('15 corrections', 'NO consent version is active yet', '0', n::text);
+
+  perform pg_temp.record('15 corrections', 'authenticated cannot read the consent registry', 'false',
+    has_table_privilege('authenticated','public.consent_document_versions','SELECT')::text);
+
+  perform pg_temp.record('15 corrections', 'authenticated cannot execute active_consent_version()', 'false',
+    has_function_privilege('authenticated', p.oid, 'EXECUTE')::text)
+  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+  where ns.nspname='public' and p.proname='active_consent_version';
+
+  perform pg_temp.record('15 corrections', 'authenticated cannot execute the internal visitor guard', 'false',
+    has_function_privilege('authenticated', p.oid, 'EXECUTE')::text)
+  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+  where ns.nspname='public' and p.proname='assert_testimonial_visitor';
+
+  -- Environment isolation.
+  select count(*) into n from pg_constraint
+  where conrelid='public.testimonial_submissions'::regclass
+    and conname='testimonial_valid_requires_environment';
+  perform pg_temp.record('15 corrections', 'valid requires an environment marker', '1', n::text);
+
+  select count(*) into n from pg_trigger
+  where tgrelid='public.testimonial_submissions'::regclass
+    and tgname='testimonial_submissions_01_protect_capture_columns';
+  perform pg_temp.record('15 corrections', 'the capture-column guard trigger exists', '1', n::text);
+
+  perform pg_temp.record('15 corrections', 'the gallery view filters on production', 'true',
+    (pg_get_viewdef('public.testimonial_gallery_items'::regclass, true)
+      like '%environment_marker = ''production''%')::text);
+
+  -- The intent RPC takes the verified visitor id and the media type, and
+  -- NOTHING else: no consent version, no environment marker, no client,
+  -- experience or submission key. The visitor id is present because the
+  -- trusted caller has no session for auth.uid() to read; the RPC re-resolves
+  -- it against auth.users rather than trusting it.
+  perform pg_temp.record('15 corrections', 'create_testimonial_intent takes only the visitor id and media type',
+    'p_visitor_id uuid, p_media_type public.testimonial_media_type',
+    pg_get_function_identity_arguments(p.oid))
+  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+  where ns.nspname='public' and p.proname='create_testimonial_intent';
+end $$;
+
+-- ===========================================================================
+-- SECTION 16 — each gate independently blocks a DIRECT RPC call
+-- ===========================================================================
+do $$
+begin
+  -- An anonymous visitor calling the RPC directly, bypassing every Server
+  -- Action. The database gate and the legal gate must each stop this on their
+  -- own; disabling the UI is not what protects anything.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('16 gates', 'direct RPC refused by PRIVILEGE - authenticated cannot execute it at all',
+    'blocked-42501',
+    $q$select public.create_testimonial_intent('00000000-0000-4000-8000-0000000000f1'::uuid, 'image'::public.testimonial_media_type)$q$);
+
+  -- A direct INSERT is now refused by PRIVILEGE, before any policy is consulted.
+  perform pg_temp.try_sql('16 gates', 'direct INSERT refused by privilege',
+    'blocked-42501',
+    $q$insert into public.testimonial_submissions
+         (client_id, experience_id, experience_user_id, media_type,
+          client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented, environment_marker)
+       values ('00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               'image', 'forged-key', 'forged-version', now(), true, true, 'production')$q$);
+
+  -- A permanent account, likewise refused.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f2');
+  perform pg_temp.try_sql('16 gates', 'permanent account refused at the RPC',
+    'blocked-42501',
+    $q$select public.create_testimonial_intent('00000000-0000-4000-8000-0000000000f1'::uuid, 'image'::public.testimonial_media_type)$q$);
+  perform pg_temp.try_sql('16 gates', 'permanent account refused at direct INSERT',
+    'blocked-42501',
+    $q$insert into public.testimonial_submissions
+         (client_id, experience_id, experience_user_id, media_type,
+          client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented)
+       values ('00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               'image', 'forged-key-2', 'forged-version', now(), true, true)$q$);
+
+  -- The internal guard is not directly callable.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('16 gates', 'the internal visitor guard is not callable',
+    'blocked-42501',
+    $q$select public.assert_testimonial_visitor('00000000-0000-4000-8000-0000000000f1'::uuid, '00000000-0000-4000-8000-00000000da01'::uuid)$q$);
+
+  -- Nor is the consent resolver. This is the check that would have passed
+  -- vacuously before: the function was never GRANTED to anyone, but PostgreSQL
+  -- had already granted EXECUTE to PUBLIC by default, so it was callable by
+  -- every browser role until the revoke named PUBLIC explicitly.
+  perform pg_temp.try_sql('16 gates', 'the consent resolver is not callable',
+    'blocked-42501',
+    $q$select public.active_consent_version()$q$);
+
+  -- The status read is now trusted-only too, on both routes: the RPC and the
+  -- view it replaced.
+  perform pg_temp.try_sql('16 gates', 'the status RPC is not callable by a browser role',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f1'::uuid)$q$);
+  perform pg_temp.try_sql('16 gates', 'the status view is not readable by a browser role',
+    'blocked-42501',
+    $q$select count(*) from public.testimonial_my_submissions$q$);
+
+  -- Even a caller who somehow reached the status RPC could not point it at
+  -- ANOTHER visitor: f7 belongs to the other tenant, and f2 is a permanent
+  -- account. Both are refused - the first two by privilege here, and the
+  -- anonymity re-check is proved from the trusted tier in section 18.
+  perform pg_temp.try_sql('16 gates', 'the status RPC cannot be aimed at another visitor',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f7'::uuid)$q$);
+
+  -- The trigger functions carry no default PUBLIC grant either.
+  perform pg_temp.try_sql('16 gates', 'the capture-column trigger function is not callable',
+    'blocked-42501',
+    $q$select public.protect_testimonial_capture_columns()$q$);
+  perform pg_temp.try_sql('16 gates', 'the insert guard function is not callable',
+    'blocked-42501',
+    $q$select public.protect_testimonial_insert()$q$);
+
+  -- Browser roles cannot touch the registry.
+  perform pg_temp.try_sql('16 gates', 'the consent registry is unreadable',
+    'blocked-42501',
+    $q$select count(*) from public.consent_document_versions$q$);
+  perform pg_temp.try_sql('16 gates', 'a consent version cannot be self-published',
+    'blocked-42501',
+    $q$insert into public.consent_document_versions (version, terms_url, privacy_url, published_at, is_active)
+       values ('forged', 'x', 'y', now(), true)$q$);
+
+  perform pg_temp.act_as_ambient();
+end $$;
+
+-- ===========================================================================
+-- SECTION 17 — the environment marker cannot be self-asserted
+-- ===========================================================================
+do $$
+declare n int; v text;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- Only one active consent version may exist at a time.
+  insert into public.consent_document_versions (version, terms_url, privacy_url, published_at, is_active)
+  values ('aa-test-v1', 'https://example.com/terms', 'https://example.com/privacy', now(), true);
+
+  perform pg_temp.try_sql('17 environment', 'a second active consent version is refused',
+    'blocked-23505',
+    $q$insert into public.consent_document_versions (version, terms_url, privacy_url, published_at, is_active)
+       values ('aa-test-v2', 'https://example.com/terms', 'https://example.com/privacy', now(), true)$q$);
+
+  -- An unpublished version cannot be active. URLs are real https so the
+  -- refusal is attributable to the missing published_at and not to the URL
+  -- half of the same CHECK.
+  perform pg_temp.try_sql('17 environment', 'an unpublished version cannot be active',
+    'blocked-23514',
+    $q$insert into public.consent_document_versions (version, terms_url, privacy_url, is_active)
+       values ('aa-test-v3', 'https://example.com/terms', 'https://example.com/privacy', true)$q$);
+
+  -- --- the https check rejects MALFORMED values, not just non-https ones ---
+  -- The constraint is a shape test, not a prefix test. Each of these begins
+  -- with a plausible-looking value and is still refused, so a placeholder can
+  -- never stand in for a document a visitor is told they agreed to. The last
+  -- three matter most: they all start with "https" and are still rejected.
+  foreach v in array array[
+    'tbd',                  -- not a URL at all
+    '#',                    -- an anchor, the classic placeholder
+    'http://example.com',   -- right shape, wrong scheme
+    'HTTPS://example.com',  -- scheme must be lowercase
+    'https',                -- the scheme alone
+    'https://',             -- scheme with no host
+    'https://x',            -- host with no dot
+    'https://.com',         -- dot with no label before it
+    'https://example com'   -- whitespace inside the host
+  ] loop
+    perform pg_temp.try_sql('17 environment',
+      'an active consent version refuses terms_url ' || quote_literal(v),
+      'blocked-23514',
+      format($q$insert into public.consent_document_versions
+                  (version, terms_url, privacy_url, published_at, is_active)
+                values (%L, %L, 'https://example.com/privacy', now(), true)$q$,
+             'aa-bad-' || md5(v), v));
+  end loop;
+
+  -- The same shapes are refused in privacy_url, so the check is not applied to
+  -- one column and forgotten on the other.
+  perform pg_temp.try_sql('17 environment', 'the https check covers privacy_url too',
+    'blocked-23514',
+    $q$insert into public.consent_document_versions (version, terms_url, privacy_url, published_at, is_active)
+       values ('aa-bad-privacy', 'https://example.com/terms', 'tbd', now(), true)$q$);
+
+  -- An INACTIVE row is exempt by design: the constraint gates PUBLICATION, so
+  -- a draft may be staged with whatever URLs it has and can never be resolved
+  -- by active_consent_version() until it is both published and active.
+  perform pg_temp.try_sql('17 environment', 'an inactive draft row is not URL-constrained',
+    'ALLOWED',
+    $q$insert into public.consent_document_versions (version, terms_url, privacy_url)
+       values ('aa-draft', 'tbd', 'tbd')$q$);
+
+  select count(*) into n from public.consent_document_versions where is_active;
+  perform pg_temp.record('17 environment', 'exactly one active version survives all of that', '1', n::text);
+
+  -- A submission with no environment marker cannot be marked valid. fa04 is
+  -- the fixture deliberately left unpromoted, so its marker is still NULL and
+  -- the CHECK is what refuses here - not the immutability trigger.
+  perform pg_temp.try_sql('17 environment', 'valid requires an environment marker',
+    'blocked-23514',
+    $q$update public.testimonial_submissions
+       set validation_status = 'valid', environment_marker = null
+       where id = '00000000-0000-4000-8000-00000000fa04'$q$);
+
+  -- NULL -> value is permitted for a trusted caller, exactly once.
+  update public.testimonial_submissions set environment_marker = 'production'
+  where id = '00000000-0000-4000-8000-00000000fa04';
+
+  select count(*) into n from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fa04' and environment_marker = 'production';
+  perform pg_temp.record('17 environment', 'a trusted caller may stamp an unset marker once', '1', n::text);
+
+  -- value -> different value is refused even for that same trusted caller.
+  perform pg_temp.try_sql('17 environment', 'the environment marker cannot be changed once set',
+    'blocked-42501',
+    $q$update public.testimonial_submissions set environment_marker = 'preview'
+       where id = '00000000-0000-4000-8000-00000000fa04'$q$);
+
+  -- A preview submission is never gallery-eligible. fa03 was stamped
+  -- 'preview' at fixture-promotion time and approved in section 10, so it
+  -- satisfies every Gallery predicate EXCEPT the environment - which is
+  -- precisely what this proves.
+  select count(*) into n from public.testimonial_gallery_items
+  where submission_id = '00000000-0000-4000-8000-00000000fa03';
+  perform pg_temp.record('17 environment', 'a preview submission is NOT gallery-eligible', '0', n::text);
+
+  select count(*) into n from public.testimonial_gallery_items
+  where submission_id = '00000000-0000-4000-8000-00000000fa01';
+  perform pg_temp.record('17 environment', 'a production submission IS gallery-eligible', '1', n::text);
+
+  -- --- the transition is NULL -> preview|production, once, trusted-only ----
+
+  -- (a) CREATION can never set it, by any caller. The immutability trigger
+  -- governs UPDATE only, so without the insert guard nulling the column an
+  -- inserter could sidestep "NULL -> value once" by being born 'production'.
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented, environment_marker)
+  values
+    ('00000000-0000-4000-8000-00000000fa05','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','aa-key-5','v1', now(), true, true, 'production');
+
+  select count(*) into n from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fa05' and environment_marker is null;
+  perform pg_temp.record('17 environment', 'a trusted INSERT cannot pre-set the marker', '1', n::text);
+
+  -- (b) Only the two known values are reachable. 'staging' is refused by the
+  -- CHECK, so the stamp cannot invent an environment.
+  perform pg_temp.try_sql('17 environment', 'an unknown environment value is refused',
+    'blocked-23514',
+    $q$update public.testimonial_submissions set environment_marker = 'staging'
+       where id = '00000000-0000-4000-8000-00000000fa05'$q$);
+
+  -- (c) Both legal targets are genuinely reachable from NULL.
+  update public.testimonial_submissions set environment_marker = 'preview'
+  where id = '00000000-0000-4000-8000-00000000fa05';
+  select count(*) into n from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fa05' and environment_marker = 'preview';
+  perform pg_temp.record('17 environment', 'NULL -> preview is permitted for the trusted tier', '1', n::text);
+
+  -- (d) And clearing it back to NULL is refused, so "once" means once in both
+  -- directions - not merely "cannot be swapped for the other value".
+  perform pg_temp.try_sql('17 environment', 'the marker cannot be cleared back to NULL',
+    'blocked-42501',
+    $q$update public.testimonial_submissions set environment_marker = null
+       where id = '00000000-0000-4000-8000-00000000fa05'$q$);
+
+  -- (e) An UNTRUSTED caller cannot move it at all, even NULL -> value, and is
+  -- stopped before the CHECK is ever reached. fa04 still has a NULL marker.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('17 environment', 'an untrusted caller cannot stamp an unset marker',
+    'blocked-42501',
+    $q$update public.testimonial_submissions set environment_marker = 'production'
+       where id = '00000000-0000-4000-8000-00000000fa04'$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+
+-- ===========================================================================
+-- SECTION 18 — the status read, from the trusted tier
+--
+-- Section 16 proved no browser role can reach the RPC or the view it replaced.
+-- These run as the TRUSTED caller, which is the only thing that can reach the
+-- function body, and check what that body enforces on its own.
+-- ===========================================================================
+do $$
+declare n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- Ownership confines the rows: f1 sees only f1's submissions. f1 owns
+  -- fa01-fa05; fb01 belongs to f7 in the other tenant.
+  select count(*) into n
+  from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f1'::uuid);
+  perform pg_temp.record('18 status read', 'a visitor sees exactly their own submissions', '5', n::text);
+
+  select count(*) into n
+  from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f1'::uuid) r
+  where r.submission_id = '00000000-0000-4000-8000-00000000fb01';
+  perform pg_temp.record('18 status read', 'another tenant''s submission is never returned', '0', n::text);
+
+  -- The filter is what scopes it, not an accident of the fixture set: the
+  -- table holds strictly more than f1 can see.
+  select count(*) into n from public.testimonial_submissions;
+  perform pg_temp.record('18 status read', 'the table holds more rows than one visitor sees', '6', n::text);
+
+  -- f7 OWNS fb01 and is still refused, because f7 is a permanent account.
+  -- Ownership is not sufficient here - anonymity is required as well, which is
+  -- precisely the rule the revoked view could not express.
+  perform pg_temp.try_sql('18 status read', 'a genuine owner who is not anonymous is still refused',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f7'::uuid)$q$);
+
+  -- ANONYMITY is re-checked here - the rule the view could not express. f2 is
+  -- a permanent account (an administrator), and is refused outright rather
+  -- than simply returning no rows.
+  perform pg_temp.try_sql('18 status read', 'a permanent account is refused, not merely empty',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000f2'::uuid)$q$);
+
+  -- An unknown identity is refused by the same rule: is_anonymous resolves to
+  -- NULL, and NULL is not an explicit true.
+  perform pg_temp.try_sql('18 status read', 'an unknown identity is refused',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions('00000000-0000-4000-8000-0000000000ff'::uuid)$q$);
+
+  perform pg_temp.try_sql('18 status read', 'a null identity is refused',
+    'blocked-42501',
+    $q$select * from public.list_my_testimonial_submissions(null::uuid)$q$);
+
+  -- The sanitized column list is enforced by the function signature itself.
+  select count(*) into n from information_schema.columns
+  where table_schema='public' and table_name='testimonial_my_submissions'
+    and column_name in ('auth_user_id','experience_user_id','provider_asset_id',
+                        'provider_delivery_id','email','phone_e164','client_id',
+                        'reviewed_by','moderation_note');
+  perform pg_temp.record('18 status read', 'the status projection exposes no internals', '0', n::text);
 end $$;
 
 -- ===========================================================================
