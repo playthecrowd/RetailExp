@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -10,6 +11,7 @@ import { getClientBySlug, mockAnalyticsByClientSlug } from "@/lib/mock-data/clie
 import { kameleonPathways } from "@/lib/mock-data/kameleon-pathways";
 import { kameleonMobileStates } from "@/lib/kameleon-mobile-states";
 import { formatDateTime, formatPercent } from "@/lib/format";
+import { MODERATION_ROUTE } from "@/lib/testimonials/routes";
 import { requireAdminAccess } from "@/lib/auth/admin";
 
 export const metadata = { title: "Kameleon" };
@@ -47,14 +49,49 @@ export default async function KameleonClientPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <LinkButton href={MODERATION_ROUTE} size="sm">
+            Moderate Testimonials
+          </LinkButton>
           <CopyUrlButton path={client.experienceRoute} />
           <ExperiencePreviewModal path={client.experienceRoute} />
-          <LinkButton href={client.experienceRoute} target="_blank" rel="noopener noreferrer" size="sm">
+          <LinkButton
+            href={client.experienceRoute}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="sm"
+            variant="secondary"
+          >
             Open Experience
             <ExternalLinkIcon className="h-4 w-4" />
           </LinkButton>
         </div>
       </div>
+
+      {/* Real data, unlike the analytics and pathway cards below it — this
+          links to the live moderation queue backed by
+          testimonial_moderation_queue, not to mock content. */}
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Testimonial moderation</CardTitle>
+            <CardDescription>
+              Review visitor photos and videos before they can appear in the public Gallery
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="max-w-xl text-sm text-admin-text-muted">
+            Nothing can reach the Gallery without an explicit approval here. Visitor capture
+            is not live yet, so the queue is currently empty.
+          </p>
+          <Link
+            href={MODERATION_ROUTE}
+            className="text-sm font-medium text-admin-primary hover:underline"
+          >
+            Open moderation queue →
+          </Link>
+        </div>
+      </Card>
 
       <Card>
         <CardHeader>

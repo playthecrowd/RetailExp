@@ -87,12 +87,13 @@ assert(
 
 const adminFiles = walk("app/admin");
 const protectedPages = adminFiles.filter((f) => f.includes("(protected)") && f.endsWith("page.tsx"));
-assert(protectedPages.length === 3, `all three admin pages moved under (protected) (found ${protectedPages.length})`);
+assert(protectedPages.length === 4, `all four protected admin pages live under (protected) (found ${protectedPages.length})`);
 
 for (const expected of [
   "app/admin/(protected)/page.tsx",
   "app/admin/(protected)/clients/page.tsx",
   "app/admin/(protected)/clients/kameleon/page.tsx",
+  "app/admin/(protected)/clients/kameleon/testimonials/page.tsx",
 ]) {
   assert(adminFiles.includes(expected), `public URL preserved via route group: ${expected}`);
 }
@@ -494,6 +495,375 @@ assert(
   !/DevAuthNotice/.test(stripComments(read("components/admin/AdminShell.tsx"))),
   "AdminShell no longer imports or renders it",
 );
+
+console.log("\n--- Phase 3 - testimonial moderation dashboard ---\n");
+
+const MOD_DIR = "app/admin/(protected)/clients/kameleon/testimonials";
+const modPage = read(MOD_DIR + "/page.tsx");
+const modActions = read(MOD_DIR + "/actions.ts");
+const modLoader = read("lib/testimonials/moderation.ts");
+const modReasons = read("lib/testimonials/rejection-reasons.ts");
+const modCard = read("components/admin/testimonials/ModerationCard.tsx");
+const modQueue = read("components/admin/testimonials/ModerationQueue.tsx");
+const modActionsUi = read("components/admin/testimonials/ModerationActions.tsx");
+const modPreview = read("components/admin/testimonials/MediaPreview.tsx");
+
+// --- Route placement -------------------------------------------------------
+assert(
+  existsSync(join(root, MOD_DIR + "/page.tsx")),
+  "the moderation route is nested beneath /admin/clients/kameleon",
+);
+assert(
+  MOD_DIR.includes("(protected)"),
+  "the moderation route sits INSIDE the protected route group, so the layout gate applies",
+);
+assert(
+  !existsSync(join(root, "app/admin/testimonials")),
+  "no top-level /admin/testimonials route was created",
+);
+for (const f of ["loading.tsx", "error.tsx", "actions.ts"]) {
+  assert(existsSync(join(root, MOD_DIR + "/" + f)), "the route provides " + f);
+}
+assert(
+  /export const dynamic = "force-dynamic"/.test(modPage),
+  "the moderation page is request-time rendered",
+);
+assert(
+  /await requireAdminAccess\(\)/.test(modPage),
+  "the moderation page independently re-checks authorization",
+);
+
+// --- Loader: authorize BEFORE reaching for the trusted client --------------
+assert(
+  modLoader.indexOf("requireAdminAccess()") < modLoader.indexOf("createSecretClient()"),
+  "the loader authorizes before it constructs the trusted client",
+);
+assert(
+  /const access = await requireAdminAccess\(\)/.test(modLoader),
+  "the loader captures the authorization result",
+);
+assert(
+  /\.eq\("client_id", access\.clientId\)/.test(modLoader),
+  "the tenant filter uses the AUTHORIZED client id, not a request parameter",
+);
+assert(
+  !/client_id[^\n]*(params|searchParams|query\.)/.test(stripComments(modLoader)),
+  "no client id is ever taken from search params or query input",
+);
+assert(
+  /typeof window !== "undefined"/.test(modLoader),
+  "the loader throws if imported into client code",
+);
+
+// --- Sanitized browser DTO -------------------------------------------------
+const dtoStart = modLoader.indexOf("export interface ModerationItem");
+const dtoEnd = modLoader.indexOf("}", modLoader.indexOf("previewAvailable"));
+// Comments stripped: the DTO's own JSDoc explains which provider fields it
+// deliberately excludes, and that prose would otherwise fail the check that
+// they are excluded.
+const dto = stripComments(modLoader.slice(dtoStart, dtoEnd));
+for (const forbidden of [
+  "client_id", "clientId", "experience_id", "experienceId",
+  "reviewed_by", "reviewedBy", "provider", "providerDeliveryId", "providerPosterId",
+  "auth_user_id", "authUserId", "experience_user_id", "experienceUserId",
+  "email", "phone", "displayName", "posterId", "assetId", "uploadId",
+]) {
+  assert(
+    !new RegExp("\\b" + forbidden + "\\b").test(dto),
+    "the browser DTO has no field named " + forbidden,
+  );
+}
+assert(
+  /previewAvailable: boolean/.test(dto),
+  "preview availability is a boolean, never a URL or a provider handle",
+);
+
+// --- Provider identifiers never reach Client Components --------------------
+for (const [name, src] of [
+  ["ModerationCard", modCard],
+  ["ModerationQueue", modQueue],
+  ["ModerationActions", modActionsUi],
+  ["MediaPreview", modPreview],
+]) {
+  const body = stripComments(src);
+  for (const forbidden of [
+    "provider_delivery_id", "providerDeliveryId", "provider_poster_id", "providerPosterId",
+    "provider_asset_id", "provider_upload_id", "client_id", "clientId",
+    "reviewed_by", "reviewedBy", "auth_user_id",
+  ]) {
+    assert(
+      !new RegExp("\\b" + forbidden + "\\b").test(body),
+      name + " never references " + forbidden,
+    );
+  }
+}
+
+// --- No Cloudflare URL construction ----------------------------------------
+const allPhase3 = [modPage, modActions, modLoader, modCard, modQueue, modActionsUi, modPreview].join("\n");
+// Comments stripped: several files explain what WILL happen once Cloudflare is
+// configured. What must not exist is executable code naming a provider host.
+assert(
+  !/cloudflare|videodelivery|imagedelivery|cloudflarestream/i.test(stripComments(allPhase3)),
+  "no Cloudflare hostname or product name appears in executable Phase 3 code",
+);
+assert(
+  !/https?:\/\//.test(stripComments(allPhase3).replace(/example\.com/g, "")),
+  "no absolute URL is constructed in Phase 3 code",
+);
+
+// --- Mutations: fresh authorization, RPC only ------------------------------
+assert(
+  (modActions.match(/await requireFreshAdminAccess\(\)/g) || []).length === 2,
+  "both moderation actions call requireFreshAdminAccess()",
+);
+assert(
+  !/requireAdminAccess\(\)/.test(stripComments(modActions).replace(/requireFreshAdminAccess\(\)/g, "")),
+  "the mutations never use the request-CACHED authorization",
+);
+assert(
+  (modActions.match(/rpc\("moderate_testimonial_submission"/g) || []).length === 2,
+  "both actions go through the moderation RPC",
+);
+assert(
+  !/from\("testimonial_submissions"\)/.test(modActions) &&
+    !/\.update\(|\.insert\(|\.delete\(|\.upsert\(/.test(modActions),
+  "no direct testimonial-table mutation exists in the actions",
+);
+assert(
+  !/createSecretClient/.test(modActions),
+  "the mutations use the administrator's own session, not the trusted client, so reviewed_by is real",
+);
+for (const forbidden of ["reviewed_by", "reviewedBy", "client_id", "clientId", "experience_id", "provider"]) {
+  assert(
+    !new RegExp('formData\\.get\\("' + forbidden + '"\\)').test(modActions),
+    "the actions never read " + forbidden + " from the browser",
+  );
+}
+assert(
+  /UUID_PATTERN\.test\(submissionId\)/.test(modActions),
+  "the submission id is validated as a UUID server-side",
+);
+assert(
+  /isValidRejectionReason\(reason\)/.test(modActions),
+  "the rejection reason is re-checked against the server allow-list",
+);
+assert(
+  /\.slice\(0, MAX_MODERATION_NOTE_LENGTH\)/.test(modActions),
+  "the moderation note is capped server-side",
+);
+assert(
+  /revalidatePath\(MODERATION_ROUTE\)/.test(modActions) && /revalidatePath\(GALLERY_ROUTE\)/.test(modActions),
+  "both the moderation route and the Gallery route are revalidated after a decision",
+);
+
+// --- Rejection reasons -----------------------------------------------------
+assert(
+  /export function isValidRejectionReason/.test(modReasons),
+  "rejection reasons are validated by a shared server-enforced predicate",
+);
+assert(
+  /REJECTION_REASON_IDS: ReadonlySet<string>/.test(modReasons),
+  "the allow-list is a closed set, not a loose string check",
+);
+assert(
+  /MAX_MODERATION_NOTE_LENGTH = \d+/.test(modReasons),
+  "the note length limit is a declared constant",
+);
+
+// --- Confirmation required for BOTH decisions ------------------------------
+assert(
+  /Approve this submission\?/.test(modActionsUi) && /Reject this submission\?/.test(modActionsUi),
+  "approval AND rejection each have a confirmation dialog",
+);
+assert(
+  /aria-modal="true"/.test(modActionsUi) && /role="dialog"/.test(modActionsUi),
+  "the confirmation dialog is an accessible modal",
+);
+assert(
+  /event\.key === "Escape"/.test(modActionsUi),
+  "the dialog closes on Escape",
+);
+assert(
+  /required/.test(modActionsUi.slice(modActionsUi.indexOf("rejectionReason"))),
+  "a rejection reason is required in the form as well as on the server",
+);
+
+// --- URL parameter validation ----------------------------------------------
+assert(
+  /MODERATION_TABS as readonly string\[\]\)\.includes/.test(modLoader) &&
+    /MEDIA_FILTERS as readonly string\[\]\)\.includes/.test(modLoader) &&
+    /SORT_ORDERS as readonly string\[\]\)\.includes/.test(modLoader),
+  "tab, media and sort parameters are allow-listed with safe defaults",
+);
+assert(
+  /Math\.min\(parsedPage, MAX_PAGE\)/.test(modLoader) && /MAX_PAGE = \d+/.test(modLoader),
+  "the page parameter is capped and normalized",
+);
+assert(
+  /"All Eligible"/.test(modQueue) && !/All Submissions/.test(modQueue),
+  "the tab is labelled All Eligible, not All Submissions",
+);
+
+// --- Honest empty state, no fixtures ---------------------------------------
+assert(
+  /EmptyState/.test(modQueue),
+  "an empty state is rendered rather than a blank page",
+);
+assert(
+  !/mock|placeholder|fixture|sample/i.test(stripComments(modLoader + modQueue + modCard).replace(/EmptyState/g, "")),
+  "no mock, fixture or sample testimonial data appears anywhere in the dashboard",
+);
+assert(
+  /Preview unavailable/.test(modPreview),
+  "missing media is handled with an explicit unavailable state",
+);
+
+console.log("\n--- Phase 3 corrections: counts, ordering, readiness, routes ---\n");
+
+const modRoutes = read("lib/testimonials/routes.ts");
+const modError = read(MOD_DIR + "/error.tsx");
+
+// --- Counts are whole-dataset, server-side, tenant-scoped ------------------
+assert(
+  /count: "exact", head: true/.test(modLoader),
+  "status counts are COUNT queries with head:true - no rows are transferred",
+);
+assert(
+  !/counts\[[^\]]+\]\s*=\s*[^;]*items\./.test(modLoader) &&
+    !/items\.filter\([^)]*\)\.length/.test(modLoader),
+  "counts are NOT derived from the paginated items array",
+);
+assert(
+  /for \(const tab of MODERATION_TABS\)[\s\S]{0,400}countQuery\.eq\("moderation_status", tab\)/.test(modLoader),
+  "one count query runs per status tab",
+);
+assert(
+  /if \(query\.media !== "all"\) countQuery = countQuery\.eq\("media_type", query\.media\)/.test(modLoader),
+  "counts respect the media-type filter, so a tab count matches what the tab shows",
+);
+assert(
+  modLoader.indexOf("requireAdminAccess()") < modLoader.indexOf("count: \"exact\", head: true"),
+  "no count query is constructed before authorization",
+);
+assert(
+  /scoped = \(\) =>[\s\S]{0,220}\.eq\("client_id", access\.clientId\)/.test(modLoader),
+  "every count query is tenant-scoped from the authorization result",
+);
+
+// --- Deterministic pagination ---------------------------------------------
+assert(
+  /\.order\("submitted_at", \{ ascending, nullsFirst: false \}\)/.test(modLoader),
+  "primary ordering is submitted_at with a pinned nullsFirst",
+);
+assert(
+  /\.order\("submission_id", \{ ascending \}\)/.test(modLoader),
+  "a deterministic secondary order by submission_id breaks submitted_at ties",
+);
+assert(
+  /const ascending = query\.sort === "oldest"/.test(modLoader),
+  "both order columns share one direction, so newest is DESC/DESC and oldest is ASC/ASC",
+);
+assert(
+  /\.range\(from, from \+ PAGE_SIZE - 1\)/.test(modLoader),
+  "the page window is applied in the database via range()",
+);
+assert(
+  /export const PAGE_SIZE = \d+/.test(modLoader) && /MAX_PAGE = \d+/.test(modLoader),
+  "page size and maximum page are both hard constants",
+);
+assert(
+  !/\.limit\(\s*\)/.test(modLoader) && !/select\("\*"\)(?![\s\S]{0,200}range)/.test(modLoader),
+  "there is no unbounded queue query",
+);
+
+// --- Approval readiness ----------------------------------------------------
+assert(
+  /const canApprove = item\.deliveryReady/.test(modActionsUi),
+  "the Approve control is gated on delivery readiness",
+);
+assert(
+  /disabled=\{!canApprove \|\| approvePending \|\| rejectPending\}/.test(modActionsUi),
+  "Approve is disabled when delivery is not ready",
+);
+assert(
+  /Approval is unavailable until the media finishes processing/.test(modActionsUi),
+  "the reason approval is unavailable is explained in the UI",
+);
+assert(
+  /aria-describedby=\{!canApprove \?/.test(modActionsUi),
+  "the explanation is associated with the disabled control for screen readers",
+);
+assert(
+  /variant="destructive"[\s\S]{0,200}disabled=\{approvePending \|\| rejectPending\}/.test(modActionsUi),
+  "Reject stays available regardless of delivery readiness",
+);
+assert(
+  /poster pending/.test(modCard) && !/posterReady[\s\S]{0,200}canApprove/.test(modActionsUi),
+  "poster readiness is displayed but is NOT treated as an approval requirement the schema does not impose",
+);
+
+// --- Readiness cannot be bypassed from the browser -------------------------
+const formReads = [...modActions.matchAll(/formData\.get\("([^"]+)"\)/g)].map((m) => m[1]);
+assert(
+  formReads.every((f) => ["submissionId", "moderationNote", "rejectionReason"].includes(f)),
+  "the actions read ONLY submissionId, moderationNote and rejectionReason from the browser (found: " +
+    [...new Set(formReads)].join(", ") + ")",
+);
+for (const forged of ["deliveryReady", "delivery_ready_at", "previewAvailable", "canApprove", "posterReady", "moderationStatus"]) {
+  assert(
+    !new RegExp('formData\\.get\\("' + forged + '"\\)').test(modActions),
+    "a forged " + forged + " form field cannot influence the decision",
+  );
+}
+assert(
+  !/deliveryReady|delivery_ready/.test(stripComments(modActions)),
+  "no readiness value is read or evaluated in the action at all - the database is the only judge",
+);
+assert(
+  (modActions.match(/GENERIC_FAILURE/g) || []).length >= 4,
+  "a database refusal is mapped to the same generic message as any other failure",
+);
+assert(
+  !/error\.message|error\.details|error\.hint|error\.code/.test(modActions),
+  "no Postgres error text, hint, detail or code is returned to the browser",
+);
+
+// --- Centralized routes ----------------------------------------------------
+assert(
+  /export const MODERATION_ROUTE = "\/admin\/clients\/kameleon\/testimonials"/.test(modRoutes),
+  "the moderation route is a single shared constant",
+);
+assert(
+  /export const GALLERY_ROUTE = "\/experience\/kameleon\/gallery"/.test(modRoutes),
+  "the planned Gallery route is a single shared constant",
+);
+assert(
+  /revalidatePath\(MODERATION_ROUTE\)/.test(modActions) && /revalidatePath\(GALLERY_ROUTE\)/.test(modActions),
+  "both routes are revalidated through the shared constants, not literals",
+);
+assert(
+  (modActions.match(/revalidatePath\(/g) || []).length === 4,
+  "both decisions revalidate both routes (4 calls across approve and reject)",
+);
+
+// --- Error boundary --------------------------------------------------------
+// Comments stripped: the file documents WHY it does not render error.message,
+// and that explanation would otherwise fail the check that it does not.
+assert(
+  !/error\.message|\{error\}|error\.stack|error\.digest/.test(stripComments(modError)),
+  "error.tsx renders no part of the raw exception",
+);
+assert(
+  !/console\./.test(modError),
+  "error.tsx logs nothing from the browser",
+);
+assert(
+  !/submissionId|submission_id/.test(stripComments(modError)),
+  "no submission UUID appears in user-facing error copy",
+);
+for (const f of [MOD_DIR + "/page.tsx", MOD_DIR + "/actions.ts", "lib/testimonials/moderation.ts"]) {
+  assert(!/console\.(log|info|warn|error|debug)/.test(read(f)), f + " logs nothing");
+}
 
 console.log(
   `\n${passed} structural assertions passed, ${failures.length} failed.\n`,

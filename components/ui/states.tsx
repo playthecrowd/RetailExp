@@ -73,3 +73,43 @@ export function ErrorState({
     </div>
   );
 }
+
+export function EmptyState({
+  brand = "admin",
+  title,
+  message,
+  className,
+  children,
+}: {
+  brand?: Brand;
+  title: string;
+  message?: string;
+  className?: string;
+  /** Optional action or explanatory footnote rendered under the message. */
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed py-14 text-center",
+        brand === "kameleon"
+          ? "border-kameleon-copper/30 bg-kameleon-surface text-kameleon-text"
+          : "border-admin-border bg-admin-surface text-admin-text",
+        className,
+      )}
+    >
+      <p className="font-semibold">{title}</p>
+      {message && (
+        <p
+          className={cn(
+            "max-w-md text-sm",
+            brand === "kameleon" ? "text-kameleon-text-muted" : "text-admin-text-muted",
+          )}
+        >
+          {message}
+        </p>
+      )}
+      {children}
+    </div>
+  );
+}
