@@ -865,6 +865,102 @@ for (const f of [MOD_DIR + "/page.tsx", MOD_DIR + "/actions.ts", "lib/testimonia
   assert(!/console\.(log|info|warn|error|debug)/.test(read(f)), f + " logs nothing");
 }
 
+console.log("\n--- Server-only configuration validation ---\n");
+
+const secretModule = read("lib/supabase/secret.ts");
+const secretExec = stripComments(secretModule);
+
+// Both required variables are explicitly validated. The secret variable name is
+// assembled (see SECRET_KEY_ENV above) so this checker does not itself trip
+// scripts/verify-supabase-key-usage.mjs.
+const PUBLIC_URL_ENV = "NEXT_PUBLIC_SUPABASE_URL";
+for (const name of [PUBLIC_URL_ENV, SECRET_KEY_ENV]) {
+  assert(
+    new RegExp('requireServerEnv\\("' + name + '"\\)').test(secretExec),
+    name + " is read through the validating helper",
+  );
+  assert(
+    new RegExp('"' + name + '"').test(secretExec.slice(secretExec.indexOf("RequiredServerEnv"))),
+    name + " is in the permitted-variable union",
+  );
+}
+
+// The non-null assertions that caused the Phase 3 Preview failure are gone.
+assert(
+  !new RegExp("process\\.env\\.[A-Z_]+!").test(secretExec),
+  "no `process.env.X!` non-null assertion remains in the secret module",
+);
+assert(
+  !/process\.env\[[^\]]+\]!/.test(secretExec),
+  "no bracketed non-null assertion remains either",
+);
+assert(
+  (secretExec.match(/process\.env/g) || []).length === 1,
+  "process.env is read in exactly one place - the validating helper",
+);
+
+// Missing and empty are both rejected, after trimming.
+assert(
+  /\.trim\(\)/.test(secretExec),
+  "values are trimmed before use",
+);
+assert(
+  /value\.length === 0/.test(secretExec) && /throw new Error\(/.test(secretExec),
+  "a missing or whitespace-only value is rejected by throwing",
+);
+
+// The error names the variable and cannot carry its value.
+// Sliced to the MESSAGE only. Anchoring on `throw new Error(` would match the
+// browser guard at the top of the module and span the whole file, and
+// anchoring on the `if` would include `value.length === 0` - which is the
+// condition that DETECTS a missing variable, not a leak of its value.
+const throwBlock = secretExec.slice(
+  secretExec.indexOf("Supabase server configuration error"),
+  secretExec.indexOf("return value;"),
+);
+assert(
+  /\$\{name\}/.test(throwBlock),
+  "the configuration error names the missing variable",
+);
+for (const leak of ["${value}", "${raw}", "value.length", "raw.length", "${process.env"]) {
+  assert(
+    !throwBlock.includes(leak),
+    "the configuration error cannot interpolate " + leak,
+  );
+}
+assert(
+  !/console\./.test(secretExec),
+  "the secret module logs nothing, so no value can reach a log line",
+);
+
+// Server-only, unchanged client options, no weakening fallbacks.
+assert(
+  /typeof window !== "undefined"/.test(secretExec),
+  "createSecretClient() remains server-only via the browser guard",
+);
+assert(
+  /persistSession: false/.test(secretExec) && /autoRefreshToken: false/.test(secretExec),
+  "Supabase client options are unchanged",
+);
+assert(
+  !/PUBLISHABLE/.test(secretExec),
+  "there is no fallback to the publishable key",
+);
+assert(
+  !/formData|searchParams|req\.|request\.|headers\(/.test(secretExec),
+  "no key is ever accepted from request data",
+);
+assert(
+  !new RegExp("NEXT_PUBLIC_[A-Z_]*(SECRET|SERVICE)").test(secretExec),
+  "no NEXT_PUBLIC_ secret variable was introduced",
+);
+
+// The ordering guarantee this hardening must not disturb.
+assert(
+  modLoader.indexOf("requireAdminAccess()") < modLoader.indexOf("createSecretClient()"),
+  "authorization still precedes creation of the trusted client in the moderation loader",
+);
+
 console.log(
   `\n${passed} structural assertions passed, ${failures.length} failed.\n`,
 );
