@@ -253,6 +253,33 @@ export type Database = {
           },
         ]
       }
+      consent_document_versions: {
+        Row: {
+          created_at: string
+          is_active: boolean
+          privacy_url: string
+          published_at: string | null
+          terms_url: string
+          version: string
+        }
+        Insert: {
+          created_at?: string
+          is_active?: boolean
+          privacy_url: string
+          published_at?: string | null
+          terms_url: string
+          version: string
+        }
+        Update: {
+          created_at?: string
+          is_active?: boolean
+          privacy_url?: string
+          published_at?: string | null
+          terms_url?: string
+          version?: string
+        }
+        Relationships: []
+      }
       content_nodes: {
         Row: {
           branch_code: string | null
@@ -560,6 +587,7 @@ export type Database = {
           publication_status: Database["public"]["Enums"]["publication_status"]
           signup_required: boolean
           slug: string
+          testimonial_capture_enabled: boolean
           updated_at: string
         }
         Insert: {
@@ -576,6 +604,7 @@ export type Database = {
           publication_status?: Database["public"]["Enums"]["publication_status"]
           signup_required?: boolean
           slug: string
+          testimonial_capture_enabled?: boolean
           updated_at?: string
         }
         Update: {
@@ -592,6 +621,7 @@ export type Database = {
           publication_status?: Database["public"]["Enums"]["publication_status"]
           signup_required?: boolean
           slug?: string
+          testimonial_capture_enabled?: boolean
           updated_at?: string
         }
         Relationships: [
@@ -987,6 +1017,7 @@ export type Database = {
           created_at: string
           delivery_ready_at: string | null
           detected_mime_type: string | null
+          environment_marker: string | null
           experience_id: string
           experience_user_id: string
           id: string
@@ -1018,6 +1049,7 @@ export type Database = {
           reviewed_by: string | null
           submitted_at: string | null
           updated_at: string
+          upload_attempt_count: number
           upload_expires_at: string
           upload_failure_reason: string | null
           upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
@@ -1046,6 +1078,7 @@ export type Database = {
           created_at?: string
           delivery_ready_at?: string | null
           detected_mime_type?: string | null
+          environment_marker?: string | null
           experience_id: string
           experience_user_id: string
           id?: string
@@ -1077,6 +1110,7 @@ export type Database = {
           reviewed_by?: string | null
           submitted_at?: string | null
           updated_at?: string
+          upload_attempt_count?: number
           upload_expires_at?: string
           upload_failure_reason?: string | null
           upload_status?: Database["public"]["Enums"]["testimonial_upload_status"]
@@ -1105,6 +1139,7 @@ export type Database = {
           created_at?: string
           delivery_ready_at?: string | null
           detected_mime_type?: string | null
+          environment_marker?: string | null
           experience_id?: string
           experience_user_id?: string
           id?: string
@@ -1136,6 +1171,7 @@ export type Database = {
           reviewed_by?: string | null
           submitted_at?: string | null
           updated_at?: string
+          upload_attempt_count?: number
           upload_expires_at?: string
           upload_failure_reason?: string | null
           upload_status?: Database["public"]["Enums"]["testimonial_upload_status"]
@@ -1386,6 +1422,8 @@ export type Database = {
           rejection_reason: string | null
           submission_id: string | null
           submitted_at: string | null
+          upload_attempt_count: number | null
+          upload_expires_at: string | null
           upload_status:
             | Database["public"]["Enums"]["testimonial_upload_status"]
             | null
@@ -1393,10 +1431,64 @@ export type Database = {
             | Database["public"]["Enums"]["testimonial_validation_status"]
             | null
         }
+        Insert: {
+          caption?: string | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_status?:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          submission_id?: string | null
+          submitted_at?: string | null
+          upload_attempt_count?: number | null
+          upload_expires_at?: string | null
+          upload_status?:
+            | Database["public"]["Enums"]["testimonial_upload_status"]
+            | null
+          validation_status?:
+            | Database["public"]["Enums"]["testimonial_validation_status"]
+            | null
+        }
+        Update: {
+          caption?: string | null
+          media_type?:
+            | Database["public"]["Enums"]["testimonial_media_type"]
+            | null
+          moderation_status?:
+            | Database["public"]["Enums"]["testimonial_moderation_status"]
+            | null
+          published_at?: string | null
+          rejection_reason?: string | null
+          submission_id?: string | null
+          submitted_at?: string | null
+          upload_attempt_count?: number | null
+          upload_expires_at?: string | null
+          upload_status?:
+            | Database["public"]["Enums"]["testimonial_upload_status"]
+            | null
+          validation_status?:
+            | Database["public"]["Enums"]["testimonial_validation_status"]
+            | null
+        }
         Relationships: []
       }
     }
     Functions: {
+      abandon_testimonial_submission: {
+        Args: { p_submission_id: string; p_visitor_id: string }
+        Returns: {
+          submission_id: string
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+        }[]
+      }
+      active_consent_version: { Args: never; Returns: string }
+      assert_testimonial_visitor: {
+        Args: { p_experience_user_id: string; p_visitor_id: string }
+        Returns: undefined
+      }
       can_edit_client: { Args: { check_client_id: string }; Returns: boolean }
       can_manage_members: {
         Args: { check_client_id: string }
@@ -1406,9 +1498,38 @@ export type Database = {
         Args: { check_client_id: string }
         Returns: boolean
       }
+      create_testimonial_intent: {
+        Args: {
+          p_media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          p_visitor_id: string
+        }
+        Returns: {
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          submission_id: string
+          upload_attempt_count: number
+          upload_expires_at: string
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+        }[]
+      }
       is_client_member: { Args: { check_client_id: string }; Returns: boolean }
       is_client_owner: { Args: { check_client_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
+      list_my_testimonial_submissions: {
+        Args: { p_visitor_id: string }
+        Returns: {
+          caption: string
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          moderation_status: Database["public"]["Enums"]["testimonial_moderation_status"]
+          published_at: string
+          rejection_reason: string
+          submission_id: string
+          submitted_at: string
+          upload_attempt_count: number
+          upload_expires_at: string
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+          validation_status: Database["public"]["Enums"]["testimonial_validation_status"]
+        }[]
+      }
       moderate_testimonial_submission: {
         Args: {
           p_decision: Database["public"]["Enums"]["testimonial_moderation_status"]
@@ -1420,6 +1541,26 @@ export type Database = {
           moderation_status: Database["public"]["Enums"]["testimonial_moderation_status"]
           published_at: string
           reviewed_at: string
+          submission_id: string
+        }[]
+      }
+      retry_testimonial_upload: {
+        Args: { p_submission_id: string; p_visitor_id: string }
+        Returns: {
+          submission_id: string
+          upload_attempt_count: number
+          upload_expires_at: string
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+        }[]
+      }
+      update_testimonial_caption: {
+        Args: {
+          p_caption: string
+          p_submission_id: string
+          p_visitor_id: string
+        }
+        Returns: {
+          caption: string
           submission_id: string
         }[]
       }
