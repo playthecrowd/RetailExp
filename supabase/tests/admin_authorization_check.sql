@@ -195,6 +195,48 @@ begin
 end $$;
 
 -- ===========================================================================
+-- PRE-FLIGHT — the previous run left nothing behind
+--
+-- Read-only, and deliberately BEFORE any fixture is written. The suite is a
+-- single transaction ending in ROLLBACK, so a prior run should be invisible
+-- here; this proves it rather than assuming it. If any of these report a
+-- non-zero count, a previous run committed when it should not have, and the
+-- results below would be standing on dirty state.
+-- ===========================================================================
+select pg_temp.act_as_ambient();
+
+do $$
+declare n int;
+begin
+  select count(*) into n from auth.users
+  where id::text like '00000000-0000-4000-8000-0000000000f%';
+  perform pg_temp.record('0 preflight', 'no fixture auth.users rows survive from a prior run', '0', n::text);
+
+  select count(*) into n from public.testimonial_submissions
+  where id::text like '00000000-0000-4000-8000-00000000f%';
+  perform pg_temp.record('0 preflight', 'no fixture submissions survive from a prior run', '0', n::text);
+
+  select count(*) into n from public.clients
+  where id::text like '00000000-0000-4000-8000-00000000c%';
+  perform pg_temp.record('0 preflight', 'no fixture clients survive from a prior run', '0', n::text);
+
+  select count(*) into n from public.experiences
+  where id::text like '00000000-0000-4000-8000-00000000e%';
+  perform pg_temp.record('0 preflight', 'no fixture experiences survive from a prior run', '0', n::text);
+
+  select count(*) into n from public.experience_users
+  where id::text like '00000000-0000-4000-8000-00000000d%';
+  perform pg_temp.record('0 preflight', 'no fixture enrollments survive from a prior run', '0', n::text);
+
+  -- The consent registry must be genuinely empty in the real database: the
+  -- migration ships it empty so capture fails closed, and section 17 writes
+  -- test rows into it. A survivor here would be both residue AND a live
+  -- legal-gate change.
+  select count(*) into n from public.consent_document_versions;
+  perform pg_temp.record('0 preflight', 'the consent registry is empty before fixtures', '0', n::text);
+end $$;
+
+-- ===========================================================================
 -- FIXTURES
 -- ===========================================================================
 select pg_temp.act_as_ambient();
@@ -1214,7 +1256,13 @@ end $$;
 -- REQUIRES migration 20260819103000 (corrected). Fails by design until applied.
 -- ===========================================================================
 do $$
-declare n int;
+declare
+  n           int;
+  v_oid       oid;
+  v_nargs     int;
+  v_ndefaults int;
+  v_argtypes  oid[];
+  v_argnames  text[];
 begin
   perform pg_temp.act_as_ambient();
 
@@ -1260,16 +1308,96 @@ begin
     (pg_get_viewdef('public.testimonial_gallery_items'::regclass, true)
       like '%environment_marker = ''production''%')::text);
 
+  -- -------------------------------------------------------------------------
   -- The intent RPC takes the verified visitor id and the media type, and
   -- NOTHING else: no consent version, no environment marker, no client,
   -- experience or submission key. The visitor id is present because the
   -- trusted caller has no session for auth.uid() to read; the RPC re-resolves
   -- it against auth.users rather than trusting it.
-  perform pg_temp.record('15 corrections', 'create_testimonial_intent takes only the visitor id and media type',
-    'p_visitor_id uuid, p_media_type public.testimonial_media_type',
-    pg_get_function_identity_arguments(p.oid))
-  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
-  where ns.nspname='public' and p.proname='create_testimonial_intent';
+  --
+  -- Asserted against the CATALOG, not against rendered SQL text.
+  --
+  -- This check previously compared pg_get_function_identity_arguments() to a
+  -- literal string and failed for a purely cosmetic reason: the *identity*
+  -- form deliberately omits parameter NAMES, returning "uuid,
+  -- testimonial_media_type" where the expectation spelled out
+  -- "p_visitor_id uuid, ...". Schema qualification in that text also depends
+  -- on the session search_path, so the same correct function renders
+  -- differently for different callers.
+  --
+  -- Swapping in a different hard-coded string would have re-armed the same
+  -- trap. Every property below is read from pg_proc / pg_type instead, where
+  -- arity, names, types and defaults are structured values rather than
+  -- formatting. The type check compares OIDs, so it cannot be satisfied by a
+  -- differently-schema'd enum that merely prints the same.
+  -- -------------------------------------------------------------------------
+
+  -- (1) The name resolves to exactly ONE function - no overload was left
+  -- behind by an earlier draft that a caller could reach instead.
+  select count(*) into n
+  from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+  where ns.nspname = 'public' and p.proname = 'create_testimonial_intent';
+  perform pg_temp.record('15 signature', 'create_testimonial_intent is not overloaded', '1', n::text);
+
+  -- ...and this exact signature is the one that resolves.
+  v_oid := to_regprocedure('public.create_testimonial_intent(uuid, public.testimonial_media_type)')::oid;
+  perform pg_temp.record('15 signature', 'the (uuid, testimonial_media_type) signature resolves', 'true',
+    (v_oid is not null)::text);
+
+  if v_oid is not null then
+    -- oidvector is converted through text EXPLICITLY. nullif() guards the
+    -- zero-argument case: proargtypes::text would be '', string_to_array
+    -- would yield {''}, and the cast to oid[] would RAISE - aborting the
+    -- transaction instead of recording a failure.
+    select p.pronargs,
+           p.pronargdefaults,
+           coalesce(
+             string_to_array(nullif(p.proargtypes::text, ''), ' ')::oid[],
+             '{}'::oid[]
+           ),
+           p.proargnames
+    into v_nargs, v_ndefaults, v_argtypes, v_argnames
+    from pg_proc p where p.oid = v_oid;
+
+    -- (2) Exactly two INPUT arguments. pronargs counts inputs only, so the
+    -- RETURNS TABLE columns cannot pad this number.
+    perform pg_temp.record('15 signature', 'it declares exactly two input arguments', '2', v_nargs::text);
+    perform pg_temp.record('15 signature', 'proargtypes holds exactly two entries', '2',
+      coalesce(array_length(v_argtypes, 1), 0)::text);
+
+    -- (3) Argument NAMES, in order. proargnames spans IN then OUT names when a
+    -- function returns a table, so this is sliced to the two inputs.
+    perform pg_temp.record('15 signature', 'the input argument names are exactly p_visitor_id, p_media_type',
+      '{p_visitor_id,p_media_type}', coalesce(v_argnames[1:2]::text, '<null>'));
+
+    -- (4) Argument TYPES, by OID. Not by printed name: an enum of the same
+    -- name in another schema has a different OID and is rejected here.
+    -- to_regtype() rather than ::regtype: the cast form RAISES on an unknown
+    -- type name, which would abort this block; to_regtype returns NULL and
+    -- lets the mismatch be reported like any other failure.
+    perform pg_temp.record('15 signature', 'argument 1 is uuid',
+      coalesce((to_regtype('uuid'))::oid::text, '<unresolved>'),
+      coalesce(v_argtypes[1]::text, '<null>'));
+    perform pg_temp.record('15 signature', 'argument 2 is the public.testimonial_media_type enum OID',
+      coalesce((to_regtype('public.testimonial_media_type'))::oid::text, '<unresolved>'),
+      coalesce(v_argtypes[2]::text, '<null>'));
+
+    -- ...and that OID really is an enum in public, so the assertion above is
+    -- anchored to a real enum rather than to whatever the name resolves to.
+    perform pg_temp.record('15 signature', 'that type is an enum living in public', 'e,public',
+      coalesce((select t.typtype::text || ',' || tns.nspname::text
+                from pg_type t join pg_namespace tns on tns.oid = t.typnamespace
+                where t.oid = v_argtypes[2]), '<unresolved>'));
+
+    -- (5) No defaulted arguments - a default would let a caller omit the
+    -- verified visitor id and have the server supply one.
+    perform pg_temp.record('15 signature', 'no argument carries a default', '0', v_ndefaults::text);
+
+    -- No VARIADIC tail, and no OUT/INOUT smuggled into the input list:
+    -- proargmodes is NULL when every argument is plain IN plus table columns.
+    perform pg_temp.record('15 signature', 'the function is not variadic', '0',
+      coalesce((select p.provariadic from pg_proc p where p.oid = v_oid)::text, '<null>'));
+  end if;
 end $$;
 
 -- ===========================================================================
@@ -1579,22 +1707,120 @@ begin
 end $$;
 
 -- ===========================================================================
+-- SECTION 19 — the status view grants NO privilege to any browser role
+--
+-- Defence in depth. Section 12 asserts the absence of SELECT, which is the
+-- verb the boundary change was about. This proves the ENTIRE privilege set is
+-- empty for PUBLIC, anon and authenticated - so nothing else was left behind
+-- by 20260817160000's original grant, by a Supabase default privilege, or by
+-- the view having become auto-updatable when its JOIN became a WHERE EXISTS.
+--
+-- That last point is why INSERT, UPDATE and DELETE are probed rather than
+-- assumed: the view is now a simple single-table view, so PostgreSQL treats it
+-- as auto-updatable. Writes through it would still hit the base table's
+-- triggers and CHECKs, but "no privilege at all" is the stronger guarantee and
+-- it should be measured, not reasoned about.
+--
+-- MAINTAIN exists only from PostgreSQL 17. It is probed CONDITIONALLY because
+-- has_table_privilege() RAISES on an unrecognized privilege name rather than
+-- returning false, so an unguarded probe would abort this transaction on 16.
+-- ===========================================================================
+do $$
+declare
+  v_role  text;
+  v_priv  text;
+  v_privs text[];
+  v_ver   int := current_setting('server_version_num')::int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  v_privs := array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'];
+  if v_ver >= 170000 then
+    v_privs := v_privs || 'MAINTAIN'::text;
+  end if;
+
+  -- Recorded so the report says which server this ran against and whether the
+  -- MAINTAIN row was actually probed or skipped.
+  perform pg_temp.note('19 view privileges', 'server_version_num', v_ver::text);
+  perform pg_temp.record('19 view privileges',
+    'the probe set includes MAINTAIN on PostgreSQL 17+',
+    (v_ver >= 170000)::text,
+    (coalesce(array_length(v_privs, 1), 0) = 8)::text);
+
+  foreach v_role in array array['public', 'anon', 'authenticated'] loop
+    foreach v_priv in array v_privs loop
+      perform pg_temp.record('19 view privileges',
+        v_role || ' holds no ' || v_priv || ' on testimonial_my_submissions',
+        'false',
+        has_table_privilege(v_role, 'public.testimonial_my_submissions', v_priv)::text);
+    end loop;
+  end loop;
+end $$;
+
+-- ===========================================================================
 -- RESULTS
 -- ===========================================================================
 select pg_temp.act_as_ambient();
 
+-- Full listing, failures first.
+--
+-- Ordering by `passed` ascending puts false before true, so a failure is at
+-- the top of this grid rather than buried at whatever sequence number it
+-- happened to land on.
 select
   seq, section, check_name, expected, actual,
   case when passed then 'PASS' else 'FAIL' end as result
 from pg_temp._aa_check_results
-order by seq;
+order by passed, seq;
 
-select
-  count(*)                                  as total_checks,
-  count(*) filter (where passed)            as passed,
-  count(*) filter (where not passed)        as failed,
-  case when count(*) filter (where not passed) = 0
-       then 'ALL CHECKS PASSED' else 'FAILURES PRESENT' end as verdict
-from pg_temp._aa_check_results;
+-- ---------------------------------------------------------------------------
+-- FINAL RESULT — failures and summary in ONE result set.
+--
+-- The Supabase SQL Editor renders only the LAST statement's result set. The
+-- listing above is therefore computed and discarded by that client, which is
+-- exactly why a run reporting "1 failed" showed a summary grid and no way to
+-- see WHICH assertion failed.
+--
+-- Combining both into a single final result set fixes that for any client:
+-- every failing row is emitted first, with its section, description, expected
+-- and actual value, followed by one SUMMARY row. When nothing fails, the
+-- failure branch returns no rows and this degrades to the summary alone.
+--
+-- Read-only. Adds no BEGIN, no COMMIT and no SAVEPOINT; the single ROLLBACK
+-- below still ends the one transaction opened at the top of this file.
+-- ---------------------------------------------------------------------------
+select r.section, r.check_name, r.expected, r.actual, r.result
+from (
+  select
+    0            as ord,
+    c.seq        as seq,
+    c.section    as section,
+    c.check_name as check_name,
+    c.expected   as expected,
+    c.actual     as actual,
+    'FAIL'::text as result
+  from pg_temp._aa_check_results c
+  where not c.passed
+
+  union all
+
+  -- Every column is cast explicitly, so the UNION's type resolution does not
+  -- depend on which branch the planner sees first or on whether the failure
+  -- branch returned any rows at all.
+  select
+    1::int,
+    2147483647::int,
+    'SUMMARY'::text,
+    format('%s total / %s passed / %s failed',
+           count(*),
+           count(*) filter (where passed),
+           count(*) filter (where not passed))::text,
+    '0 failed'::text,
+    (count(*) filter (where not passed))::text,
+    (case when count(*) filter (where not passed) = 0
+          then 'ALL CHECKS PASSED' else 'FAILURES PRESENT' end)::text
+  from pg_temp._aa_check_results
+) r
+order by r.ord, r.seq;
 
 rollback;

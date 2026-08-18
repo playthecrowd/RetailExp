@@ -1350,6 +1350,61 @@ assert(
   "the guard stamps the upload window that intent idempotency depends on",
 );
 
+// --- The status view is revoked, and never re-granted, ACROSS ALL MIGRATIONS
+// Checking only the Phase 4B file would miss the thing that actually matters:
+// 20260817160000 DID grant SELECT on this view to `authenticated`, and a later
+// migration could grant it again. So every privilege statement naming the view
+// is collected in migration order, and the LAST one must be the revoke.
+const viewPrivStatements = [];
+for (const file of files) {
+  const fileSql = readFileSync(join(migrationsDir, file), "utf8").replace(/--[^\n]*/g, "");
+  for (const m of fileSql.matchAll(
+    /\b(grant|revoke)\b[^;]*\btestimonial_my_submissions\b[^;]*;/gi,
+  )) {
+    viewPrivStatements.push({ file, stmt: m[0].replace(/\s+/g, " ").trim() });
+  }
+}
+
+assert(
+  viewPrivStatements.length > 0,
+  "privilege statements naming the status view were found across the migrations",
+);
+
+const lastViewPriv = viewPrivStatements[viewPrivStatements.length - 1];
+assert(
+  /^revoke\s+all\b/i.test(lastViewPriv.stmt),
+  "the LAST privilege statement on the status view is a REVOKE ALL, not a grant",
+);
+for (const role of ["public", "anon", "authenticated"]) {
+  assert(
+    new RegExp("\\bfrom\\b[^;]*\\b" + role + "\\b", "i").test(lastViewPriv.stmt),
+    `that final revoke names ${role}`,
+  );
+}
+
+// Nothing may grant the view to a browser role after the capture migration's
+// revoke, in any migration. Ordering is by filename, which is the order they
+// are applied in.
+//
+// Written as a single assertion over the remaining slice rather than a loop:
+// a loop emits no assertion at all when the slice is empty, which is exactly
+// the passing case - it would look like a check while proving nothing.
+const revokeAt = viewPrivStatements.findIndex(
+  (s) => /^revoke\s+all\b/i.test(s.stmt) && s.file === captureMigrationFile,
+);
+assert(revokeAt !== -1, "the capture migration is where the status view is revoked");
+assert(
+  viewPrivStatements.slice(revokeAt + 1).every((s) => !/^grant\b/i.test(s.stmt)),
+  "no migration re-grants the status view after that revoke",
+);
+
+// And the Phase 4B migration itself grants it to nobody at all - not even the
+// trusted tier, which reaches the data through list_my_testimonial_submissions().
+assert(
+  !/grant[^;]*\btestimonial_my_submissions\b/i.test(capExec),
+  "the capture migration grants the status view to no role whatsoever",
+);
+
 // --- The Gallery is Production-only ----------------------------------------
 assert(
   /and s\.environment_marker = 'production'/.test(capExec),
