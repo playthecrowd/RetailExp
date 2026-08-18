@@ -1,3 +1,14 @@
+// The official Next.js server-only boundary. Importing this module from a
+// Client Component is now a BUILD-TIME error rather than something a reviewer
+// has to notice: the package resolves to a file that only exists in the
+// react-server condition, so bundling it for the browser fails outright.
+//
+// The typeof-window guard below is kept as defence in depth. It covers the
+// runtime case this cannot - evaluation in a browser context reached by some
+// path the bundler never saw - and the two together mean neither a build
+// change nor a runtime surprise silently removes the boundary.
+import "server-only";
+
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./database.types";
 
@@ -14,15 +25,15 @@ import type { Database } from "./database.types";
  * rejects secret-key requests sent from a browser (HTTP 401) as a second,
  * independent layer beyond the guard below).
  *
- * This must never be reachable from browser code. Not using the
- * `server-only` npm package here (it is not installed and is not a declared
- * dependency of this project) — instead, a runtime guard below throws
- * immediately if this module is ever evaluated in a browser context, and the
- * secret variable is intentionally NOT prefixed with NEXT_PUBLIC_, so Next.js
- * never inlines it into the client bundle in the first place even if this
- * guard were somehow bypassed. See scripts/verify-supabase-key-usage.mjs for
- * the static check that fails the build if this file (or the key itself) is
- * ever referenced from a "use client" file or a public-configuration surface.
+ * This must never be reachable from browser code, and three independent
+ * mechanisms now enforce that: the `server-only` import above fails the BUILD
+ * if a Client Component pulls this module in; the runtime guard below throws
+ * if it is ever evaluated in a browser context anyway; and the secret variable
+ * is intentionally NOT prefixed with NEXT_PUBLIC_, so Next.js never inlines it
+ * into the client bundle in the first place. See
+ * scripts/verify-supabase-key-usage.mjs for the static check that also fails
+ * if this file (or the key itself) is referenced from a "use client" file or a
+ * public-configuration surface.
  *
  * Use only for genuinely administrative server-side operations that RLS
  * can't or shouldn't express (e.g. reading the moderation queue, which no

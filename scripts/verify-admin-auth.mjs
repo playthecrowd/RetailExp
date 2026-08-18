@@ -934,9 +934,26 @@ assert(
 );
 
 // Server-only, unchanged client options, no weakening fallbacks.
+// --- The official server-only boundary ------------------------------------
+// Verified empirically, not merely asserted: a temporary Client Component
+// importing this module fails the Turbopack build with
+// "'server-only' cannot be imported from a Client Component module".
+assert(
+  /^import "server-only";$/m.test(secretExec),
+  "the module imports the official server-only boundary, so a Client Component import fails the BUILD",
+);
+assert(
+  secretExec.indexOf('import "server-only"') < secretExec.indexOf("createSupabaseClient"),
+  "the server-only import comes before any other import that could pull in client-safe code",
+);
+assert(
+  /"server-only"/.test(read("package.json")),
+  "server-only is a declared dependency rather than an incidentally-present transitive package",
+);
+
 assert(
   /typeof window !== "undefined"/.test(secretExec),
-  "createSecretClient() remains server-only via the browser guard",
+  "the runtime browser guard is RETAINED as defence in depth alongside the build-time boundary",
 );
 assert(
   /persistSession: false/.test(secretExec) && /autoRefreshToken: false/.test(secretExec),
