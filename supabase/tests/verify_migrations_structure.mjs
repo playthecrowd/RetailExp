@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 17, `exactly 17 migration files exist (found ${files.length})`);
+assert(files.length === 18, `exactly 18 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -1069,6 +1069,93 @@ assert(
 assert(
   !/revoke (select|insert|update|delete)[^;]*on\s+public\.(brand_settings|choices|clients|content_nodes|engagement_events|experience_user_rewards|experience_users|experiences|journey_progress|media_assets|pathways|publication_versions)/i.test(profSql),
   "no verb other than TRUNCATE is altered on the other 13 tables",
+);
+
+// --- Moderation queue view extension ---------------------------------------
+// Phase 3 needs consent, attestation and lifecycle state to explain WHY a
+// submission is actionable. Those columns are added to the view rather than
+// letting the dashboard reach past it to the base table.
+
+const queueViewMigrationFile = "20260818161500_extend_moderation_queue_view.sql";
+assert(
+  files.includes(queueViewMigrationFile),
+  `the moderation queue view migration exists (${queueViewMigrationFile})`,
+);
+
+const viewSql = files.includes(queueViewMigrationFile)
+  ? readFileSync(join(migrationsDir, queueViewMigrationFile), "utf8")
+  : "";
+
+const viewExec = viewSql
+  .replace(/--[^\n]*/g, "")
+  .replace(/comment on [\s\S]*?;/gi, "");
+
+assert(
+  /create or replace view public\.testimonial_moderation_queue as/.test(viewExec),
+  "the view is superseded with CREATE OR REPLACE, never dropped and recreated",
+);
+assert(
+  !/drop view/i.test(viewExec),
+  "no DROP VIEW - replacing preserves the object's ACL so Supabase default privileges are not re-applied",
+);
+
+// The safe review fields the dashboard needs.
+for (const col of [
+  "upload_status",
+  "validation_status",
+  "provider_processing_status",
+  "delivery_ready_at",
+  "poster_ready_at",
+  "media_purge_after",
+  "consent_scope",
+  "consent_version",
+  "attested_no_minors",
+  "attested_subjects_consented",
+]) {
+  assert(
+    new RegExp("s\\." + col + "\\b").test(viewExec),
+    `the view selects ${col}`,
+  );
+}
+
+// Fields that must never be in a moderation surface.
+for (const forbidden of [
+  "auth_user_id",
+  "experience_user_id",
+  "display_name",
+  "email",
+  "phone_e164",
+  "provider_upload_id",
+  "provider_asset_id",
+  "last_provider_event_id",
+  "payload_hash",
+  "signature_verified_at",
+  "provider_signed_urls_required",
+]) {
+  assert(
+    !new RegExp("\\b" + forbidden + "\\b").test(viewExec),
+    `the view never selects ${forbidden}`,
+  );
+}
+
+// Eligibility and security characteristics are unchanged.
+assert(
+  /upload_status = 'uploaded'/.test(viewExec) &&
+    /validation_status = 'valid'/.test(viewExec) &&
+    /media_deleted_at is null/.test(viewExec),
+  "the moderation-eligibility WHERE clause is preserved exactly",
+);
+assert(
+  /revoke all on public\.testimonial_moderation_queue from public, anon, authenticated;/.test(viewExec),
+  "the view is explicitly revoked from every browser role",
+);
+assert(
+  !/grant[^;]*on public\.testimonial_moderation_queue/i.test(viewExec),
+  "the migration grants the queue view to nobody",
+);
+assert(
+  !/security_invoker/i.test(viewExec),
+  "security_invoker is left at its existing value rather than being flipped",
 );
 
 console.log(`\n${files.length} migration files checked.`);

@@ -647,6 +647,273 @@ begin
 end $$;
 
 -- ===========================================================================
+-- SECTION 9 — moderation queue view + moderation decisions
+--
+-- REQUIRES migrations 20260818094500 AND 20260818161500.
+-- The field-presence checks fail by design until 20260818161500 is applied.
+-- ===========================================================================
+do $$
+declare
+  col  text;
+  n    int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- --- the safe review fields the dashboard needs ------------------------
+  foreach col in array array[
+    'upload_status','validation_status','provider_processing_status',
+    'delivery_ready_at','poster_ready_at','media_purge_after',
+    'consent_scope','consent_version','attested_no_minors','attested_subjects_consented'
+  ] loop
+    select count(*) into n from information_schema.columns
+    where table_schema='public' and table_name='testimonial_moderation_queue' and column_name=col;
+    perform pg_temp.record('9 queue view', 'queue exposes ' || col, '1', n::text);
+  end loop;
+
+  -- --- fields that must never appear on a moderation surface -------------
+  foreach col in array array[
+    'auth_user_id','experience_user_id','display_name','email','phone_e164',
+    'provider_upload_id','provider_asset_id','last_provider_event_id',
+    'payload_hash','signature_verified_at'
+  ] loop
+    select count(*) into n from information_schema.columns
+    where table_schema='public' and table_name='testimonial_moderation_queue' and column_name=col;
+    perform pg_temp.record('9 queue view', 'queue does NOT expose ' || col, '0', n::text);
+  end loop;
+
+  -- --- browser roles still hold nothing ----------------------------------
+  select count(*) into n from information_schema.role_table_grants
+  where table_schema='public' and table_name='testimonial_moderation_queue'
+    and grantee in ('PUBLIC','anon','authenticated');
+  perform pg_temp.record('9 queue view', 'no browser role holds any privilege on the queue view', '0', n::text);
+
+  perform pg_temp.record('9 queue view', 'authenticated cannot SELECT the queue view', 'false',
+    has_table_privilege('authenticated','public.testimonial_moderation_queue','SELECT')::text);
+  perform pg_temp.record('9 queue view', 'anon cannot SELECT the queue view', 'false',
+    has_table_privilege('anon','public.testimonial_moderation_queue','SELECT')::text);
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Fixtures for moderation decisions.
+--
+-- Image submissions only: an image reaches validation_status='valid' with
+-- provider_asset_id + provider_draft_cleared_at + provider_signed_urls_required,
+-- while a video would additionally need trusted duration, size and dimensions.
+-- delivery_ready_at and provider_delivery_id are set because the approval
+-- trigger refuses without them.
+-- ---------------------------------------------------------------------------
+select pg_temp.act_as_ambient();
+
+insert into public.experiences (id, client_id, slug, name, publication_status) values
+  ('00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000ca01','aa-exp-a','AA Experience A','published'),
+  ('00000000-0000-4000-8000-00000000eb01','00000000-0000-4000-8000-00000000cb01','aa-exp-b','AA Experience B','published');
+
+insert into public.experience_users (id, experience_id, client_id, auth_user_id, display_name, email) values
+  ('00000000-0000-4000-8000-00000000da01','00000000-0000-4000-8000-00000000ea01',
+   '00000000-0000-4000-8000-00000000ca01','00000000-0000-4000-8000-0000000000f1',
+   'AA Visitor','aa-visitor-enrolled@example.com');
+
+insert into public.testimonial_submissions
+  (id, client_id, experience_id, experience_user_id, auth_user_id,
+   media_type, client_submission_key, consent_version, consented_at,
+   attested_no_minors, attested_subjects_consented,
+   upload_status, uploaded_at, validation_status, validated_at,
+   provider, provider_asset_id, provider_delivery_id, provider_draft_cleared_at,
+   provider_signed_urls_required, delivery_ready_at, submitted_at, caption)
+values
+  ('00000000-0000-4000-8000-00000000fa01','00000000-0000-4000-8000-00000000ca01',
+   '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+   '00000000-0000-4000-8000-0000000000f1',
+   'image','aa-key-1','v1', now(), true, true,
+   'uploaded', now(), 'valid', now(),
+   'aa-provider','aa-asset-1','aa-delivery-1', now(), true, now(), now(), 'AA caption one'),
+  ('00000000-0000-4000-8000-00000000fa02','00000000-0000-4000-8000-00000000ca01',
+   '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+   '00000000-0000-4000-8000-0000000000f1',
+   'image','aa-key-2','v1', now(), true, true,
+   'uploaded', now(), 'valid', now(),
+   'aa-provider','aa-asset-2','aa-delivery-2', now(), true, now(), now(), 'AA caption two'),
+  ('00000000-0000-4000-8000-00000000fa03','00000000-0000-4000-8000-00000000ca01',
+   '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+   '00000000-0000-4000-8000-0000000000f1',
+   'image','aa-key-3','v1', now(), true, true,
+   'uploaded', now(), 'valid', now(),
+   'aa-provider','aa-asset-3','aa-delivery-3', now(), true, now(), now(), 'AA caption three');
+
+-- A submission belonging to the OTHER tenant. Nothing in the dashboard should
+-- ever surface it: the loader scopes every query by the client id that
+-- AUTHORIZATION resolved, and this fixture is what proves that filter is what
+-- does the scoping rather than an accident of the fixture set.
+insert into public.experience_users (id, experience_id, client_id, auth_user_id, display_name, email) values
+  ('00000000-0000-4000-8000-00000000db01','00000000-0000-4000-8000-00000000eb01',
+   '00000000-0000-4000-8000-00000000cb01','00000000-0000-4000-8000-0000000000f7',
+   'AA Other Visitor','aa-visitor-other@example.com');
+
+insert into public.testimonial_submissions
+  (id, client_id, experience_id, experience_user_id, auth_user_id,
+   media_type, client_submission_key, consent_version, consented_at,
+   attested_no_minors, attested_subjects_consented,
+   upload_status, uploaded_at, validation_status, validated_at,
+   provider, provider_asset_id, provider_delivery_id, provider_draft_cleared_at,
+   provider_signed_urls_required, delivery_ready_at, submitted_at, caption)
+values
+  ('00000000-0000-4000-8000-00000000fb01','00000000-0000-4000-8000-00000000cb01',
+   '00000000-0000-4000-8000-00000000eb01','00000000-0000-4000-8000-00000000db01',
+   '00000000-0000-4000-8000-0000000000f7',
+   'image','aa-key-b1','v1', now(), true, true,
+   'uploaded', now(), 'valid', now(),
+   'aa-provider','aa-asset-b1','aa-delivery-b1', now(), true, now(), now(), 'AA other tenant caption');
+
+-- ===========================================================================
+-- SECTION 9b — cross-client leakage through the trusted read path
+-- ===========================================================================
+do $$
+declare n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- The trusted client CAN see everything; the tenant filter is what confines
+  -- it. Both halves are asserted, because a filter that happens to match
+  -- because only one tenant has data proves nothing.
+  select count(*) into n from public.testimonial_moderation_queue;
+  perform pg_temp.record('9b tenancy', 'the trusted read sees BOTH tenants without a filter', '4', n::text);
+
+  select count(*) into n from public.testimonial_moderation_queue
+  where client_id = '00000000-0000-4000-8000-00000000ca01';
+  perform pg_temp.record('9b tenancy', 'scoping by the authorized client id yields only that tenant', '3', n::text);
+
+  select count(*) into n from public.testimonial_moderation_queue
+  where client_id = '00000000-0000-4000-8000-00000000ca01'
+    and submission_id = '00000000-0000-4000-8000-00000000fb01';
+  perform pg_temp.record('9b tenancy', 'the other tenant''s submission is unreachable under that scope', '0', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 10 — who may moderate
+-- ===========================================================================
+do $$
+declare
+  v_status text;
+  v_reviewer uuid;
+  n int;
+begin
+  -- The queue is populated and readable by the trusted tier only.
+  perform pg_temp.act_as_ambient();
+  select count(*) into n from public.testimonial_moderation_queue
+  where client_id = '00000000-0000-4000-8000-00000000ca01';
+  perform pg_temp.record('10 moderation', 'three fixtures are moderation-eligible', '3', n::text);
+
+  -- Denied identities. The RPC returns the same error for absent and
+  -- unauthorized, so every one of these is 42501.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f4');   -- editor
+  perform pg_temp.try_sql('10 moderation', 'editor cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f5');   -- viewer
+  perform pg_temp.try_sql('10 moderation', 'viewer cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f7');   -- cross-tenant owner
+  perform pg_temp.try_sql('10 moderation', 'cross-client owner cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');   -- anonymous visitor
+  perform pg_temp.try_sql('10 moderation', 'anonymous identity cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f6');   -- no membership
+  perform pg_temp.try_sql('10 moderation', 'no-membership identity cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as_anon();
+  perform pg_temp.try_sql('10 moderation', 'signed-out caller cannot moderate', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  -- Nothing above changed anything.
+  perform pg_temp.act_as_ambient();
+  select count(*) into n from public.testimonial_submissions
+  where client_id = '00000000-0000-4000-8000-00000000ca01' and moderation_status = 'pending';
+  perform pg_temp.record('10 moderation', 'all three remain pending after the denied attempts', '3', n::text);
+
+  -- --- OWNER approves ----------------------------------------------------
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f2');
+  select moderation_status::text into v_status
+  from public.moderate_testimonial_submission(
+    '00000000-0000-4000-8000-00000000fa01'::uuid,
+    'approved'::public.testimonial_moderation_status);
+  perform pg_temp.record('10 moderation', 'same-client OWNER can approve', 'approved', v_status);
+
+  perform pg_temp.act_as_ambient();
+  select reviewed_by into v_reviewer from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fa01';
+  perform pg_temp.record('10 moderation', 'reviewed_by is the real administrator UUID',
+    '00000000-0000-4000-8000-0000000000f2', v_reviewer::text);
+
+  -- --- ADMIN rejects -----------------------------------------------------
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f3');
+  select moderation_status::text into v_status
+  from public.moderate_testimonial_submission(
+    '00000000-0000-4000-8000-00000000fa02'::uuid,
+    'rejected'::public.testimonial_moderation_status,
+    'AA note', 'possible_minor');
+  perform pg_temp.record('10 moderation', 'same-client ADMIN can reject', 'rejected', v_status);
+
+  -- --- PLATFORM ADMIN approves, with no membership at all ----------------
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f8');
+  select moderation_status::text into v_status
+  from public.moderate_testimonial_submission(
+    '00000000-0000-4000-8000-00000000fa03'::uuid,
+    'approved'::public.testimonial_moderation_status);
+  perform pg_temp.record('10 moderation', 'PLATFORM ADMIN can approve without a membership', 'approved', v_status);
+end $$;
+
+-- ===========================================================================
+-- SECTION 11 — transitions and Gallery eligibility
+-- ===========================================================================
+do $$
+declare n int;
+begin
+  -- A rejected submission can never become approved.
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f2');
+  perform pg_temp.try_sql('11 transitions', 'rejected -> approved is refused', 'blocked-42501',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa02'::uuid, 'approved'::public.testimonial_moderation_status)$q$);
+
+  -- 'pending' is not a decision the RPC accepts.
+  perform pg_temp.try_sql('11 transitions', 'pending is not an accepted decision', 'blocked-22023',
+    $q$select public.moderate_testimonial_submission(
+         '00000000-0000-4000-8000-00000000fa01'::uuid, 'pending'::public.testimonial_moderation_status)$q$);
+
+  perform pg_temp.act_as_ambient();
+
+  -- Approved items are Gallery-eligible; rejected ones are not.
+  select count(*) into n from public.testimonial_gallery_items
+  where submission_id = '00000000-0000-4000-8000-00000000fa01';
+  perform pg_temp.record('11 transitions', 'approved submission IS gallery-eligible', '1', n::text);
+
+  select count(*) into n from public.testimonial_gallery_items
+  where submission_id = '00000000-0000-4000-8000-00000000fa02';
+  perform pg_temp.record('11 transitions', 'rejected submission is NOT gallery-eligible', '0', n::text);
+
+  select count(*) into n from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fa02' and media_purge_after is not null;
+  perform pg_temp.record('11 transitions', 'rejection schedules media purge', '1', n::text);
+
+  -- The gallery view carries no contact or reviewer data.
+  select count(*) into n from information_schema.columns
+  where table_schema='public' and table_name='testimonial_gallery_items'
+    and column_name in ('auth_user_id','experience_user_id','email','phone_e164',
+                        'reviewed_by','moderation_note','rejection_reason','consent_version');
+  perform pg_temp.record('11 transitions', 'gallery view exposes no reviewer or contact fields', '0', n::text);
+end $$;
+
+-- ===========================================================================
 -- RESULTS
 -- ===========================================================================
 select pg_temp.act_as_ambient();
