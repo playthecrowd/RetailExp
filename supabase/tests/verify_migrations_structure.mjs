@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 20, `exactly 20 migration files exist (found ${files.length})`);
+assert(files.length === 21, `exactly 21 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -1585,6 +1585,162 @@ const orphanFn = ledgerExec.slice(
 assert(
   !/update public\.testimonial_submissions/.test(orphanFn),
   "orphan recovery never touches testimonial_submissions, so it can move no lifecycle and stamp no environment",
+);
+
+// --- pgcrypto must be schema-qualified -------------------------------------
+// pgcrypto is installed in the `extensions` schema on this project. Every
+// SECURITY DEFINER function here pins `search_path = public, pg_catalog`,
+// which does NOT include it, so an unqualified pgcrypto call cannot resolve at
+// EXECUTION time — even though the migration defining it applies cleanly,
+// because a plpgsql body is parsed but not resolved at CREATE time.
+//
+// That gap is why these checks exist: a migration applying successfully proves
+// nothing about whether the functions it defines can actually run.
+
+const PGCRYPTO_FUNCTIONS = [
+  "gen_random_bytes", "digest", "hmac", "crypt", "gen_salt",
+  "encrypt", "decrypt", "encrypt_iv", "decrypt_iv",
+  "pgp_sym_encrypt", "pgp_sym_decrypt", "pgp_pub_encrypt", "pgp_pub_decrypt",
+  "armor", "dearmor", "pgp_key_id",
+];
+
+/**
+ * Every unqualified pgcrypto call, attributed to the function that contains it
+ * and to the migration's position in apply order.
+ *
+ * A file-level scan is not enough. An APPLIED migration cannot be edited, so
+ * its text keeps the defect forever; what matters is whether the LIVE function
+ * still carries it after ordered supersession. Each occurrence is therefore
+ * attributed to its containing function, and a later migration that redefines
+ * that same function with a qualified call resolves it.
+ */
+const pgcryptoOccurrences = [];
+for (const [order, file] of files.entries()) {
+  const fileExec = readFileSync(join(migrationsDir, file), "utf8").replace(/--[^\n]*/g, "");
+  for (const fn of PGCRYPTO_FUNCTIONS) {
+    const pattern = new RegExp("(?<![a-z_.])" + fn + "\\s*\\(", "g");
+    let match;
+    while ((match = pattern.exec(fileExec)) !== null) {
+      const before = fileExec.slice(0, match.index);
+      const owners = before.match(/create or replace function public\.(\w+)/g) || [];
+      const owner = owners.length
+        ? owners[owners.length - 1].replace("create or replace function public.", "")
+        : "(top level)";
+      pgcryptoOccurrences.push({ file, order, fn, owner });
+    }
+  }
+}
+
+/** Later migrations that redefine a function with all pgcrypto calls qualified. */
+const qualifiedRedefinitions = [];
+for (const [order, file] of files.entries()) {
+  const fileExec = readFileSync(join(migrationsDir, file), "utf8").replace(/--[^\n]*/g, "");
+  for (const m of fileExec.matchAll(/create or replace function public\.(\w+)/g)) {
+    const owner = m[1];
+    const rest = fileExec.slice(m.index);
+    const nextDef = rest.slice(1).search(/create or replace function public\./);
+    const segment = nextDef === -1 ? rest : rest.slice(0, nextDef + 1);
+    const hasUnqualified = PGCRYPTO_FUNCTIONS.some((fn) =>
+      new RegExp("(?<![a-z_.])" + fn + "\\s*\\(").test(segment),
+    );
+    if (!hasUnqualified) qualifiedRedefinitions.push({ owner, order });
+  }
+}
+
+/**
+ * What is still broken in the live database after ordered supersession.
+ *
+ * THIS SET MUST BE EMPTY. It is not an accepted-defect list: an unqualified
+ * pgcrypto call in a live SECURITY DEFINER function with a pinned search_path
+ * is a runtime failure waiting for the first real caller, and there is no
+ * version of "acceptable" for that.
+ */
+const unresolvedPgcrypto = Array.from(
+  new Set(
+    pgcryptoOccurrences
+      .filter(
+        (hit) =>
+          !qualifiedRedefinitions.some(
+            (fix) => fix.owner === hit.owner && fix.order > hit.order,
+          ),
+      )
+      .map((hit) => `${hit.owner} (${hit.file})`),
+  ),
+).sort();
+
+assert(
+  unresolvedPgcrypto.length === 0,
+  `no live function contains an unqualified pgcrypto call (found: ${JSON.stringify(unresolvedPgcrypto)})`,
+);
+
+// Both known offenders must be superseded by the corrective migration, by name,
+// so the emptiness above cannot be achieved by the scan silently missing them.
+for (const owner of ["create_testimonial_intent", "reserve_testimonial_provider_attempt"]) {
+  assert(
+    pgcryptoOccurrences.some((hit) => hit.owner === owner),
+    `${owner} is still recognised as having carried an unqualified pgcrypto call`,
+  );
+  assert(
+    qualifiedRedefinitions.some(
+      (fix) =>
+        fix.owner === owner &&
+        fix.order > Math.min(...pgcryptoOccurrences.filter((h) => h.owner === owner).map((h) => h.order)),
+    ),
+    `${owner} is superseded by a later migration with the call qualified`,
+  );
+}
+
+// The corrective migration itself must be clean and narrowly scoped.
+const pgcryptoFixFile = "20260820120000_qualify_pgcrypto_calls.sql";
+assert(files.includes(pgcryptoFixFile), `the pgcrypto corrective migration exists (${pgcryptoFixFile})`);
+
+const fixSql = files.includes(pgcryptoFixFile)
+  ? readFileSync(join(migrationsDir, pgcryptoFixFile), "utf8")
+  : "";
+const fixExec = fixSql.replace(/--[^\n]*/g, "");
+
+assert(
+  (fixExec.match(/encode\(extensions\.gen_random_bytes\(16\), 'hex'\)/g) || []).length === 2,
+  "the corrective migration qualifies BOTH gen_random_bytes calls",
+);
+assert(
+  !/(?<![a-z_.])gen_random_bytes\s*\(/.test(fixExec),
+  "the corrective migration contains no UNQUALIFIED gen_random_bytes",
+);
+assert(
+  (fixExec.match(/set search_path = public, pg_catalog/g) || []).length === 2 &&
+    !/set search_path = public, extensions/.test(fixExec),
+  "both functions keep the pinned two-element search_path - the calls are qualified, the path is not widened",
+);
+assert(
+  (fixExec.match(/create or replace function/g) || []).length === 2,
+  "the corrective migration replaces exactly TWO functions",
+);
+for (const owner of ["create_testimonial_intent", "reserve_testimonial_provider_attempt"]) {
+  assert(
+    new RegExp("create or replace function public\\." + owner).test(fixExec),
+    `the corrective migration replaces ${owner}`,
+  );
+  assert(
+    new RegExp("revoke all on function public\\." + owner + "[^;]*from public, anon, authenticated;").test(fixExec),
+    `${owner} is re-revoked from PUBLIC, anon and authenticated`,
+  );
+  assert(
+    new RegExp("grant execute on function public\\." + owner + "[^;]*to service_role;").test(fixExec),
+    `${owner} is re-granted to service_role only`,
+  );
+  assert(
+    new RegExp("create or replace function public\\." + owner + "[\\s\\S]{0,600}?security definer").test(fixExec),
+    `${owner} keeps SECURITY DEFINER`,
+  );
+}
+assert(
+  !/drop |alter table|create table|create trigger/i.test(fixExec),
+  "the corrective migration drops nothing, alters no table, creates no table and adds no trigger",
+);
+assert(
+  !/to (anon|authenticated)\b/.test(fixExec),
+  "the corrective migration grants nothing to a browser role",
 );
 
 console.log(`\n${files.length} migration files checked.`);

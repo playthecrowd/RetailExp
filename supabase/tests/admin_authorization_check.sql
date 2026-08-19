@@ -2302,6 +2302,118 @@ begin
 end $$;
 
 -- ===========================================================================
+-- SECTION 25 — pgcrypto resolves at EXECUTION time, on the SUCCESSFUL path
+--
+-- 20260819103000 and 20260820090000 both applied cleanly while containing an
+-- unqualified gen_random_bytes() call, because a plpgsql body is parsed but
+-- not resolved at CREATE time. Only execution resolves the name, and the
+-- pinned `search_path = public, pg_catalog` does not include the schema
+-- pgcrypto is installed in.
+--
+-- WHY THE EARLIER SUITE MISSED IT
+--   Every previous call to create_testimonial_intent in this file is inside
+--   try_sql expecting a 42501 refusal at the privilege check, because those
+--   sections run as browser roles. The body was therefore never executed, and
+--   the gate that made those checks pass was the same gate hiding the defect.
+--
+--   A refusal path proves an authorization rule. It proves nothing about
+--   whether the function works. This section executes the SUCCESSFUL path of
+--   both functions and asserts each produces a real 32-character hexadecimal
+--   reference - which is only possible if gen_random_bytes actually resolved.
+--
+-- FIXTURE NOTE: capture is switched on for the reservation and intent guards
+-- to pass, inside the transaction that ends in ROLLBACK, and switched off
+-- again at the end. Authorization is NOT relaxed: the anonymous-visitor,
+-- ownership, published-experience and active-consent checks all still run.
+-- ===========================================================================
+do $$
+declare
+  v_schema  text;
+  v_ref     text;
+  v_sub     uuid;
+  v_key     text;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  select ns.nspname into v_schema
+  from pg_extension e join pg_namespace ns on ns.oid = e.extnamespace
+  where e.extname = 'pgcrypto';
+  perform pg_temp.note('25 pgcrypto', 'pgcrypto extension schema', coalesce(v_schema, '<not installed>'));
+
+  -- The qualification target must exist, or the corrective migration is wrong.
+  perform pg_temp.record('25 pgcrypto', 'extensions.gen_random_bytes(integer) is resolvable', 'true',
+    (to_regprocedure('extensions.gen_random_bytes(integer)') is not null)::text);
+
+  -- The pinned path must NOT have been silently widened to reach it.
+  foreach v_key in array array['create_testimonial_intent','reserve_testimonial_provider_attempt'] loop
+    perform pg_temp.record('25 pgcrypto', v_key || ' keeps its two-element search_path',
+      '{search_path=public, pg_catalog}',
+      (select array_to_string(p.proconfig, ',') from pg_proc p
+       join pg_namespace ns on ns.oid = p.pronamespace
+       where ns.nspname = 'public' and p.proname = v_key));
+  end loop;
+
+  update public.experiences set testimonial_capture_enabled = true
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  -- --- create_testimonial_intent, SUCCESSFUL path -------------------------
+  -- 'video' deliberately: several live 'image' intents already exist from
+  -- earlier sections, and the RPC reuses a live intent of the same media type
+  -- rather than inserting. The reuse branch never calls gen_random_bytes, so
+  -- testing with 'image' would pass without proving anything.
+  select r.submission_id into v_sub
+  from public.create_testimonial_intent(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    'video'::public.testimonial_media_type) r;
+
+  perform pg_temp.record('25 pgcrypto', 'create_testimonial_intent SUCCEEDED and returned a submission', 'true',
+    (v_sub is not null)::text);
+
+  select s.client_submission_key into v_key
+  from public.testimonial_submissions s where s.id = v_sub;
+  perform pg_temp.record('25 pgcrypto',
+    'the intent key is 32 hex characters from gen_random_bytes(16)', 'true',
+    (v_key ~ '^[0-9a-f]{32}$')::text);
+
+  -- Authorization was NOT bypassed to get here: the same call from a
+  -- non-anonymous identity is still refused.
+  perform pg_temp.try_sql('25 pgcrypto', 'a permanent account is still refused on the successful path',
+    'blocked-42501',
+    $q$select * from public.create_testimonial_intent(
+         '00000000-0000-4000-8000-0000000000f2'::uuid,
+         'video'::public.testimonial_media_type)$q$);
+
+  -- --- reserve_testimonial_provider_attempt, SUCCESSFUL path --------------
+  select r.opaque_reference into v_ref
+  from public.reserve_testimonial_provider_attempt(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    v_sub,
+    'cloudflare_stream', 'preview', now() + interval '30 minutes') r;
+
+  perform pg_temp.record('25 pgcrypto', 'the reservation SUCCEEDED and returned a reference', 'true',
+    (v_ref is not null)::text);
+  perform pg_temp.record('25 pgcrypto',
+    'the reservation reference is 32 hex characters from gen_random_bytes(16)', 'true',
+    (v_ref ~ '^[0-9a-f]{32}$')::text);
+
+  -- The two references are independent random values, not a constant.
+  perform pg_temp.record('25 pgcrypto', 'the two references differ', 'true',
+    (v_ref is distinct from v_key)::text);
+
+  select count(*) into n from public.testimonial_provider_assets
+  where submission_id = v_sub and opaque_reference = v_ref;
+  perform pg_temp.record('25 pgcrypto', 'the ledger row was written with that reference', '1', n::text);
+
+  -- Restore the gate the fixture opened.
+  update public.experiences set testimonial_capture_enabled = false
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  select count(*) into n from public.experiences where testimonial_capture_enabled;
+  perform pg_temp.record('25 pgcrypto', 'the capture gate is closed again after the fixture', '0', n::text);
+end $$;
+
+-- ===========================================================================
 -- RESULTS
 -- ===========================================================================
 select pg_temp.act_as_ambient();
