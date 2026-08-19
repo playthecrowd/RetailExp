@@ -1787,10 +1787,71 @@ assert(
   !/marketing|advertis|social media|social-media/i.test(stripComments(capUi)),
   "no marketing, advertising or social-media reuse consent appears",
 );
+// This used to assert that the consent step SAYS the notices do not exist,
+// which was the honest thing to display while they did not. They do now, so
+// the property that replaces it is the one that always mattered: a person
+// cannot meaningfully agree to a document they cannot read.
 assert(
-  /Terms and Privacy documents are not available yet/.test(capUi),
-  "Terms and Privacy are marked unavailable and launch-blocking",
+  /TERMS_ROUTE/.test(capUi) && /PRIVACY_ROUTE/.test(capUi),
+  "the consent step links to BOTH notices, so what is being agreed to is readable",
 );
+assert(
+  !/Terms and Privacy documents are not available yet/.test(capUi),
+  "the stale 'notices unavailable' message is gone",
+);
+{
+  // Via the shared constants, never as literals. The same constants are
+  // written into consent_document_versions, so a hard-coded path here could
+  // drift from the URL the registry records against every submission.
+  const notices = read("lib/legal/evaluation-notices.ts");
+  assert(
+    /export const TERMS_ROUTE = "\/legal\//.test(notices) &&
+      /export const PRIVACY_ROUTE = "\/legal\//.test(notices),
+    "the notices live OUTSIDE /experience/kameleon, so the access gate cannot hide them",
+  );
+  // Comment-stripped: the file's own rationale explains WHY no suffix is
+  // written, and naming the suffixes in that explanation must not trip a check
+  // about the executable values.
+  assert(
+    !/\bLLC\b|\bInc\.|\bIncorporated\b|\bLtd\b/.test(stripComments(notices)),
+    "no legal suffix is invented for the administering party",
+  );
+  assert(
+    /EVALUATION_CONSENT_VERSION = "\d{4}-\d{2}-\d{2}\.evaluation\.v\d+"/.test(notices),
+    "the consent version is a stable identifier that can be recorded per submission",
+  );
+  const terms = read("app/legal/kameleon-evaluation-terms/page.tsx");
+  const privacy = read("app/legal/kameleon-evaluation-privacy/page.tsx");
+  // Whitespace-tolerant: this is JSX, so a sentence is wrapped across lines
+  // wherever the formatter put it, and an exact-space pattern tests the
+  // formatter rather than the text.
+  const flat = (t) => t.replace(/\s+/g, " ");
+  assert(
+    /18 or older/.test(flat(terms)) && /do not verify anyone/i.test(flat(terms)),
+    "the Terms state the 18+ requirement AND that no age verification is performed",
+  );
+  assert(
+    /will not be used in marketing or advertising/.test(flat(terms)),
+    "the Terms rule out marketing and advertising reuse explicitly",
+  );
+  assert(
+    /will not be sold or licensed/.test(flat(terms)) &&
+      /will not be posted to social media/.test(flat(terms)),
+    "the Terms rule out sale, licensing and social-media reuse explicitly",
+  );
+  assert(
+    /Cloudflare/.test(privacy) && /Supabase/.test(privacy) && /Vercel/.test(privacy),
+    "the Privacy Notice names all three processors",
+  );
+  assert(
+    /no advertising or analytics cookies/i.test(flat(privacy)),
+    "the Privacy Notice states there are no advertising or analytics cookies",
+  );
+  assert(
+    /the record that you submitted and what you agreed to/i.test(flat(privacy)),
+    "the Privacy Notice says plainly that the consent record outlives the media",
+  );
+}
 assert(
   /LEGAL_DOCUMENTS_UNAVAILABLE/.test(capServer) && !/p_consent_version/.test(capServer),
   "no consent version is sent from the application - the RPC resolves it from the registry",

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { GALLERY_ROUTE } from "@/lib/testimonials/routes";
+import { PRIVACY_ROUTE, TERMS_ROUTE } from "@/lib/legal/evaluation-notices";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import {
   CAPTURE_ACCEPT,
@@ -426,9 +427,30 @@ export function TestimonialCapture({
                   here, and none may be added without a separate approved scope. */}
             </div>
 
-            <p className="rounded-md bg-kameleon-red/15 px-3 py-2 text-xs text-kameleon-text">
-              Terms and Privacy documents are not available yet, so submissions cannot be accepted.
-              This is a launch blocker, not an error on your part.
+            {/* The documents being agreed to must be READABLE at the moment
+                of agreeing. They open in a new tab so a half-completed capture
+                is not lost to a navigation, and they sit outside the gated
+                experience so they stay reachable afterwards too. */}
+            <p className="text-xs text-kameleon-text-muted">
+              By submitting you agree to the{" "}
+              <a
+                href={TERMS_ROUTE}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-4"
+              >
+                Terms of Participation
+              </a>{" "}
+              and the{" "}
+              <a
+                href={PRIVACY_ROUTE}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-4"
+              >
+                Privacy Notice
+              </a>
+              .
             </p>
 
             <Button
