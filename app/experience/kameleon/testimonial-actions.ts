@@ -12,6 +12,10 @@ import {
   normalizeCaption,
   type CaptureMediaType,
 } from "@/lib/testimonials/limits";
+import {
+  createUploadDestination,
+  type UploadDestination,
+} from "@/lib/testimonials/provider-assets";
 
 /**
  * Visitor-facing testimonial actions.
@@ -181,21 +185,39 @@ export async function createTestimonialIntentAction(
 }
 
 /**
- * The upload step — deliberately not implemented.
+ * The upload step.
  *
- * This exists so the flow has one honest, reviewable place where it stops,
- * rather than a TODO buried in a component. It returns a plain unavailable
- * result; it does not mint a URL, invent a provider id, or pretend an upload
- * occurred. Phase 4C replaces the body with a real call through
- * lib/cloudflare/contracts.ts.
+ * Returns a ONE-TIME provider destination and nothing else. The provider's
+ * asset identifier is deliberately NOT returned: it is written to the ledger
+ * by trusted server code and never travels to a browser.
+ *
+ * The sequence is reserve -> create -> attach, in that order, so a provider
+ * asset can never exist without a database row that knows about it. See
+ * lib/testimonials/provider-assets.ts for why the two-step matters.
+ *
+ * `visitorId` is the value this action verified against the visitor's own
+ * session. The reservation RPC re-resolves it against auth.users and
+ * re-checks anonymity, ownership, both capture gates, the active consent
+ * version, lifecycle and the attempt budget, so nothing here is taken on
+ * trust merely because it reached this line.
  */
-export async function requestUploadDestinationAction(): Promise<CaptureActionResult<never>> {
+export async function requestUploadDestinationAction(
+  submissionId: string,
+  mediaType: CaptureMediaType,
+): Promise<CaptureActionResult<UploadDestination>> {
   const gate = await requireEnabledVisitor();
   if (!gate.ok) return gate.result;
 
-  return failure(
-    "Uploading isn't switched on yet. Your details are saved and nothing has been sent.",
-  );
+  if (!UUID_PATTERN.test(submissionId)) return failure();
+  if (mediaType !== "image" && mediaType !== "video") return failure();
+
+  const result = await createUploadDestination(gate.visitorId, submissionId, mediaType);
+
+  // The reason is a sanitized internal code; the visitor gets the generic
+  // message. A refusal must not tell a caller which of the gates rejected it.
+  if (!result.ok) return failure();
+
+  return { status: "ok", message: null, data: result.destination };
 }
 
 export async function retryTestimonialUploadAction(

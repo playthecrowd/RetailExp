@@ -15,7 +15,7 @@ import "server-only";
  *
  * Verified against official Cloudflare documentation on 18 August 2026:
  *   Images direct creator upload
- *     https://developers.cloudflare.com/images/upload-images/direct-creator-upload/
+ *     https://developers.cloudflare.com/images/storage/upload-images/direct-creator-upload/
  *   Images limits
  *     https://developers.cloudflare.com/images/get-started/limits/
  *   Images private/signed delivery
@@ -27,12 +27,20 @@ import "server-only";
  *   Stream signed playback
  *     https://developers.cloudflare.com/stream/viewing-videos/securing-your-stream/
  *
- * TWO FACTS REMAIN UNVERIFIED and must be settled before 4C, against the docs
- * and then the live account:
- *   1. the permitted range of Stream's `maxDurationSeconds`
- *   2. the authoritative Stream status enum (a search result listed
- *      pendingupload/downloading/queued/inprogress/ready/error, but the pages
- *      actually fetched documented only `ready` and `error`)
+ * PHASE 4C STATUS. This file remains the reviewable shape of the boundary;
+ * the implementation lives in sibling modules (client, images, stream,
+ * webhook, signing) rather than behind the MediaProvider interface, because
+ * the two products differ enough that a single interface hid the differences
+ * that matter — Images is polled and has no verifiable webhook, Stream is
+ * webhook-driven with authenticated reconciliation.
+ *
+ * FACTS STILL UNVERIFIED against the live account, all launch blockers:
+ *   1. the permitted range of Stream's `maxDurationSeconds`, and whether a
+ *      longer upload is actually rejected rather than merely truncated
+ *   2. whether the Stream thumbnail endpoint honours the playback token when
+ *      requireSignedURLs is set
+ *   3. whether any existing Images variant carries `neverRequireSignedURLs`,
+ *      which would bypass signed delivery regardless of per-image settings
  */
 
 /** Which environment a provider asset belongs to. Written as a provider-side

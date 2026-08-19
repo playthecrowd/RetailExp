@@ -14,7 +14,11 @@ import {
   normalizeCaption,
   type CaptureMediaType,
 } from "@/lib/testimonials/limits";
-import { requestUploadDestinationAction } from "@/app/experience/kameleon/testimonial-actions";
+import {
+  createTestimonialIntentAction,
+  requestUploadDestinationAction,
+  updateTestimonialCaptionAction,
+} from "@/app/experience/kameleon/testimonial-actions";
 
 /**
  * The phone-first capture flow.
@@ -26,14 +30,28 @@ import { requestUploadDestinationAction } from "@/app/experience/kameleon/testim
  * problems entirely. `capture` is a HINT — some browsers open a picker — so no
  * copy here promises a specific camera or forbids an existing file.
  *
- * PHASE 4B STOPS BEFORE UPLOADING. Cloudflare is not integrated, so the submit
- * step calls a server action that truthfully reports the upload is unavailable.
- * Nothing is sent, no provider identifier is invented and no submission is
- * fabricated. The preview shown here is a local object URL that never leaves
- * the device.
+ * THE UPLOAD IS DIRECT TO THE PROVIDER. The server returns a ONE-TIME
+ * destination and the browser POSTs the file straight to it, so the file never
+ * passes through our server. The provider's asset identifier is never returned
+ * here: it is recorded server-side against a ledger reservation made before
+ * the destination existed.
+ *
+ * NOTHING HERE IS TRUSTED. checkCapturedFile() below is convenience only - it
+ * gives a fast, kind error instead of a slow rejection. Size, duration, type
+ * and dimensions are all spoofable from a browser, so the real limits are
+ * Cloudflare's own (maxDurationSeconds, the format and size ceilings) and the
+ * server-side validation that reads them back from the provider.
  */
 
-type Step = "choose" | "permission" | "preview" | "caption" | "consent" | "blocked";
+type Step =
+  | "choose"
+  | "permission"
+  | "preview"
+  | "caption"
+  | "consent"
+  | "uploading"
+  | "submitted"
+  | "blocked";
 
 interface Consent {
   noMinors: boolean;
@@ -131,24 +149,59 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
   const consentComplete = consent.noMinors && consent.subjectsConsented && consent.galleryDisplay;
 
   async function submit() {
-    if (!consentComplete || !file || busy) return;
+    if (!consentComplete || !file || !mediaType || busy) return;
     setBusy(true);
     setError(null);
+    setStep("uploading");
 
-    // Phase 4B: this reports unavailability rather than uploading. It is a
-    // real server call, so the feature gate and the anonymous-visitor check
-    // are both genuinely exercised.
-    const result = await requestUploadDestinationAction();
-    setBusy(false);
-
-    if (result.status === "error") {
-      setError(result.message);
+    // 1. An intent, created server-side. Idempotent by state, so a reload
+    //    mid-flow returns the existing one rather than accumulating orphans.
+    const intent = await createTestimonialIntentAction(mediaType);
+    if (intent.status === "error" || !intent.data) {
+      setBusy(false);
+      setError(intent.message);
       setStep("blocked");
       return;
     }
-    // No success branch exists yet, and inventing one would mean fabricating a
-    // submission. Phase 4C adds it.
-    setStep("blocked");
+
+    // 2. A one-time destination. The reservation, the provider call and the
+    //    attachment all happen server-side before this returns.
+    const destination = await requestUploadDestinationAction(intent.data.submissionId, mediaType);
+    if (destination.status === "error" || !destination.data) {
+      setBusy(false);
+      setError(destination.message);
+      setStep("blocked");
+      return;
+    }
+
+    // 3. Straight to the provider. Cloudflare documents a single multipart
+    //    POST with the field name `file` for BOTH products - not PUT, and not
+    //    reusable. The URL is used once, here, and never stored.
+    try {
+      const body = new FormData();
+      body.set(destination.data.fileFieldName, file);
+      const response = await fetch(destination.data.uploadUrl, { method: "POST", body });
+      if (!response.ok) throw new Error("upload_rejected");
+    } catch {
+      setBusy(false);
+      // Deliberately generic: the visitor cannot act on a provider error code,
+      // and echoing one would leak provider detail into the browser.
+      setError("That upload didn't finish. You can try again.");
+      setStep("blocked");
+      return;
+    }
+
+    // 4. The caption, if any. Sent after the upload so a failed upload does
+    //    not leave a caption attached to nothing.
+    if (trimmedCaption.length > 0) {
+      await updateTestimonialCaptionAction(intent.data.submissionId, trimmedCaption);
+    }
+
+    setBusy(false);
+    // Honest end state. The submission is NOT approved and NOT published: it
+    // is now waiting on provider processing and then human moderation, and
+    // this screen says exactly that rather than implying it is live.
+    setStep("submitted");
   }
 
   return (
@@ -327,6 +380,31 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
             </Button>
             <Button brand="kameleon" variant="ghost" size="sm" onClick={() => setStep("caption")}>
               Back
+            </Button>
+          </div>
+        )}
+
+        {step === "uploading" && (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-kameleon-text">Sending your story…</p>
+            <p className="text-xs text-kameleon-text-muted">
+              This can take a moment on a phone connection. Please keep this screen open.
+            </p>
+          </div>
+        )}
+
+        {step === "submitted" && (
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-kameleon-text">Thank you — your story is in.</p>
+            {/* Deliberately does NOT say published. The submission still has to
+                finish processing at the provider and then be reviewed, and
+                promising more than that would be untrue. */}
+            <p className="text-xs text-kameleon-text-muted">
+              It needs to finish processing and be reviewed before it can appear in the Gallery.
+              You can close this screen — nothing else is needed from you.
+            </p>
+            <Button brand="kameleon" size="lg" fullWidth onClick={onCancel}>
+              Back to choices
             </Button>
           </div>
         )}
