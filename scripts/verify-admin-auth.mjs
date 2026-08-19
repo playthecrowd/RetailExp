@@ -1101,10 +1101,41 @@ assert(
   !/unlockKameleonReward/.test(stripComments(capUi)) && !/ruby_portal/.test(capUi),
   "the capture UI awards no reward at all",
 );
+// The DESTINATION changed, the guarantee did not. TESTIMONIAL_SUBMITTED used
+// to call postOpeningScreen and drop the visitor into the journey; it now
+// returns them to the experience choice, where Continue to Journey is the
+// primary recommendation. Both halves are asserted so "can continue into the
+// journey" stays true without the old coupling.
 assert(
-  /postOpeningScreen\(submitted\)/.test(testimonialCase),
-  "a submitted testimonial can continue into the journey",
+  /screen: "experience-choice"/.test(testimonialCase),
+  "a submission returns to the experience choice rather than into the journey",
 );
+assert(
+  /justSubmittedTestimonial: true/.test(testimonialCase),
+  "and sets the one-time confirmation flag for that screen",
+);
+assert(
+  /case "CONTINUE_TO_JOURNEY":[\s\S]{0,400}?postOpeningScreen\(state\)/.test(
+    stripComments(read("lib/kameleon/reducer.ts")),
+  ),
+  "a submitted testimonial can continue into the journey, through the explicit action",
+);
+{
+  // Scoped to the CASE BODY. A 400-character window ran straight into the next
+  // case, which legitimately sets testimonialSubmitted - a correct line
+  // failing a check aimed at a different one.
+  const reducerSrc = stripComments(read("lib/kameleon/reducer.ts"));
+  const skipCase = /case "CONTINUE_TO_JOURNEY":[\s\S]*?(?=\n\s{4}case ")/.exec(reducerSrc);
+  assert(skipCase !== null, "the CONTINUE_TO_JOURNEY case body was located");
+  assert(
+    skipCase !== null && !/(arCompleted|testimonialSubmitted):/.test(skipCase[0]),
+    "and that action sets no gate flag - AR and capture stay optional, never prerequisites",
+  );
+  assert(
+    skipCase !== null && /justSubmittedTestimonial: false/.test(skipCase[0]),
+    "it clears the one-time confirmation flag",
+  );
+}
 assert(
   /case "CANCEL_TESTIMONIAL":[\s\S]{0,120}screen: "experience-choice"/.test(capReducer),
   "cancelling returns to the choice screen, so AR is still reachable",
@@ -2031,11 +2062,11 @@ assert(
 //
 // Comments stripped, because the component explains this at length.
 assert(
-  /onContinueToJourney/.test(stripComments(capUi)),
+  /onContinueExperience/.test(stripComments(capUi)),
   "the capture component reports success through an explicit continue callback",
 );
 assert(
-  /onContinueToJourney=\{\(\) => dispatch\(\{ type: "TESTIMONIAL_SUBMITTED" \}\)\}/.test(
+  /onContinueExperience=\{\(\) => dispatch\(\{ type: "TESTIMONIAL_SUBMITTED" \}\)\}/.test(
     stripComments(capPage),
   ),
   "TESTIMONIAL_SUBMITTED is dispatched from that callback and nowhere else",

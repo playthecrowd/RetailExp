@@ -6,6 +6,7 @@ import { GALLERY_ROUTE } from "@/lib/testimonials/routes";
 import { PRIVACY_ROUTE, TERMS_ROUTE } from "@/lib/legal/evaluation-notices";
 import { BottleFillProgress, type UploadPhase } from "./BottleFillProgress";
 import { uploadWithProgress } from "./upload-with-progress";
+import { extractVideoThumbnail } from "./video-thumbnail";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import {
   CAPTURE_ACCEPT,
@@ -125,9 +126,16 @@ export function TestimonialCapture({
   // a guess: it is written from XHR's upload progress and read only while the
   // phase is "uploading". `determinate` is false when the browser declines to
   // report a total, which some proxies and Android builds do.
-  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("uploading");
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("preparing");
   const [uploadPercent, setUploadPercent] = useState(0);
-  const [determinate, setDeterminate] = useState(false);
+
+  // Recorded-video preview. Local only: a data URL drawn from the Blob the
+  // browser already holds, so there is nothing to upload and nothing to
+  // revoke. `thumbFailed` drives the placeholder - the screen must never fall
+  // back to the empty rectangle it used to show.
+  const [videoThumb, setVideoThumb] = useState<string | null>(null);
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const [playingPreview, setPlayingPreview] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -169,15 +177,35 @@ export function TestimonialCapture({
     }
 
     if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const nextUrl = URL.createObjectURL(chosen);
     setFile(chosen);
-    setPreviewUrl(URL.createObjectURL(chosen));
+    setPreviewUrl(nextUrl);
+
+    // A new recording invalidates the old preview immediately, before the new
+    // frame arrives, so a retake can never briefly show the previous take.
+    setVideoThumb(null);
+    setThumbFailed(false);
+    setPlayingPreview(false);
+
+    if (chosen.type.startsWith("video/")) {
+      void extractVideoThumbnail(nextUrl).then((frame) => {
+        if (frame) setVideoThumb(frame);
+        else setThumbFailed(true);
+      });
+    }
     setError(null);
     setStep("preview");
   }
 
   function retake() {
+    // The object URL AND the derived frame both go before another recording
+    // starts, so repeated retakes cannot leak and cannot briefly show the
+    // previous take.
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
+    setVideoThumb(null);
+    setThumbFailed(false);
+    setPlayingPreview(false);
     setFile(null);
     setError(null);
     setStep("permission");
@@ -197,9 +225,11 @@ export function TestimonialCapture({
     if (!consentComplete || !file || !mediaType || busy) return;
     setBusy(true);
     setError(null);
-    setUploadPhase("uploading");
+    // Creating the intent and reserving the destination are two server round
+    // trips with nothing to measure. That is the ONLY phase that shows dots,
+    // and the first version spent it claiming to be uploading.
+    setUploadPhase("preparing");
     setUploadPercent(0);
-    setDeterminate(false);
     setStep("uploading");
 
     // 1. An intent, created server-side. Idempotent by state, so a reload
@@ -234,14 +264,14 @@ export function TestimonialCapture({
     const uploadFailed = "That upload didn't finish. You can try again.";
 
     if (mediaType === "video") {
+      setUploadPhase("uploading");
       const result = await uploadWithProgress(
         destination.data.uploadUrl,
         destination.data.fileFieldName,
         file,
-        (percent) => {
-          setDeterminate(true);
-          setUploadPercent(percent);
-        },
+        // The single source of truth for both the number and the liquid
+        // height. Nothing else writes it.
+        (percent) => setUploadPercent(percent),
       );
       if (!result.ok) {
         // The animation stops because the step changes. Nothing advances the
@@ -252,8 +282,10 @@ export function TestimonialCapture({
         setStep("blocked");
         return;
       }
-      // Bytes are gone; the provider now has work to do that reports no
-      // progress at all. Indeterminate is the honest state, not a number.
+      // Bytes are acknowledged. The provider now has work that reports no
+      // progress at all, so the bottle HOLDS at full rather than moving
+      // backwards or inventing a processing percentage.
+      setUploadPercent(100);
       setUploadPhase("finalizing");
     } else {
       try {
@@ -360,17 +392,61 @@ export function TestimonialCapture({
         {step === "choose" && (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-kameleon-text-muted">
-              Take a photo or record a short video with your phone.
+              Take a photo or record a short video with your phone — or see what others
+              have shared.
             </p>
             <Button brand="kameleon" size="lg" fullWidth onClick={() => pick("image")}>
-              Take a photo
+              Take a Photo
             </Button>
             <Button brand="kameleon" variant="secondary" size="lg" fullWidth onClick={() => pick("video")}>
-              Record a video
+              Record a Video
             </Button>
             <p className="text-xs text-kameleon-text-muted">
               Videos can be up to {MAX_VIDEO_DURATION_SECONDS} seconds.
             </p>
+
+            {/* A LINK, not a fetch. The Gallery is a gated route that reads and
+                signs its own data server-side; querying or mirroring any of it
+                here would duplicate publication rules that must live in exactly
+                one place. Navigating keeps the access gate and the
+                Production-only predicate untouched. */}
+            <div className="mt-1 border-t border-kameleon-copper/20 pt-3">
+              <LinkButton
+                brand="kameleon"
+                variant="secondary"
+                size="lg"
+                fullWidth
+                href={GALLERY_ROUTE}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
+                    <rect
+                      x="3"
+                      y="5"
+                      width="18"
+                      height="14"
+                      rx="2"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                    />
+                    <path
+                      d="M3 16l5-5 4 4 3-3 6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <circle cx="9" cy="10" r="1.4" fill="currentColor" />
+                  </svg>
+                  View Gallery
+                </span>
+              </LinkButton>
+              <p className="mt-1.5 text-xs text-kameleon-text-muted">
+                Approved stories from other people who have been through the experience.
+              </p>
+            </div>
           </div>
         )}
 
@@ -402,11 +478,75 @@ export function TestimonialCapture({
           <div className="flex flex-col gap-3">
             <div className="overflow-hidden rounded-lg border border-kameleon-copper/30">
               {mediaType === "image" ? (
-                // Local object URL only — this never leaves the device in 4B.
+                // Photo preview is UNCHANGED: an object URL in an <img> renders
+                // reliably everywhere, so it never had this problem.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={previewUrl} alt="Your captured photo" className="max-h-80 w-full object-contain" />
+              ) : playingPreview ? (
+                // Only once asked for. Mounting a playing <video> straight away
+                // is what produced the blank rectangle on mobile.
+                <video
+                  src={previewUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="max-h-80 w-full bg-black"
+                />
               ) : (
-                <video src={previewUrl} controls playsInline className="max-h-80 w-full" />
+                <button
+                  type="button"
+                  onClick={() => setPlayingPreview(true)}
+                  aria-label="Play your recording"
+                  className="relative block aspect-video w-full bg-black"
+                >
+                  {videoThumb ? (
+                    // A frame drawn locally from the recording. object-cover is
+                    // safe here because the frame keeps the source aspect ratio
+                    // and the frame box is deliberate.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={videoThumb}
+                      alt="The first moment of your recording"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    // NEVER an empty rectangle. Either the frame is still being
+                    // drawn or extraction failed; both get a real surface that
+                    // says what it is.
+                    <span className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-b from-kameleon-copper/25 to-black text-kameleon-text">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-8 w-8">
+                        <rect
+                          x="2.5"
+                          y="6"
+                          width="13"
+                          height="12"
+                          rx="2"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                        />
+                        <path
+                          d="M15.5 11l6-3.5v9l-6-3.5z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span className="text-xs">
+                        {thumbFailed ? "Preview recording" : "Preparing preview…"}
+                      </span>
+                    </span>
+                  )}
+
+                  <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-black/55 backdrop-blur-[2px]">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" className="h-6 w-6 translate-x-[1px]">
+                        <path d="M8 5l11 7-11 7z" fill="white" />
+                      </svg>
+                    </span>
+                  </span>
+                </button>
               )}
             </div>
             <Button brand="kameleon" size="lg" fullWidth onClick={() => setStep("caption")}>
@@ -538,11 +678,7 @@ export function TestimonialCapture({
           (mediaType === "video" ? (
             // Video gets the bottle. A video upload on a phone takes long
             // enough that the previous two lines of text read as a stall.
-            <BottleFillProgress
-              phase={uploadPhase}
-              percent={uploadPercent}
-              determinate={determinate}
-            />
+            <BottleFillProgress phase={uploadPhase} percent={uploadPercent} />
           ) : (
             // The photo path is untouched: it finishes fast enough that a
             // progress experience would be scaffolding around nothing.

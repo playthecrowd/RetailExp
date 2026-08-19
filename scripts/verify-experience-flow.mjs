@@ -157,6 +157,63 @@ console.log("\n--- a testimonial is not AR completion ---");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n--- Continue to Journey: the explicit skip ---");
+//
+// AR and capture are OPTIONAL. Until this action existed a visitor who wanted
+// neither had no way forward at all, because the opening gate is satisfied only
+// by AR completion or a submission.
+// ---------------------------------------------------------------------------
+{
+  const base = ["BEGIN", "COMMERCIAL_COMPLETE", "CONTINUE_TO_ACCOUNT", "COMPLETE_ACCOUNT"];
+  const skipped = run(...base, "CONTINUE_TO_JOURNEY");
+
+  check(
+    skipped.screen === "choose-path",
+    "Continue to Journey reaches the existing start of pathway selection",
+  );
+  check(
+    skipped.arCompleted !== true,
+    "it does NOT mark AR complete - the visitor declined AR, they did not finish it",
+  );
+  check(
+    skipped.testimonialSubmitted !== true,
+    "it does NOT record a testimonial that was never made",
+  );
+  check(
+    JSON.stringify(skipped.progress) ===
+      JSON.stringify(createInitialSessionState().progress),
+    "journey progress is untouched, so an existing journey resumes as it would have",
+  );
+  check(
+    skipped.justSubmittedTestimonial === false,
+    "it clears the one-time submission flag",
+  );
+
+  // The same action after a submission, which is where it is the primary
+  // recommendation.
+  const afterSubmit = run(...base, "CHOOSE_TESTIMONIAL", "TESTIMONIAL_SUBMITTED", "CONTINUE_TO_JOURNEY");
+  check(
+    afterSubmit.screen === "choose-path",
+    "it reaches pathway selection from the post-submission screen too",
+  );
+  check(
+    afterSubmit.justSubmittedTestimonial === false,
+    "and clears the flag there as well",
+  );
+  check(
+    afterSubmit.arCompleted !== true,
+    "still without marking AR complete",
+  );
+
+  // It reuses the established rule rather than hard-coding a destination:
+  // a visitor with saved progress lands where the journey rules put them.
+  check(
+    run(...base, "CHOOSE_AR", "ENTER_JOURNEY").screen === skipped.screen,
+    "it lands on the same screen the AR route lands on, because both use the same rule",
+  );
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n--- reload does not send a submitter back to AR ---");
 // ---------------------------------------------------------------------------
 {
@@ -336,18 +393,23 @@ console.log("\n--- the video upload experience ---");
     "complete is set only AFTER finalization, not after the transfer",
   );
   {
-    // Every early return in submit() must leave the phase behind. Taken as the
-    // text between the upload call and the completion line: if a failure path
-    // set the phase, it would appear in here.
-    const between = cap.slice(
-      cap.indexOf("uploadWithProgress("),
-      cap.indexOf('setUploadPhase("complete")'),
-    );
-    const failureBranches = between.match(/setStep\("blocked"\)/g) || [];
-    check(failureBranches.length >= 2, "the upload and finalization failure branches exist");
+    // Anchored to the failure BRANCHES, not to a slice of the file. The slice
+    // form began matching the legitimate `setUploadPercent(100)` that holds
+    // the bottle full during finalizing - a correct line failing a check that
+    // was aimed at something else entirely.
+    const branches = cap.split(/setStep\("blocked"\);/).slice(0, -1);
+    check(branches.length >= 4, "the failure branches exist");
+    for (const branch of branches) {
+      const tail = branch.slice(-320);
+      check(
+        !/setUploadPhase\("complete"\)/.test(tail),
+        "no failure branch sets the completed phase",
+      );
+    }
     check(
-      !/setUploadPhase\("complete"\)|setUploadPercent\(100\)/.test(between),
-      "no failure branch sets the completed phase or a 100% reading",
+      cap.indexOf('setUploadPercent(100);\r\n      setUploadPhase("finalizing")') > -1 ||
+        /setUploadPercent\(100\);\s*setUploadPhase\("finalizing"\)/.test(cap.replace(/\s+/g, " ")),
+      "the 100% reading before finalizing is the acknowledged-upload hold, not a failure path",
     );
   }
   check(
@@ -356,17 +418,30 @@ console.log("\n--- the video upload experience ---");
   );
 
   // --- the number is never invented ---------------------------------------
+  // The number is shown in every phase that HAS one. Only `preparing` - two
+  // server round trips with nothing to measure - shows dots. The first version
+  // withheld the number whenever lengthComputable was false, which is what
+  // left the visitor watching dots through an entire upload.
   check(
-    /const showNumber = phase === "uploading" && determinate;/.test(bottle),
-    "a percentage is shown only while uploading AND only when the browser reported a total",
+    /const showNumber = phase !== "preparing";/.test(bottle),
+    "the percentage is shown in every phase except preparing",
   );
   check(
-    /if \(!event\.lengthComputable \|\| event\.total === 0\) return;/.test(uploader),
-    "no progress is reported when the browser cannot measure it",
+    /event\.lengthComputable && event\.total > 0 \? event\.total : file\.size/.test(uploader),
+    "the fallback denominator is the FILE'S OWN SIZE - a real byte count, not a guess",
   );
   check(
-    /event\.loaded \/ event\.total/.test(uploader),
-    "the percentage comes from transferred bytes",
+    /event\.loaded \/ total/.test(uploader),
+    "the percentage comes from transferred bytes over a byte total",
+  );
+  check(
+    /Math\.min\(MAX_IN_FLIGHT_PERCENT/.test(uploader) &&
+      /MAX_IN_FLIGHT_PERCENT = 99/.test(uploader),
+    "in-flight progress is clamped below 100 until the server acknowledges the upload",
+  );
+  check(
+    /if \(ok\) onProgress\(100\)/.test(uploader),
+    "only an acknowledged 2xx promotes the transfer to 100",
   );
   check(
     !/Math\.random|setInterval/.test(bottle) && !/Math\.random|setInterval/.test(uploader),
@@ -381,8 +456,13 @@ console.log("\n--- the video upload experience ---");
     "the progress element carries the required progressbar semantics",
   );
   check(
-    /showNumber \|\| phase === "complete" \? \{ "aria-valuenow"/.test(bottle),
-    "aria-valuenow is present only when the value is real",
+    /showNumber \? \{ "aria-valuenow": level \}/.test(bottle),
+    "aria-valuenow is present exactly when a number is shown",
+  );
+  check(
+    !/phase === "uploading"[\s\S]{0,80}?•••/.test(bottle) &&
+      /showNumber \? \([\s\S]{0,400}?\{level\}%/.test(bottle),
+    "the uploading phase cannot render the dots-only state",
   );
   check(
     /aria-live="polite"/.test(bottle) &&
@@ -401,6 +481,32 @@ console.log("\n--- the video upload experience ---");
     check(bottle.includes(message), `the ${phase} phase message is exactly as specified`);
   }
 
+  // --- two layers, and the height IS the percentage ------------------------
+  check(
+    /const liquidHeight = \(level \/ 100\) \* LIQUID_SPAN;/.test(bottle) &&
+      /const liquidY = LIQUID_BOTTOM - liquidHeight;/.test(bottle),
+    "the liquid height is computed directly from the percentage",
+  );
+  check(
+    /height=\{liquidHeight\}/.test(bottle) && /y=\{liquidY\}/.test(bottle),
+    "that computed height is bound straight to the SVG rect",
+  );
+  check(
+    /url\(#kameleon-base\)/.test(bottle) && /url\(#kameleon-progress\)/.test(bottle),
+    "there are TWO distinct fills: a base treatment and a progress liquid",
+  );
+  check(
+    bottle.indexOf("kameleon-base-drift") < bottle.indexOf('className="kameleon-liquid"'),
+    "the base layer is painted beneath the progress layer",
+  );
+  check(
+    /rounded-full bg-black\/45/.test(bottle),
+    "the readout sits on a contrasting disc, so it stays legible over any liquid colour",
+  );
+  for (const [phase, message] of [["preparing", "Preparing your upload…"]]) {
+    check(bottle.includes(message), `the ${phase} phase message is exactly as specified`);
+  }
+
   // --- video only ----------------------------------------------------------
   check(
     /mediaType === "video" \? \(/.test(cap) && /BottleFillProgress/.test(cap),
@@ -413,34 +519,170 @@ console.log("\n--- the video upload experience ---");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n--- the media-choice screen and the recorded-video preview ---");
+// ---------------------------------------------------------------------------
+{
+  const cap = stripComments(read("components/kameleon/testimonials/TestimonialCapture.tsx"));
+  const thumb = stripComments(read("components/kameleon/testimonials/video-thumbnail.ts"));
+  const chooseBlock = /step === "choose"[\s\S]*?step === "permission"/.exec(cap)?.[0] ?? "";
+
+  // --- three actions -------------------------------------------------------
+  check(chooseBlock.includes("Take a Photo"), "the choice screen offers Take a Photo");
+  check(chooseBlock.includes("Record a Video"), "the choice screen offers Record a Video");
+  check(chooseBlock.includes("View Gallery"), "the choice screen offers View Gallery");
+  check(
+    /href=\{GALLERY_ROUTE\}/.test(chooseBlock),
+    "View Gallery uses the shared gated route constant, not a literal path",
+  );
+  check(
+    /Approved stories/.test(chooseBlock),
+    "the Gallery action carries supporting copy about approved stories",
+  );
+  // A LINK, not a read. Mirroring gallery data here would duplicate the
+  // publication predicate that must live in exactly one place.
+  check(
+    !/loadGallery|testimonial_gallery_items|signGalleryDelivery/.test(cap),
+    "the capture screen never queries or duplicates Gallery data",
+  );
+
+  // --- the recorded-video preview -----------------------------------------
+  const previewBlock = /step === "preview"[\s\S]*?step === "caption"/.exec(cap)?.[0] ?? "";
+  check(previewBlock.length > 0, "the preview block was located");
+  check(
+    /extractVideoThumbnail\(nextUrl\)/.test(cap),
+    "a local preview frame is extracted from the recorded object URL",
+  );
+  check(
+    /chosen\.type\.startsWith\("video\/"\)/.test(cap),
+    "extraction runs for video only - the photo preview is untouched",
+  );
+  check(
+    /src=\{previewUrl\} alt="Your captured photo"/.test(previewBlock.replace(/\s+/g, " ")) ||
+      /alt="Your captured photo"/.test(previewBlock),
+    "the photo preview still renders the object URL directly",
+  );
+  check(
+    /playingPreview \?/.test(previewBlock),
+    "the video element mounts only once the visitor asks to play",
+  );
+  check(
+    /aria-label="Play your recording"/.test(previewBlock),
+    "the thumbnail is an accessible play control",
+  );
+  check(
+    /Preview recording/.test(previewBlock) && /Preparing preview…/.test(previewBlock),
+    "a failed or pending extraction renders a real surface, never an empty rectangle",
+  );
+  check(
+    previewBlock.includes("Use this") && previewBlock.includes("Retake"),
+    "Use this and Retake are both still offered",
+  );
+
+  // --- nothing is uploaded or persisted -----------------------------------
+  check(
+    !/fetch\(|XMLHttpRequest|FormData/.test(thumb),
+    "thumbnail extraction performs no network request",
+  );
+  check(
+    !/localStorage|sessionStorage|indexedDB/.test(thumb),
+    "the thumbnail is never persisted",
+  );
+  check(
+    /canvas\.toDataURL/.test(thumb) && !/createObjectURL/.test(thumb),
+    "the frame is a data URL, so there is no extra object URL to leak",
+  );
+  check(
+    /video\.onseeked/.test(thumb) && /currentTime = target/.test(thumb),
+    "the frame is taken AFTER a seek, not from frame zero which is often black",
+  );
+
+  // --- retake cleans up ----------------------------------------------------
+  {
+    const retakeBlock = /function retake\(\)[\s\S]*?\n  \}/.exec(cap)?.[0] ?? "";
+    check(retakeBlock.length > 0, "the retake function was located");
+    check(
+      /URL\.revokeObjectURL\(previewUrl\)/.test(retakeBlock),
+      "retake revokes the previous object URL",
+    );
+    check(
+      /setVideoThumb\(null\)/.test(retakeBlock) && /setPlayingPreview\(false\)/.test(retakeBlock),
+      "retake discards the previous frame and playback state",
+    );
+  }
+  check(
+    /setVideoThumb\(null\);[\s\S]{0,200}?extractVideoThumbnail/.test(cap),
+    "a new recording clears the old frame before the new one arrives",
+  );
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n--- the returned choice screen ---");
 // ---------------------------------------------------------------------------
 {
   const choice = stripComments(read("components/kameleon/screens/ExperienceChoice.tsx"));
 
+  // The passive banner became a confirmation PANEL with its own actions.
   check(
-    choice.includes("Your testimonial was submitted. Continue your experience below."),
-    "the one-time banner carries the required copy",
+    choice.includes("Your story was submitted. What would you like to do next?"),
+    "the post-submission panel carries the required copy",
   );
   check(
-    /justSubmittedTestimonial &&/.test(choice),
-    "the banner renders only after a submission",
+    /justSubmittedTestimonial \?/.test(choice),
+    "the panel renders only after a submission",
   );
-  // Anchored to the JSX, not the prop name: onChooseTestimonial also appears
-  // in the destructure at the top of the file, so comparing against that
-  // measured declaration order rather than render order.
+
+  // --- all three actions exist in BOTH states ------------------------------
+  for (const label of ["Enter AR Experience", "Continue to Journey"]) {
+    check(choice.includes(label), `the choice screen offers ${label}`);
+  }
   check(
-    /Recommended next/.test(choice) &&
-      choice.indexOf("Recommended next") < choice.indexOf("onClick={onChooseTestimonial}"),
-    "the AR option is marked as the recommended next action, above the testimonial one",
-  );
-  check(
-    /onChooseTestimonial/.test(choice) && /Share Another Story/.test(choice),
-    "the testimonial option is kept, so a visitor may submit another",
+    /Share Your Story/.test(choice) && /Share Another Story/.test(choice),
+    "the testimonial action is offered in both states, relabelled after a submission",
   );
   check(
-    !/justSubmittedTestimonial \?\s*null/.test(choice),
-    "the testimonial option is never hidden by the banner state",
+    /\{arAction\}/.test(choice) &&
+      /\{testimonialAction\}/.test(choice) &&
+      /\{journeyAction\}/.test(choice),
+    "no action is removed in either state",
+  );
+
+  // --- the recommendation flips, and the ORDER is what carries it ----------
+  {
+    // Anchored to the rendered tokens, not to a ternary regex: the screen has
+    // TWO ternaries on this flag - the confirmation panel and the action order
+    // - and a non-greedy match found the panel, which says nothing about
+    // which action leads.
+    //
+    // The submitted branch renders first in the file, the first-visit branch
+    // second, so first/last positions read the two orders unambiguously.
+    const firstJourney = choice.indexOf("{journeyAction}");
+    const firstAr = choice.indexOf("{arAction}");
+    const lastAr = choice.lastIndexOf("{arAction}");
+    const lastJourney = choice.lastIndexOf("{journeyAction}");
+    check(
+      firstJourney > -1 && firstAr > -1 && firstJourney < firstAr,
+      "after a submission the Journey is offered FIRST, ahead of AR",
+    );
+    check(
+      lastAr > -1 && lastJourney > -1 && lastAr < lastJourney,
+      "on a first visit AR leads and the Journey is the explicit skip",
+    );
+    check(
+      firstJourney !== lastJourney && firstAr !== lastAr,
+      "both actions really are rendered in both branches",
+    );
+  }
+  check(
+    /\{justSubmittedTestimonial && recommendedLabel\}[\s\S]{0,220}?onClick=\{onContinueToJourney\}/.test(
+      choice,
+    ),
+    "Continue to Journey carries the recommendation after a submission",
+  );
+  check(
+    /\{!justSubmittedTestimonial && recommendedLabel\}[\s\S]{0,320}?onClick=\{onChooseAr\}/.test(
+      choice,
+    ),
+    "AR carries it on a first visit, and never both at once",
   );
 }
 

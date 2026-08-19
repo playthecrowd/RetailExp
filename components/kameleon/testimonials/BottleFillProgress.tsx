@@ -3,51 +3,60 @@
 /**
  * The video upload experience: a Kameleon bottle filling from the bottom.
  *
- * WHY A BOTTLE AND NOT A BAR
- *   A video upload on a phone takes long enough that a thin bar reads as "the
- *   page is stuck". The bottle gives the wait a shape and a direction, and it
- *   is the one object this brand already owns.
+ * TWO LAYERS, AND THE DIFFERENCE MATTERS
+ *   BASE   a dim chameleon wash across the whole interior, always drifting. It
+ *          gives the bottle life while the destination is being prepared,
+ *          which is before there is anything to measure.
+ *   LIQUID a bright, high-contrast fill whose HEIGHT IS THE PERCENTAGE. Its
+ *          rect height is computed straight from `percent`, so 25 is a quarter
+ *          of the glass and 50 is half of it - no transform, no easing curve
+ *          standing between the number and what is on screen.
  *
- * HONESTY IS THE WHOLE POINT
- *   The fill height is driven by bytes the browser has actually sent. When the
- *   transfer finishes there is no percentage to show for provider processing,
- *   so the component goes INDETERMINATE rather than inventing one: no number,
- *   no aria-valuenow, and a slow shimmer instead of a growing level. 100% is
- *   reached only when the caller says finalization succeeded.
+ *   The first version had one layer and a shimmer, which is why an upload in
+ *   progress looked identical to an upload that had not started.
  *
- *   `phase` is what makes that impossible to get wrong by accident — there is
- *   no way to render a number during finalizing, because the number is not
- *   read in that branch.
+ * THE NUMBER IS SHOWN WHENEVER THERE IS ONE
+ *   Dots appear during `preparing` only - the one phase with genuinely nothing
+ *   to report. Once bytes move, the percentage is on screen and stays there.
  *
- * Inline SVG and CSS only. No image, no external dependency, nothing to load
- * while the visitor is already waiting on a load.
+ * Inline SVG and CSS. No image, no external dependency, nothing to fetch while
+ * the visitor is already waiting on a transfer.
  */
 
-export type UploadPhase = "uploading" | "finalizing" | "complete";
+export type UploadPhase = "preparing" | "uploading" | "finalizing" | "complete";
 
 const MESSAGE: Record<UploadPhase, string> = {
+  preparing: "Preparing your upload…",
   uploading: "Uploading your video…",
   finalizing: "Preparing your testimonial…",
   complete: "Submission complete",
 };
 
+/** Interior bounds of the bottle in viewBox units. The liquid maps linearly
+ *  across this span, so "half full" means half the glass. */
+const LIQUID_TOP = 26;
+const LIQUID_BOTTOM = 224;
+const LIQUID_SPAN = LIQUID_BOTTOM - LIQUID_TOP;
+
+const BOTTLE_PATH =
+  "M46 22 h28 v34 c0 10 4 15 10 22 c8 9 12 20 12 32 v112 c0 12 -9 22 -21 22 h-30 c-12 0 -21 -10 -21 -22 v-112 c0 -12 4 -23 12 -32 c6 -7 10 -12 10 -22 z";
+
 export function BottleFillProgress({
   phase,
   percent,
-  determinate,
 }: {
   phase: UploadPhase;
-  /** Real transferred-byte percentage. Ignored unless the phase is uploading. */
+  /** Transferred-byte percentage. Drives the number AND the liquid height. */
   percent: number;
-  /** False when the browser could not report length — no number is shown. */
-  determinate: boolean;
 }) {
-  const showNumber = phase === "uploading" && determinate;
-  const displayPercent = phase === "complete" ? 100 : Math.max(0, Math.min(100, percent));
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const level = phase === "complete" ? 100 : clamped;
 
-  // Finalizing holds the level where the transfer left it. Dropping back would
-  // read as progress lost; climbing would be a number nobody measured.
-  const fillPercent = phase === "complete" ? 100 : displayPercent;
+  // Dots only where there is nothing to measure.
+  const showNumber = phase !== "preparing";
+
+  const liquidHeight = (level / 100) * LIQUID_SPAN;
+  const liquidY = LIQUID_BOTTOM - liquidHeight;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-8">
@@ -55,87 +64,89 @@ export function BottleFillProgress({
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
-        {...(showNumber || phase === "complete" ? { "aria-valuenow": displayPercent } : {})}
+        {...(showNumber ? { "aria-valuenow": level } : {})}
         aria-label={MESSAGE[phase]}
-        className="relative w-full max-w-[220px]"
+        className="relative w-full max-w-[230px]"
       >
         <svg
           viewBox="0 0 120 260"
-          className="h-auto w-full drop-shadow-[0_0_28px_rgba(196,120,60,0.28)]"
+          className="h-auto w-full drop-shadow-[0_0_30px_rgba(196,120,60,0.3)]"
           aria-hidden="true"
         >
           <defs>
-            {/* The bottle interior. Everything liquid is clipped to it, so the
-                fill can be a plain rectangle and still take the bottle's
-                shape at every height. */}
             <clipPath id="kameleon-bottle-interior">
-              <path d="M46 22 h28 v34 c0 10 4 15 10 22 c8 9 12 20 12 32 v112 c0 12 -9 22 -21 22 h-30 c-12 0 -21 -10 -21 -22 v-112 c0 -12 4 -23 12 -32 c6 -7 10 -12 10 -22 z" />
+              <path d={BOTTLE_PATH} />
             </clipPath>
 
-            {/* The chameleon shift: the brand's copper through to its green,
-                travelling as the liquid settles. */}
-            <linearGradient id="kameleon-liquid" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0%" stopColor="#7a3f16" />
-              <stop offset="35%" stopColor="#c4783c" />
-              <stop offset="65%" stopColor="#e0a468" />
-              <stop offset="100%" stopColor="#4c7a52" />
+            {/* Base: the existing chameleon treatment, dimmed. */}
+            <linearGradient id="kameleon-base" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0%" stopColor="#5c3011" />
+              <stop offset="50%" stopColor="#8a5326" />
+              <stop offset="100%" stopColor="#38583c" />
             </linearGradient>
 
-            <linearGradient id="kameleon-sheen" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="rgba(255,255,255,0)" />
-              <stop offset="50%" stopColor="rgba(255,255,255,0.30)" />
-              <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+            {/* Progress liquid: deliberately brighter and cooler at the top so
+                it reads as a SECOND liquid rising over the base rather than
+                more of the same. */}
+            <linearGradient id="kameleon-progress" x1="0" y1="1" x2="0.6" y2="0">
+              <stop offset="0%" stopColor="#e8963f" />
+              <stop offset="55%" stopColor="#f7c66b" />
+              <stop offset="100%" stopColor="#8fe0a2" />
             </linearGradient>
           </defs>
 
           <g clipPath="url(#kameleon-bottle-interior)">
-            <rect x="0" y="0" width="120" height="260" fill="rgba(255,255,255,0.05)" />
+            {/* --- base layer, always present, always moving ---------------- */}
+            <rect x="0" y="0" width="120" height="260" fill="url(#kameleon-base)" opacity="0.4" />
+            <path
+              className="kameleon-base-drift"
+              d="M-120 120 q30 -10 60 0 t60 0 t60 0 t60 0 t60 0 v140 h-360 z"
+              fill="rgba(255,255,255,0.05)"
+            />
 
-            {/* Bottom-up fill. y is driven by the real percentage; the
-                transition is what makes byte updates read as a rise rather
-                than a jump. */}
-            <g
-              className="kameleon-fill"
-              style={{ transform: `translateY(${100 - fillPercent}%)` }}
-            >
-              <rect x="0" y="0" width="120" height="260" fill="url(#kameleon-liquid)" />
-              {/* The meniscus. Two offset curves drifting against each other
-                  read as liquid without a physics simulation. */}
-              <path
-                className="kameleon-wave"
-                d="M-120 4 q30 -8 60 0 t60 0 t60 0 t60 0 t60 0 v-14 h-360 z"
-                fill="url(#kameleon-liquid)"
-                opacity="0.85"
+            {/* --- progress layer, height bound to the percentage ----------- */}
+            <g className="kameleon-liquid">
+              <rect
+                x="0"
+                y={liquidY}
+                width="120"
+                height={liquidHeight}
+                fill="url(#kameleon-progress)"
               />
-              <path
-                className="kameleon-wave kameleon-wave-2"
-                d="M-120 6 q30 7 60 0 t60 0 t60 0 t60 0 t60 0 v-16 h-360 z"
-                fill="rgba(255,255,255,0.18)"
-              />
+              {/* Surface, drawn at the liquid line so the level is legible
+                  even at low percentages. */}
+              {level > 0 && (
+                <>
+                  <path
+                    className="kameleon-wave"
+                    d={`M-120 ${liquidY} q30 -6 60 0 t60 0 t60 0 t60 0 t60 0 v10 h-360 z`}
+                    fill="url(#kameleon-progress)"
+                    opacity="0.9"
+                  />
+                  <rect
+                    x="0"
+                    y={liquidY - 1.5}
+                    width="120"
+                    height="2"
+                    fill="rgba(255,255,255,0.55)"
+                  />
+                </>
+              )}
             </g>
-
-            <rect className="kameleon-sheen" x="24" y="0" width="26" height="260" fill="url(#kameleon-sheen)" />
           </g>
 
-          {/* Glass over the liquid, so the outline stays crisp at every level. */}
-          <path
-            d="M46 22 h28 v34 c0 10 4 15 10 22 c8 9 12 20 12 32 v112 c0 12 -9 22 -21 22 h-30 c-12 0 -21 -10 -21 -22 v-112 c0 -12 4 -23 12 -32 c6 -7 10 -12 10 -22 z"
-            fill="none"
-            stroke="rgba(224,164,104,0.75)"
-            strokeWidth="2.5"
-          />
-          <rect x="44" y="12" width="32" height="12" rx="3" fill="rgba(224,164,104,0.75)" />
+          {/* Glass over everything, so the outline stays crisp at any level. */}
+          <path d={BOTTLE_PATH} fill="none" stroke="rgba(232,196,140,0.8)" strokeWidth="2.5" />
+          <rect x="44" y="12" width="32" height="12" rx="3" fill="rgba(232,196,140,0.8)" />
         </svg>
 
-        {/* The readout, centred in the bottle. Indeterminate phases show a
-            pulse instead of a number - there is no number to show. */}
+        {/* The readout. A dark disc sits behind it so the figure stays legible
+            whether the liquid behind it is dark base or bright progress. */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           {showNumber ? (
-            <span className="text-3xl font-semibold tabular-nums text-white drop-shadow">
-              {displayPercent}%
+            <span className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full bg-black/45 text-3xl font-semibold tabular-nums text-white backdrop-blur-[2px]">
+              {level}%
             </span>
-          ) : phase === "complete" ? (
-            <span className="text-3xl font-semibold tabular-nums text-white drop-shadow">100%</span>
           ) : (
             <span className="kameleon-pulse text-2xl text-white drop-shadow" aria-hidden="true">
               •••
@@ -144,8 +155,8 @@ export function BottleFillProgress({
         </div>
       </div>
 
-      {/* One live region for the whole flow. Phase changes are few, so this
-          announces three times rather than on every byte. */}
+      {/* One live region for the whole flow: four phase changes, not one per
+          byte. */}
       <p role="status" aria-live="polite" className="text-center text-sm text-kameleon-text">
         {MESSAGE[phase]}
       </p>
@@ -157,41 +168,28 @@ export function BottleFillProgress({
       )}
 
       <style>{`
-        .kameleon-fill {
-          transition: transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
-          will-change: transform;
+        .kameleon-liquid rect,
+        .kameleon-liquid path {
+          transition: y 300ms linear, height 300ms linear, d 300ms linear;
         }
-        .kameleon-wave {
-          animation: kameleon-drift 5s linear infinite;
-        }
-        .kameleon-wave-2 {
-          animation: kameleon-drift 7s linear infinite reverse;
-        }
-        .kameleon-sheen {
-          animation: kameleon-sheen 4.5s ease-in-out infinite;
-        }
-        .kameleon-pulse {
-          animation: kameleon-pulse 1.4s ease-in-out infinite;
-        }
+        .kameleon-base-drift { animation: kameleon-drift 9s linear infinite; }
+        .kameleon-wave { animation: kameleon-drift 5s linear infinite; }
+        .kameleon-pulse { animation: kameleon-pulse 1.4s ease-in-out infinite; }
         @keyframes kameleon-drift {
           from { transform: translateX(0); }
           to   { transform: translateX(120px); }
-        }
-        @keyframes kameleon-sheen {
-          0%, 100% { opacity: 0.15; transform: translateX(0); }
-          50%      { opacity: 0.4;  transform: translateX(38px); }
         }
         @keyframes kameleon-pulse {
           0%, 100% { opacity: 0.35; }
           50%      { opacity: 1; }
         }
-        /* Motion is decoration here: the level, the number and the message all
-           still convey progress without it. */
+        /* Motion is decoration: the level, the number and the message all
+           still convey progress without any of it. */
         @media (prefers-reduced-motion: reduce) {
-          .kameleon-fill { transition: none; }
+          .kameleon-liquid rect,
+          .kameleon-liquid path { transition: none; }
+          .kameleon-base-drift,
           .kameleon-wave,
-          .kameleon-wave-2,
-          .kameleon-sheen,
           .kameleon-pulse { animation: none; }
         }
       `}</style>

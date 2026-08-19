@@ -88,6 +88,19 @@ export function kameleonReducer(
     case "CANCEL_TESTIMONIAL":
       return { ...state, screen: "experience-choice" };
 
+    // The explicit skip. AR and capture are optional and must never be
+    // prerequisites, so this reuses postOpeningScreen - the same rule every
+    // other route into the journey uses - while setting NO gate flag: not
+    // arCompleted, not testimonialSubmitted, no reward, no submission.
+    // progress is untouched, so an existing journey resumes exactly as it
+    // would have.
+    case "CONTINUE_TO_JOURNEY":
+      return {
+        ...state,
+        justSubmittedTestimonial: false,
+        screen: postOpeningScreen(state),
+      };
+
     case "TESTIMONIAL_SUBMITTED": {
       // Returns to the EXPERIENCE CHOICE, not into the journey.
       //

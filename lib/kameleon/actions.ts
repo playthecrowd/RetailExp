@@ -17,6 +17,15 @@ export type KameleonAction =
   | { type: "CANCEL_TESTIMONIAL" }
   // Sets testimonialSubmitted only. Never arCompleted, never an AR reward.
   | { type: "TESTIMONIAL_SUBMITTED" }
+  /**
+   * The explicit skip: go to the Journey without doing AR or capture.
+   *
+   * Deliberately NOT ENTER_JOURNEY, which sets arCompleted - that action means
+   * "AR is finished with", and reusing it here would record AR completion for
+   * somebody who declined AR. This one changes no gate flag at all: it reuses
+   * the SCREEN transition and nothing else.
+   */
+  | { type: "CONTINUE_TO_JOURNEY" }
   | { type: "COMPLETE_ACCOUNT" }
   | { type: "RESUME_SAVED_JOURNEY" }
   | { type: "START_NEW_JOURNEY" }

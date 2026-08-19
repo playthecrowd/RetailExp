@@ -146,6 +146,7 @@ export default function KameleonExperiencePage() {
             captureAvailable={captureAvailable}
             onChooseAr={() => dispatch({ type: "CHOOSE_AR" })}
             onChooseTestimonial={() => dispatch({ type: "CHOOSE_TESTIMONIAL" })}
+            onContinueToJourney={() => dispatch({ type: "CONTINUE_TO_JOURNEY" })}
           />
         );
 
