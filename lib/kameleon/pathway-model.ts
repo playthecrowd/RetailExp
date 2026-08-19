@@ -40,6 +40,15 @@ export interface VideoNode {
   title: string;
   description: string;
   videoSource: string;
+  /**
+   * OPTIONAL 2:1 equirectangular version of this chapter.
+   *
+   * Empty string means this chapter has no 360 version and the player must
+   * hide its "View in 360°" control. A normal 16:9 video is not
+   * equirectangular, so substituting videoSource here would render a smeared
+   * sphere rather than a 360 experience — absent has to mean absent.
+   */
+  video360Source: string;
   posterSource: string;
   captionsSource: string;
   duration: number;

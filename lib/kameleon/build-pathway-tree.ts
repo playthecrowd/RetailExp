@@ -20,6 +20,9 @@ function placeholderPaths(pathwayId: string, branchCode: string) {
   const key = `${pathwayId}${branchCode ? `-${branchCode.toLowerCase()}` : ""}`;
   return {
     videoSource: `/media/kameleon/placeholder/${key}.mp4`,
+    // No placeholder 360 asset exists, and inventing one would put a 16:9
+    // video behind a 360 button. Absent is the honest value.
+    video360Source: "",
     posterSource: `/media/kameleon/placeholder/${key}-poster.jpg`,
     captionsSource: `/media/kameleon/placeholder/${key}.vtt`,
     previewImage: `/media/kameleon/placeholder/${key}-preview.jpg`,
@@ -52,6 +55,7 @@ export function buildPathwayTree(
       title: spec.title,
       description: spec.description,
       videoSource: paths.videoSource,
+      video360Source: paths.video360Source,
       posterSource: paths.posterSource,
       captionsSource: paths.captionsSource,
       duration: spec.durationSeconds,

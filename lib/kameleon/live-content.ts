@@ -18,6 +18,28 @@ import type { Pathway, VideoChoice, VideoNode, NodeStatus, ChoicePosition } from
 const BUCKET = "platform-media";
 const SIGNED_URL_TTL_SECONDS = 3600;
 
+/**
+ * TEMPORARY, and removed with lib/testimonials/pending-schema-rpc.ts.
+ *
+ * 20260821120000 adds content_nodes.video360_asset_id, which cannot appear in
+ * lib/supabase/database.types.ts until the migration is applied — and applying
+ * it is deliberately gated. Reading the column through one narrow accessor
+ * keeps that fact in a single documented place instead of spreading an
+ * assertion across every call site.
+ *
+ * It VALIDATES rather than asserts: a missing or non-string value becomes
+ * null, so a deployment running against the pre-migration schema behaves
+ * exactly as if no chapter had a 360 version — which is the truth, and which
+ * hides the button rather than breaking the player.
+ *
+ * Once types are regenerated this becomes `n.video360_asset_id` and the
+ * function is deleted.
+ */
+function pendingVideo360AssetId(row: object): string | null {
+  const value = (row as { video360_asset_id?: unknown }).video360_asset_id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export let kameleonPathways: Pathway[] = [];
 export let kameleonNodesById: Record<string, VideoNode> = {};
 
@@ -102,6 +124,8 @@ async function fetchAndAssignCache(): Promise<void> {
   const assetIds = new Set<string>();
   for (const n of nodeRows ?? []) {
     if (n.primary_video_asset_id) assetIds.add(n.primary_video_asset_id);
+    const video360 = pendingVideo360AssetId(n);
+    if (video360) assetIds.add(video360);
     if (n.poster_asset_id) assetIds.add(n.poster_asset_id);
     if (n.captions_asset_id) assetIds.add(n.captions_asset_id);
   }
@@ -193,6 +217,7 @@ async function fetchAndAssignCache(): Promise<void> {
       title: n.title,
       description: n.description ?? "",
       videoSource: resolveUrl(n.primary_video_asset_id, urlByAssetId),
+      video360Source: resolveUrl(pendingVideo360AssetId(n), urlByAssetId),
       posterSource: resolveUrl(n.poster_asset_id, urlByAssetId),
       captionsSource: resolveUrl(n.captions_asset_id, urlByAssetId),
       duration: n.duration_seconds ?? 0,

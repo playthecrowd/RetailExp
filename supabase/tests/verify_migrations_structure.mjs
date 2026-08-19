@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 24, `exactly 24 migration files exist (found ${files.length})`);
+assert(files.length === 25, `exactly 25 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -2150,6 +2150,49 @@ assert(
     "the LAST privilege statement on the Gallery view is a revoke, so nothing reopens it later",
   );
 }
+
+// --- Optional 360 chapter video -------------------------------------------
+//
+// The feature is "a chapter MAY have a 360 version". Everything below exists
+// to keep "may" from quietly becoming "does": a nullable column, no default,
+// no backfill, and nothing that could substitute the standard 16:9 video.
+const video360 = stripPilotComments(
+  readFileSync(join(migrationsDir, "20260821120000_optional_360_chapter_video.sql"), "utf8"),
+);
+
+assert(
+  /add column if not exists video360_asset_id uuid/.test(video360),
+  "content_nodes gains an optional 360 asset reference",
+);
+// Scoped to the ADD COLUMN clause. A whole-file search for "not null" also
+// matched the partial index's `where video360_asset_id is not null` predicate,
+// which is the opposite of a NOT NULL constraint — it selects exactly the rows
+// that HAVE a 360 asset.
+{
+  const addColumn = /add column if not exists video360_asset_id[\s\S]*?;/.exec(video360);
+  assert(addColumn !== null, "the 360 column definition was located");
+  const definition = addColumn ? addColumn[0].replace("if not exists", "") : "";
+  assert(
+    !/\bnot null\b/i.test(definition),
+    "the column is NULLABLE - absent must be expressible, because most chapters have no 360 version",
+  );
+  assert(
+    !/\bdefault\b/i.test(definition),
+    "the column has NO default - a default would claim a 360 asset that does not exist",
+  );
+}
+assert(
+  !/update public\.content_nodes|insert into/i.test(video360),
+  "nothing is backfilled - no chapter is given a 360 version it does not have",
+);
+assert(
+  /on delete set null/.test(video360),
+  "removing the 360 file hides the button rather than taking the chapter offline",
+);
+assert(
+  !/primary_video_asset_id\s*(as|,|\))/.test(video360),
+  "the standard video reference is untouched - 360 is additive, never a substitution",
+);
 
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {
