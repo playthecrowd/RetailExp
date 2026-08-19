@@ -1002,6 +1002,101 @@ export type Database = {
           },
         ]
       }
+      testimonial_provider_assets: {
+        Row: {
+          attached_at: string | null
+          attempt_no: number
+          deleted_at: string | null
+          deletion_requested_at: string | null
+          deletion_status: string | null
+          environment_marker: string
+          failed_at: string | null
+          failure_reason: string | null
+          id: string
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          opaque_reference: string
+          orphaned_at: string | null
+          provider: string
+          provider_asset_id: string | null
+          reservation_expires_at: string
+          reserved_at: string
+          submission_id: string
+          superseded_at: string | null
+          validated_at: string | null
+        }
+        Insert: {
+          attached_at?: string | null
+          attempt_no: number
+          deleted_at?: string | null
+          deletion_requested_at?: string | null
+          deletion_status?: string | null
+          environment_marker: string
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          opaque_reference: string
+          orphaned_at?: string | null
+          provider: string
+          provider_asset_id?: string | null
+          reservation_expires_at: string
+          reserved_at?: string
+          submission_id: string
+          superseded_at?: string | null
+          validated_at?: string | null
+        }
+        Update: {
+          attached_at?: string | null
+          attempt_no?: number
+          deleted_at?: string | null
+          deletion_requested_at?: string | null
+          deletion_status?: string | null
+          environment_marker?: string
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          media_type?: Database["public"]["Enums"]["testimonial_media_type"]
+          opaque_reference?: string
+          orphaned_at?: string | null
+          provider?: string
+          provider_asset_id?: string | null
+          reservation_expires_at?: string
+          reserved_at?: string
+          submission_id?: string
+          superseded_at?: string | null
+          validated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "testimonial_provider_assets_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_gallery_items"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_provider_assets_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_moderation_queue"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_provider_assets_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_my_submissions"
+            referencedColumns: ["submission_id"]
+          },
+          {
+            foreignKeyName: "testimonial_provider_assets_submission_id_fkey"
+            columns: ["submission_id"]
+            isOneToOne: false
+            referencedRelation: "testimonial_submissions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       testimonial_submissions: {
         Row: {
           attested_no_minors: boolean
@@ -1489,6 +1584,17 @@ export type Database = {
         Args: { p_experience_user_id: string; p_visitor_id: string }
         Returns: undefined
       }
+      attach_testimonial_provider_asset: {
+        Args: {
+          p_ledger_id: string
+          p_provider: string
+          p_provider_asset_id: string
+        }
+        Returns: {
+          attached_at: string
+          ledger_id: string
+        }[]
+      }
       can_edit_client: { Args: { check_client_id: string }; Returns: boolean }
       can_manage_members: {
         Args: { check_client_id: string }
@@ -1511,9 +1617,26 @@ export type Database = {
           upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
         }[]
       }
+      fail_testimonial_provider_attempt: {
+        Args: { p_ledger_id: string; p_reason: string }
+        Returns: {
+          failed_at: string
+          ledger_id: string
+        }[]
+      }
       is_client_member: { Args: { check_client_id: string }; Returns: boolean }
       is_client_owner: { Args: { check_client_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
+      list_deletable_testimonial_provider_assets: {
+        Args: { p_limit?: number }
+        Returns: {
+          environment_marker: string
+          ledger_id: string
+          provider: string
+          provider_asset_id: string
+          reason: string
+        }[]
+      }
       list_my_testimonial_submissions: {
         Args: { p_visitor_id: string }
         Returns: {
@@ -1530,6 +1653,13 @@ export type Database = {
           validation_status: Database["public"]["Enums"]["testimonial_validation_status"]
         }[]
       }
+      mark_testimonial_provider_asset_deleted: {
+        Args: { p_ledger_id: string; p_status: string }
+        Returns: {
+          deletion_status: string
+          ledger_id: string
+        }[]
+      }
       moderate_testimonial_submission: {
         Args: {
           p_decision: Database["public"]["Enums"]["testimonial_moderation_status"]
@@ -1542,6 +1672,48 @@ export type Database = {
           published_at: string
           reviewed_at: string
           submission_id: string
+        }[]
+      }
+      record_orphaned_testimonial_provider_asset: {
+        Args: {
+          p_deletion_status: string
+          p_ledger_id: string
+          p_provider: string
+          p_provider_asset_id: string
+        }
+        Returns: {
+          deletion_status: string
+          ledger_id: string
+          provider_asset_id: string
+        }[]
+      }
+      record_testimonial_provider_progress: {
+        Args: {
+          p_error_code: string
+          p_event_id: string
+          p_opaque_reference: string
+          p_processing_status: string
+          p_provider: string
+          p_provider_asset_id: string
+        }
+        Returns: {
+          recorded: boolean
+          submission_id: string
+        }[]
+      }
+      reserve_testimonial_provider_attempt: {
+        Args: {
+          p_environment: string
+          p_expires_at: string
+          p_provider: string
+          p_submission_id: string
+          p_visitor_id: string
+        }
+        Returns: {
+          attempt_no: number
+          ledger_id: string
+          media_type: Database["public"]["Enums"]["testimonial_media_type"]
+          opaque_reference: string
         }[]
       }
       retry_testimonial_upload: {
@@ -1562,6 +1734,25 @@ export type Database = {
         Returns: {
           caption: string
           submission_id: string
+        }[]
+      }
+      validate_testimonial_provider_asset: {
+        Args: {
+          p_duration_seconds: number
+          p_event_id: string
+          p_height: number
+          p_opaque_reference: string
+          p_processing_status: string
+          p_provider: string
+          p_provider_asset_id: string
+          p_signed_urls_required: boolean
+          p_size_bytes: number
+          p_width: number
+        }
+        Returns: {
+          environment_marker: string
+          submission_id: string
+          validated: boolean
         }[]
       }
     }
