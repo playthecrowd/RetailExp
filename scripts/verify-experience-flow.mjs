@@ -285,6 +285,134 @@ console.log("\n--- placement, structurally ---");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n--- the video upload experience ---");
+//
+// The risk in a progress UI is not that it looks wrong, it is that it claims
+// something the code did not measure. These check the honesty properties.
+// ---------------------------------------------------------------------------
+{
+  const cap = stripComments(read("components/kameleon/testimonials/TestimonialCapture.tsx"));
+  const bottle = stripComments(read("components/kameleon/testimonials/BottleFillProgress.tsx"));
+  const uploader = stripComments(read("components/kameleon/testimonials/upload-with-progress.ts"));
+
+  // --- the destination and finalization path are unchanged ----------------
+  check(
+    /uploadWithProgress\(\s*destination\.data\.uploadUrl,\s*destination\.data\.fileFieldName,\s*file,/.test(
+      cap.replace(/\s+/g, " ").replace(/ /g, " "),
+    ) ||
+      /uploadWithProgress\([\s\S]{0,120}?destination\.data\.uploadUrl[\s\S]{0,80}?destination\.data\.fileFieldName/.test(
+        cap,
+      ),
+    "video uploads to the SAME one-time destination and field name as before",
+  );
+  check(
+    /const response = await fetch\(destination\.data\.uploadUrl, \{ method: "POST", body \}\)/.test(cap),
+    "the photo path still uses the untouched fetch upload",
+  );
+  check(
+    (cap.match(/requestUploadDestinationAction\(/g) || []).length === 1,
+    "there is still exactly ONE place a destination is requested",
+  );
+  check(
+    (cap.match(/finalizeTestimonialUploadAction\(/g) || []).length === 1,
+    "finalization is still a single shared call for both media types",
+  );
+  check(
+    !/uploadUrl/.test(uploader) || /url: string/.test(uploader),
+    "the uploader receives the URL as a parameter and never stores it",
+  );
+  check(
+    !/localStorage|sessionStorage/.test(uploader),
+    "the one-time upload URL is never persisted by the uploader",
+  );
+
+  // --- a failure can never reach 100% or the success panel -----------------
+  check(
+    (cap.match(/setUploadPhase\("complete"\)/g) || []).length === 1,
+    "there is exactly one place the phase can become complete",
+  );
+  check(
+    cap.indexOf('finalizeTestimonialUploadAction(') < cap.indexOf('setUploadPhase("complete")'),
+    "complete is set only AFTER finalization, not after the transfer",
+  );
+  {
+    // Every early return in submit() must leave the phase behind. Taken as the
+    // text between the upload call and the completion line: if a failure path
+    // set the phase, it would appear in here.
+    const between = cap.slice(
+      cap.indexOf("uploadWithProgress("),
+      cap.indexOf('setUploadPhase("complete")'),
+    );
+    const failureBranches = between.match(/setStep\("blocked"\)/g) || [];
+    check(failureBranches.length >= 2, "the upload and finalization failure branches exist");
+    check(
+      !/setUploadPhase\("complete"\)|setUploadPercent\(100\)/.test(between),
+      "no failure branch sets the completed phase or a 100% reading",
+    );
+  }
+  check(
+    /finalized\.data\?\.state === "failed"[\s\S]{0,220}?setStep\("blocked"\)/.test(cap),
+    "a refused finalization is treated as a failure, not as a slow success",
+  );
+
+  // --- the number is never invented ---------------------------------------
+  check(
+    /const showNumber = phase === "uploading" && determinate;/.test(bottle),
+    "a percentage is shown only while uploading AND only when the browser reported a total",
+  );
+  check(
+    /if \(!event\.lengthComputable \|\| event\.total === 0\) return;/.test(uploader),
+    "no progress is reported when the browser cannot measure it",
+  );
+  check(
+    /event\.loaded \/ event\.total/.test(uploader),
+    "the percentage comes from transferred bytes",
+  );
+  check(
+    !/Math\.random|setInterval/.test(bottle) && !/Math\.random|setInterval/.test(uploader),
+    "nothing simulates progress on a timer",
+  );
+
+  // --- accessibility and motion -------------------------------------------
+  check(
+    /role="progressbar"/.test(bottle) &&
+      /aria-valuemin=\{0\}/.test(bottle) &&
+      /aria-valuemax=\{100\}/.test(bottle),
+    "the progress element carries the required progressbar semantics",
+  );
+  check(
+    /showNumber \|\| phase === "complete" \? \{ "aria-valuenow"/.test(bottle),
+    "aria-valuenow is present only when the value is real",
+  );
+  check(
+    /aria-live="polite"/.test(bottle) &&
+      (bottle.match(/aria-live=/g) || []).length === 1,
+    "one polite live region, so phase changes announce without repetition",
+  );
+  check(
+    /@media \(prefers-reduced-motion: reduce\)/.test(bottle),
+    "prefers-reduced-motion is respected",
+  );
+  for (const [phase, message] of [
+    ["uploading", "Uploading your video…"],
+    ["finalizing", "Preparing your testimonial…"],
+    ["complete", "Submission complete"],
+  ]) {
+    check(bottle.includes(message), `the ${phase} phase message is exactly as specified`);
+  }
+
+  // --- video only ----------------------------------------------------------
+  check(
+    /mediaType === "video" \? \(/.test(cap) && /BottleFillProgress/.test(cap),
+    "the bottle renders for video only",
+  );
+  check(
+    /setUploadPhase\("finalizing"\)/.test(cap.slice(cap.indexOf('if (mediaType === "video")'))),
+    "the finalizing phase begins when the bytes are gone, not when the server answers",
+  );
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n--- the returned choice screen ---");
 // ---------------------------------------------------------------------------
 {

@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button, LinkButton } from "@/components/ui/Button";
 import { GALLERY_ROUTE } from "@/lib/testimonials/routes";
 import { PRIVACY_ROUTE, TERMS_ROUTE } from "@/lib/legal/evaluation-notices";
+import { BottleFillProgress, type UploadPhase } from "./BottleFillProgress";
+import { uploadWithProgress } from "./upload-with-progress";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import {
   CAPTURE_ACCEPT,
@@ -119,6 +121,14 @@ export function TestimonialCapture({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Video-only upload experience. `uploadPercent` is transferred BYTES, never
+  // a guess: it is written from XHR's upload progress and read only while the
+  // phase is "uploading". `determinate` is false when the browser declines to
+  // report a total, which some proxies and Android builds do.
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("uploading");
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [determinate, setDeterminate] = useState(false);
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Object URLs are revoked when they are replaced or the flow unmounts,
@@ -187,6 +197,9 @@ export function TestimonialCapture({
     if (!consentComplete || !file || !mediaType || busy) return;
     setBusy(true);
     setError(null);
+    setUploadPhase("uploading");
+    setUploadPercent(0);
+    setDeterminate(false);
     setStep("uploading");
 
     // 1. An intent, created server-side. Idempotent by state, so a reload
@@ -212,18 +225,50 @@ export function TestimonialCapture({
     // 3. Straight to the provider. Cloudflare documents a single multipart
     //    POST with the field name `file` for BOTH products - not PUT, and not
     //    reusable. The URL is used once, here, and never stored.
-    try {
-      const body = new FormData();
-      body.set(destination.data.fileFieldName, file);
-      const response = await fetch(destination.data.uploadUrl, { method: "POST", body });
-      if (!response.ok) throw new Error("upload_rejected");
-    } catch {
-      setBusy(false);
-      // Deliberately generic: the visitor cannot act on a provider error code,
-      // and echoing one would leak provider detail into the browser.
-      setError("That upload didn't finish. You can try again.");
-      setStep("blocked");
-      return;
+    //    VIDEO uses XMLHttpRequest, for one reason: fetch cannot report upload
+    //    progress, and a percentage that is not measured is a percentage that
+    //    is invented. Everything else about the request is identical - one
+    //    multipart POST, the documented field name, the one-time URL used once
+    //    and never stored. PHOTO keeps fetch untouched: it finishes fast
+    //    enough that progress buys nothing.
+    const uploadFailed = "That upload didn't finish. You can try again.";
+
+    if (mediaType === "video") {
+      const result = await uploadWithProgress(
+        destination.data.uploadUrl,
+        destination.data.fileFieldName,
+        file,
+        (percent) => {
+          setDeterminate(true);
+          setUploadPercent(percent);
+        },
+      );
+      if (!result.ok) {
+        // The animation stops because the step changes. Nothing advances the
+        // phase past "uploading", so a failure can never render 100% or the
+        // success panel.
+        setBusy(false);
+        setError(uploadFailed);
+        setStep("blocked");
+        return;
+      }
+      // Bytes are gone; the provider now has work to do that reports no
+      // progress at all. Indeterminate is the honest state, not a number.
+      setUploadPhase("finalizing");
+    } else {
+      try {
+        const body = new FormData();
+        body.set(destination.data.fileFieldName, file);
+        const response = await fetch(destination.data.uploadUrl, { method: "POST", body });
+        if (!response.ok) throw new Error("upload_rejected");
+      } catch {
+        setBusy(false);
+        // Deliberately generic: the visitor cannot act on a provider error
+        // code, and echoing one would leak provider detail into the browser.
+        setError(uploadFailed);
+        setStep("blocked");
+        return;
+      }
     }
 
     // 4. The caption, if any. Sent after the upload so a failed upload does
@@ -248,8 +293,27 @@ export function TestimonialCapture({
     //    the retention sweep and its provider media deleted with it.
     for (let attempt = 0; attempt < FINALIZE_ATTEMPTS; attempt += 1) {
       const finalized = await finalizeTestimonialUploadAction(intent.data.submissionId);
+
+      // A refused finalization is a FAILURE, not a slow success. Showing the
+      // success panel here would tell the visitor their testimonial is in
+      // review when the server has just said it is not usable.
+      if (finalized.status === "ok" && finalized.data?.state === "failed") {
+        setBusy(false);
+        setError(uploadFailed);
+        setStep("blocked");
+        return;
+      }
       if (finalized.status === "error" || finalized.data?.state !== "processing") break;
       await new Promise((resolve) => setTimeout(resolve, FINALIZE_RETRY_MS));
+    }
+
+    // 100% only here: after the application, not the network, is satisfied.
+    // Held briefly so the completed bottle is actually seen rather than
+    // replaced in the same frame.
+    if (mediaType === "video") {
+      setUploadPhase("complete");
+      setUploadPercent(100);
+      await new Promise((resolve) => setTimeout(resolve, 700));
     }
 
     setBusy(false);
@@ -470,14 +534,25 @@ export function TestimonialCapture({
           </div>
         )}
 
-        {step === "uploading" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-kameleon-text">Sending your story…</p>
-            <p className="text-xs text-kameleon-text-muted">
-              This can take a moment on a phone connection. Please keep this screen open.
-            </p>
-          </div>
-        )}
+        {step === "uploading" &&
+          (mediaType === "video" ? (
+            // Video gets the bottle. A video upload on a phone takes long
+            // enough that the previous two lines of text read as a stall.
+            <BottleFillProgress
+              phase={uploadPhase}
+              percent={uploadPercent}
+              determinate={determinate}
+            />
+          ) : (
+            // The photo path is untouched: it finishes fast enough that a
+            // progress experience would be scaffolding around nothing.
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-kameleon-text">Sending your story…</p>
+              <p className="text-xs text-kameleon-text-muted">
+                This can take a moment on a phone connection. Please keep this screen open.
+              </p>
+            </div>
+          ))}
 
         {step === "submitted" && (
           // Visually distinct from every other step: a bordered, tinted panel
