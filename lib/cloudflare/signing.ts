@@ -119,12 +119,16 @@ export async function signStreamPlayback(
 /**
  * Stream poster/thumbnail.
  *
- * UNRESOLVED PROVIDER FACT: Cloudflare's signed-playback documentation does
- * not state whether the thumbnail endpoint honours or requires the playback
- * token when requireSignedURLs is set. The token is included here because
- * including it is safe if required and harmless if ignored, but this must be
- * confirmed against the live account before the Gallery relies on poster
- * images being private.
+ * VERIFIED against the live account on 19 August 2026: the thumbnail endpoint
+ * DOES honour the playback token. With requireSignedURLs set, the unsigned
+ * thumbnail returned 401 and the signed one 200, alongside manifest controls
+ * of 401 unsigned and 200 signed.
+ *
+ * The documentation still does not state this, which is why it was probed
+ * rather than assumed. It matters because the Gallery and the moderation
+ * dashboard both render posters: had thumbnails been public, every submission
+ * would have had a permanently unauthenticated preview frame regardless of how
+ * carefully playback was signed.
  */
 export async function signStreamPoster(
   uid: string,

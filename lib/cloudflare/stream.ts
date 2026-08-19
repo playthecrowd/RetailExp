@@ -39,8 +39,11 @@ export interface VideoUploadDestination {
  * camera input, and any duration the browser reports is spoofable.
  *
  * Cloudflare documents no minimum or maximum for this parameter, so the value
- * is ours and its enforcement must be confirmed empirically against the live
- * account before capture is enabled.
+ * is ours. Its enforcement was VERIFIED against the live account on
+ * 19 August 2026: a 90-second upload against a 60-second limit terminated as
+ * status.state = "error" with errorReasonCode = ERR_DURATION_EXCEED_CONSTRAINT.
+ * It rejects rather than truncating, so the product's 60-second limit holds at
+ * the provider and reconcileVideo needs no duration check of its own.
  *
  * `creator` carries the opaque reference. Cloudflare describes it as "a
  * user-defined identifier for the media creator" and echoes it back on the

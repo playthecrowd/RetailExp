@@ -34,13 +34,30 @@ import "server-only";
  * that matter — Images is polled and has no verifiable webhook, Stream is
  * webhook-driven with authenticated reconciliation.
  *
- * FACTS STILL UNVERIFIED against the live account, all launch blockers:
- *   1. the permitted range of Stream's `maxDurationSeconds`, and whether a
- *      longer upload is actually rejected rather than merely truncated
- *   2. whether the Stream thumbnail endpoint honours the playback token when
- *      requireSignedURLs is set
- *   3. whether any existing Images variant carries `neverRequireSignedURLs`,
- *      which would bypass signed delivery regardless of per-image settings
+ * PROVIDER FACTS, ALL THREE NOW VERIFIED against the live account on
+ * 19 August 2026. Each was previously a launch blocker.
+ *
+ *   1. `maxDurationSeconds` REJECTS an over-length upload; it does not
+ *      truncate and it is not advisory. A 90-second clip against a 60-second
+ *      limit terminated as status.state = "error" with
+ *      errorReasonCode = ERR_DURATION_EXCEED_CONSTRAINT. This is the outcome
+ *      the design assumed, so the 60-second product limit is enforced at the
+ *      provider and needs no post-hoc rejection in reconcileVideo.
+ *
+ *   2. The Stream thumbnail endpoint DOES honour the playback token. With
+ *      requireSignedURLs set, the unsigned thumbnail returned 401 and the
+ *      signed one 200 - matching the manifest controls (401 unsigned, 200
+ *      signed). Poster images are therefore as private as playback, which is
+ *      what the Gallery and the moderation dashboard both depend on.
+ *
+ *   3. No Images variant carries `neverRequireSignedURLs`. Both `public`
+ *      (1366x768) and `kameleongallery` (1600x1600, scale-down, metadata
+ *      stripped) return an EXPLICIT false, not an absent field - which also
+ *      confirms assessVariantSafety() will pass rather than fail closed on a
+ *      missing key.
+ *
+ * Verified by direct provider probes with capture gates and the consent
+ * registry closed; both test assets were deleted and the ledger stayed empty.
  */
 
 /** Which environment a provider asset belongs to. Written as a provider-side
