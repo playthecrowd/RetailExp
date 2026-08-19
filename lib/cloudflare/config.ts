@@ -163,3 +163,29 @@ export function webhookConfigurationComplete(): boolean {
   }
   return true;
 }
+
+/**
+ * Whether the deletion path is completely configured.
+ *
+ * A sweep that could reach only one of the two products would delete images
+ * and silently skip videos, or the reverse, while reporting a clean run. Both
+ * tokens are therefore required even though a given batch may contain only one
+ * kind of asset — the run must be able to handle whatever the ledger holds.
+ *
+ * KAMELEON_MEDIA_ENVIRONMENT is required for a different reason: it is what
+ * scopes the sweep to this deployment's own media. Without it there is no safe
+ * value to pass, and the listing RPC refuses a missing one rather than
+ * defaulting to "all".
+ */
+export function deletionConfigurationComplete(): boolean {
+  for (const name of [
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_IMAGES_API_TOKEN",
+    "CLOUDFLARE_STREAM_API_TOKEN",
+    "KAMELEON_MEDIA_ENVIRONMENT",
+  ] as const) {
+    const raw = process.env[name];
+    if (typeof raw !== "string" || raw.trim().length === 0) return false;
+  }
+  return true;
+}

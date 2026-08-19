@@ -1,90 +1,123 @@
 import "server-only";
 
-import { createSecretClient } from "@/lib/supabase/secret";
 import { deleteImage } from "@/lib/cloudflare/images";
 import { deleteVideo } from "@/lib/cloudflare/stream";
+import { mediaEnvironment } from "@/lib/cloudflare/config";
 import { logProviderEvent } from "./provider-assets";
+import { pendingSchemaRpc } from "./pending-schema-rpc";
+import {
+  runRetentionSweep,
+  type RetentionDeps,
+  type RetentionSummary,
+} from "./retention-core";
 
 /**
- * Provider cleanup.
+ * Retention enforcement, bound to the real database and the real provider.
+ *
+ * All of the ordering, deadline, counting and failure logic lives in
+ * retention-core.ts, which takes every dependency as a parameter. This file
+ * only supplies the real ones — which is what makes the core's branches
+ * testable without a database, a network or a clock.
  *
  * WHY THIS IS NOT OPTIONAL
  *   A one-time upload URL cannot be reused, so every retry mints a NEW
  *   provider asset and supersedes the previous one. Without a sweep, each
- *   retry leaves a billable asset the product will never serve. Rejected and
- *   purged submissions leave the same residue.
+ *   retry leaves a billable asset the product will never serve. Rejected,
+ *   removed and abandoned submissions leave the same residue — and their
+ *   media outlives the retention window the schema promises.
  *
- * IDEMPOTENT BY CONSTRUCTION
- *   `not_found` is recorded as success: the goal is that the provider is no
- *   longer storing the asset, and a 404 proves that as well as a 200 does.
- *   Re-running the sweep is therefore always safe.
- *
- * NOT A VALIDATOR
- *   Nothing here changes a submission's lifecycle. Deleting a superseded
- *   asset must never affect the attempt that replaced it, which is why the
- *   ledger — not testimonial_submissions.provider_asset_id — is the thing
- *   being swept.
+ * THE ENVIRONMENT IS NOT NEGOTIABLE HERE
+ *   Preview and Production share one database and one Cloudflare account. The
+ *   environment comes from this deployment's own configuration and is passed
+ *   to the database, which filters on it. Nothing in a request can influence
+ *   it, and the listing RPC refuses an unrecognised value rather than
+ *   returning an empty set — an empty result and a wrong-environment result
+ *   are indistinguishable to a caller, so the database raises instead.
  */
 
-export interface CleanupSummary {
-  examined: number;
-  deleted: number;
-  notFound: number;
-  failed: number;
-}
+export type { RetentionSummary } from "./retention-core";
 
-export async function sweepDeletableProviderAssets(limit = 50): Promise<CleanupSummary> {
-  const supabase = createSecretClient();
-  const summary: CleanupSummary = { examined: 0, deleted: 0, notFound: 0, failed: 0 };
+/**
+ * @param deadlineMs absolute epoch-ms after which no NEW provider deletion is
+ *        started. Leftover rows are picked up by the next scheduled run.
+ */
+export function runRetention(deadlineMs: number): Promise<RetentionSummary> {
+  const supabase = pendingSchemaRpc();
+  const environment = mediaEnvironment();
 
-  const { data, error } = await supabase.rpc("list_deletable_testimonial_provider_assets", {
-    p_limit: limit,
-  });
+  const deps: RetentionDeps = {
+    async listDeletable(limit) {
+      const { data, error } = await supabase.rpc("list_deletable_testimonial_provider_assets", {
+        p_environment: environment,
+        p_limit: limit,
+      });
+      if (error || !data) return [];
+      return data.map((row) => ({
+        ledgerId: row.ledger_id,
+        provider: row.provider,
+        providerAssetId: row.provider_asset_id,
+        reason: row.reason,
+        deletionAttemptCount: row.deletion_attempt_count,
+      }));
+    },
 
-  if (error || !data) return summary;
+    async markAttempt(ledgerId, status) {
+      await supabase
+        .rpc("mark_testimonial_provider_asset_deleted", {
+          p_ledger_id: ledgerId,
+          p_status: status,
+        })
+        .single();
+    },
 
-  // No casts: every field below comes from the generated Returns type of
-  // list_deletable_testimonial_provider_assets. The SQL selects only rows
-  // where provider_asset_id is not null, which is why it is typed non-null.
-  for (const row of data) {
-    const { ledger_id: ledgerId, provider, provider_asset_id: assetId } = row;
-    if (assetId.length === 0) continue;
+    deleteAsset(provider, providerAssetId) {
+      // The ledger's own provider column decides, never the submission's.
+      // Deleting a superseded asset must not depend on, or affect, the attempt
+      // that replaced it.
+      return provider === "cloudflare_images"
+        ? deleteImage(providerAssetId)
+        : deleteVideo(providerAssetId);
+    },
 
-    summary.examined += 1;
+    async listPurgeable(limit) {
+      const { data, error } = await supabase.rpc("list_purgeable_testimonial_submissions", {
+        p_environment: environment,
+        p_limit: limit,
+      });
+      if (error || !data) return [];
+      return data.map((row) => ({
+        submissionId: row.submission_id,
+        providerAssetsSeen: row.provider_assets_seen,
+      }));
+    },
 
-    // Marked pending first, so an asset whose deletion crashes mid-flight is
-    // visibly in progress rather than silently untouched.
-    await supabase.rpc("mark_testimonial_provider_asset_deleted", {
-      p_ledger_id: ledgerId,
-      p_status: "pending",
-    });
+    async recordPurged(submissionId, status) {
+      const { error } = await supabase
+        .rpc("record_testimonial_media_purged", {
+          p_submission_id: submissionId,
+          p_status: status,
+        })
+        .single();
+      // The refusal path matters: the database raises 55000 when a provider
+      // asset is still undeleted. Throwing here is what makes the core count
+      // it as refused and leave the submission for the next run, rather than
+      // recording a deletion that did not happen.
+      if (error) throw new Error("purge refused");
+    },
 
-    let status: "deleted" | "not_found" | "failed";
-    try {
-      status =
-        provider === "cloudflare_images"
-          ? await deleteImage(assetId)
-          : await deleteVideo(assetId);
-    } catch {
-      status = "failed";
-    }
+    log(event, code, ledgerId) {
+      logProviderEvent({
+        // A ledger id is our own opaque row identifier. A provider asset id, a
+        // submission id and every contact field are deliberately absent.
+        correlationId: ledgerId ?? "retention",
+        provider: "cloudflare",
+        event,
+        code,
+      });
+    },
 
-    if (status === "deleted") summary.deleted += 1;
-    else if (status === "not_found") summary.notFound += 1;
-    else summary.failed += 1;
+    now: () => Date.now(),
+  };
 
-    await supabase.rpc("mark_testimonial_provider_asset_deleted", {
-      p_ledger_id: ledgerId,
-      p_status: status,
-    });
-
-    logProviderEvent({
-      correlationId: ledgerId,
-      provider,
-      event: "cleanup",
-      code: `${row.reason}:${status}`,
-    });
-  }
-
-  return summary;
+  return runRetentionSweep(deps, deadlineMs);
 }
