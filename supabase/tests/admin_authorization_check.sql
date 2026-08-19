@@ -1823,9 +1823,31 @@ begin
   -- --- validation takes no environment argument ---------------------------
   -- The whole environment guarantee rests on this: if no parameter carries an
   -- environment, no caller can supply the wrong one.
-  perform pg_temp.record('20 ledger', 'validate_testimonial_provider_asset has no environment parameter', '0',
-    (select count(*) from unnest(coalesce(p.proargnames, array[]::text[])) a(name)
+  -- INPUT arguments only.
+  --
+  -- RETURNS TABLE (submission_id, environment_marker, validated) creates OUT
+  -- parameters, and pg_proc.proargnames spans IN names THEN OUT names. An
+  -- earlier version scanned the whole array, matched the RETURNED column and
+  -- reported an environment "parameter" that does not exist: proargnames has
+  -- 13 entries (10 IN + 3 OUT) while pronargs is 10.
+  --
+  -- The boundary that matters is exactly pronargs: no caller may SUPPLY an
+  -- environment, while returning the stamped value is the function's purpose.
+  perform pg_temp.record('20 ledger', 'validate_testimonial_provider_asset has no environment INPUT argument', '0',
+    (select count(*)
+     from unnest(coalesce(p.proargnames[1:p.pronargs], array[]::text[])) a(name)
      where a.name ilike '%environment%')::text)
+  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+  where ns.nspname='public' and p.proname='validate_testimonial_provider_asset';
+
+  -- The positive half. Without it the slice above would also pass on a
+  -- function that had stopped returning the environment altogether, which
+  -- would break the trusted caller while looking like an improvement.
+  perform pg_temp.record('20 ledger', 'environment_marker remains an OUT/TABLE return column', '1',
+    (select count(*)
+     from unnest(coalesce(p.proargnames[p.pronargs + 1:array_length(p.proargnames, 1)],
+                          array[]::text[])) a(name)
+     where a.name = 'environment_marker')::text)
   from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
   where ns.nspname='public' and p.proname='validate_testimonial_provider_asset';
 
@@ -1967,11 +1989,13 @@ do $$
 declare
   v_ledger uuid;
   v_marker text;
+  v_before text;
+  v_after  text;
   n int;
 begin
   perform pg_temp.act_as_ambient();
 
-  -- fa02 was rejected in section 10, so it is NOT eligible for validation.
+  -- fa02 was rejected in section 10 and is therefore also already valid.
   -- A callback for it must change nothing rather than raise.
   insert into public.testimonial_provider_assets
     (submission_id, attempt_no, provider, media_type, environment_marker,
@@ -1982,12 +2006,112 @@ begin
      'cf-video-rejected', now())
   returning id into v_ledger;
 
+  -- WHY THE PREVIOUS ASSERTION HERE WAS IMPOSSIBLE
+  --   It expected a moderated submission to be refused by the moderation check
+  --   inside validate_testimonial_provider_asset. But protect_testimonial_update
+  --   refuses ANY moderation transition unless validation_status is already
+  --   'valid', so a moderated submission is ALWAYS also valid - and the RPC's
+  --   idempotency branch fires first, by design. "Moderated but not yet valid"
+  --   is a state this schema cannot produce, so the assertion could never pass
+  --   and the moderation check it aimed at is defence in depth, not a live
+  --   path. The ordering rule itself is enforced by the trigger, one layer
+  --   below, and is untouched.
+  --
+  -- Replaced with the two behaviours that ARE reachable.
+
+  -- A full lifecycle snapshot, not just the two obvious fields: an idempotent
+  -- call must leave every one of them exactly as it found them.
+  select s.upload_status || '|' || s.validation_status || '|' || s.moderation_status
+         || '|' || coalesce(s.provider, '~') || '|' || coalesce(s.provider_asset_id, '~')
+         || '|' || coalesce(s.provider_delivery_id, '~')
+         || '|' || coalesce(s.validated_at::text, '~')
+         || '|' || coalesce(s.delivery_ready_at::text, '~')
+         || '|' || coalesce(s.environment_marker, '~')
+         || '|' || coalesce(s.published_at::text, '~')
+         || '|' || coalesce(s.last_provider_event_id, '~')
+  into v_before
+  from public.testimonial_submissions s
+  where s.id = '00000000-0000-4000-8000-00000000fa02';
+
   select count(*) into n
   from public.validate_testimonial_provider_asset(
     'cloudflare_stream', 'cf-video-rejected', 'dddddddddddddddddddddddddddddddd',
     true, 1000, 10, 720, 1280, 'ready', 'evt-1') r
   where r.validated;
-  perform pg_temp.record('22 validation', 'a moderated submission is not validatable', '0', n::text);
+  perform pg_temp.record('22 validation',
+    'an already-valid submission returns idempotent success', '1', n::text);
+
+  -- The point of idempotency is that it CHANGES NOTHING. A redelivery must not
+  -- re-stamp the provider asset, move validated_at, or touch any other
+  -- lifecycle field.
+  select s.upload_status || '|' || s.validation_status || '|' || s.moderation_status
+         || '|' || coalesce(s.provider, '~') || '|' || coalesce(s.provider_asset_id, '~')
+         || '|' || coalesce(s.provider_delivery_id, '~')
+         || '|' || coalesce(s.validated_at::text, '~')
+         || '|' || coalesce(s.delivery_ready_at::text, '~')
+         || '|' || coalesce(s.environment_marker, '~')
+         || '|' || coalesce(s.published_at::text, '~')
+         || '|' || coalesce(s.last_provider_event_id, '~')
+  into v_after
+  from public.testimonial_submissions s
+  where s.id = '00000000-0000-4000-8000-00000000fa02';
+
+  perform pg_temp.record('22 validation',
+    'the idempotent call left every lifecycle field value-identical', v_before, v_after);
+
+  -- A REACHABLE ineligible state, which is what the old assertion was reaching
+  -- for. An abandoned upload is produced by the ordinary flow, is not valid,
+  -- and is refused at the upload_status gate rather than by the unreachable
+  -- moderation branch.
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented)
+  values
+    ('00000000-0000-4000-8000-00000000fa10','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','aa-key-10','v1', now(), true, true);
+
+  update public.testimonial_submissions set upload_status = 'abandoned'
+  where id = '00000000-0000-4000-8000-00000000fa10';
+
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa10', 1, 'cloudflare_images', 'image',
+     'production', '99999999999999999999999999999999', now() + interval '30 minutes',
+     'cf-abandoned-1', now());
+
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_images', 'cf-abandoned-1', '99999999999999999999999999999999',
+    true, null, null, null, null, 'uploaded', 'evt-abandoned') r
+  where r.validated;
+  perform pg_temp.record('22 validation',
+    'an abandoned submission is refused, as designed', '0', n::text);
+
+  -- ---------------------------------------------------------------------
+  -- HARDENING NOTE — NOT IMPLEMENTED, and deliberately so.
+  --
+  -- validate_testimonial_provider_asset short-circuits on validation_status
+  -- alone. It does not additionally confirm that the submission's
+  -- provider_asset_id matches the ledger row the call resolved to. In this
+  -- test they differ ('aa-asset-fa02' on the submission versus
+  -- 'cf-video-rejected' on the ledger row) purely because the fixture
+  -- manufactured an active ledger row for a submission that a different,
+  -- fixture-promoted asset had validated.
+  --
+  -- Production cannot reach that state: the ledger lookup requires an ACTIVE
+  -- row, only one attempt is active per submission, and validation writes both
+  -- sides together. Comparing asset identity in the short-circuit would be
+  -- belt-and-braces only.
+  --
+  -- It is recorded here rather than implemented because it would require
+  -- changing a live function - a migration - and no production reachability
+  -- has been demonstrated. Implement only if such a path is found.
+  -- ---------------------------------------------------------------------
 
   -- An unknown asset resolves to nothing and stamps nothing.
   select count(*) into n
@@ -2220,12 +2344,31 @@ declare
 begin
   perform pg_temp.act_as_ambient();
 
+  -- A DEDICATED submission, not a borrowed one.
+  --
+  -- An earlier version reused fa02, which section 22 already leaves holding an
+  -- ACTIVE ledger row. Inserting a second active row for the same submission
+  -- violates testimonial_provider_assets_one_active — the partial unique index
+  -- that makes "the current attempt" well defined and therefore makes a stale
+  -- callback provably stale. That invariant is production behaviour and is
+  -- exactly right; the fixture was wrong to borrow a submission whose ledger
+  -- state it did not control.
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented)
+  values
+    ('00000000-0000-4000-8000-00000000fa09','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','aa-key-9','v1', now(), true, true);
+
   -- A reservation whose provider call succeeded but whose attachment failed.
   insert into public.testimonial_provider_assets
     (submission_id, attempt_no, provider, media_type, environment_marker,
      opaque_reference, reservation_expires_at)
   values
-    ('00000000-0000-4000-8000-00000000fa02', 2, 'cloudflare_images', 'image',
+    ('00000000-0000-4000-8000-00000000fa09', 1, 'cloudflare_images', 'image',
      'production', '22222222222222222222222222222222', now() + interval '30 minutes')
   returning id into v_ledger;
 
@@ -2242,7 +2385,7 @@ begin
 
   -- It does not hold the active slot, so a later attempt is unaffected.
   select count(*) into n from public.testimonial_provider_assets
-  where submission_id = '00000000-0000-4000-8000-00000000fa02'
+  where submission_id = '00000000-0000-4000-8000-00000000fa09'
     and superseded_at is null and failed_at is null and deleted_at is null;
   perform pg_temp.record('24 orphans', 'an orphan does not occupy the active slot', '0', n::text);
 
@@ -2347,10 +2490,12 @@ begin
 
   -- The pinned path must NOT have been silently widened to reach it.
   foreach v_key in array array['create_testimonial_intent','reserve_testimonial_provider_attempt'] loop
-    perform pg_temp.record('25 pgcrypto', v_key || ' keeps its two-element search_path',
-      '{search_path=public, pg_catalog}',
-      (select array_to_string(p.proconfig, ',') from pg_proc p
-       join pg_namespace ns on ns.oid = p.pronamespace
+    -- Membership, not rendering: proconfig is text[], and asserting against a
+    -- stringified array would test how PostgreSQL formats an array rather than
+    -- what the search_path actually is.
+    perform pg_temp.record('25 pgcrypto', v_key || ' keeps its two-element search_path', 'true',
+      (select ('search_path=public, pg_catalog' = any(p.proconfig))::text
+       from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
        where ns.nspname = 'public' and p.proname = v_key));
   end loop;
 
