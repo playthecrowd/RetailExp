@@ -119,6 +119,7 @@ export async function GET(request: Request): Promise<Response> {
   const summary = await runRetention(Date.now() + maxDuration * DEADLINE_FRACTION * 1000);
 
   return json(200, {
+    finalized: summary.finalized,
     expired: summary.expired,
     examined: summary.examined,
     deleted: summary.deleted,

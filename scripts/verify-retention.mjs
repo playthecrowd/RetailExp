@@ -19,6 +19,7 @@ const mod = (relative) => pathToFileURL(join(root, relative)).href;
 const {
   runRetentionSweep,
   authorizeCronRequest,
+  FINALIZE_BATCH,
   EXPIRE_BATCH,
   SWEEP_BATCH,
   PURGE_BATCH,
@@ -54,6 +55,13 @@ function makeDeps(overrides = {}) {
       clock = value;
     },
 
+    finalizedCount: 0,
+    finalizeThrows: false,
+    async finalizePending(limit) {
+      calls.push(["finalizePending", limit]);
+      if (deps.finalizeThrows) throw new Error("finalize failed");
+      return deps.finalizedCount;
+    },
     expiredCount: 0,
     expireThrows: false,
     async expireIntents(limit) {
@@ -151,7 +159,69 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-console.log("\n--- expiry, tier 0 ---");
+console.log("\n--- the finalize backstop, tier 0 ---");
+//
+// A browser that uploaded and then died never triggered finalization, and for
+// a photo nothing else ever would. This must run BEFORE expiry, because expiry
+// is what throws those uploads away.
+// ---------------------------------------------------------------------------
+{
+  const deps = makeDeps();
+  deps.finalizedCount = 2;
+  deps.expiredCount = 1;
+  deps.deletable = [asset("a")];
+
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+  const names = deps.calls.map((c) => c[0]);
+
+  check(summary.finalized === 2, "stalled uploads that became valid are counted");
+  check(names[0] === "finalizePending", "the backstop runs FIRST in the sweep");
+  check(
+    names.indexOf("finalizePending") < names.indexOf("expireIntents"),
+    "a stalled upload gets its chance to validate BEFORE expiry would abandon it",
+  );
+  check(
+    names.indexOf("finalizePending") < names.indexOf("listDeletable"),
+    "and before anything is listed for deletion",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_finalized" && l.code === "count=2"),
+    "the backstop count is logged",
+  );
+}
+
+{
+  const deps = makeDeps();
+  deps.finalizeThrows = true;
+  deps.expiredCount = 1;
+  deps.deletable = [asset("a")];
+
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+
+  check(summary.finalized === 0, "a failed backstop counts nothing");
+  check(
+    deps.calls.some((c) => c[0] === "expireIntents") &&
+      deps.calls.some((c) => c[0] === "deleteAsset"),
+    "a failed backstop does NOT stop expiry or deletion - the rest of the sweep is not contingent on it",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_finalize_failed"),
+    "a failed backstop is logged rather than swallowed",
+  );
+}
+
+{
+  const deps = makeDeps();
+  deps.finalizedCount = 0;
+  await runRetentionSweep(deps, FAR_FUTURE);
+  check(
+    !deps.logs.some((l) => l.event === "retention_finalized"),
+    "a run that finalized nothing does not log a backstop line",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- expiry, tier 1 ---");
 //
 // Order is the whole point. An intent expired here stamps media_purge_after
 // through the lifecycle trigger, which is what makes its provider media
@@ -167,7 +237,10 @@ console.log("\n--- expiry, tier 0 ---");
   const names = deps.calls.map((c) => c[0]);
 
   check(summary.expired === 3, "expired intents are counted");
-  check(names[0] === "expireIntents", "expiry runs FIRST, before anything is listed for deletion");
+  check(
+    names.indexOf("expireIntents") < names.indexOf("listDeletable"),
+    "expiry runs before anything is listed for deletion",
+  );
   check(
     names.indexOf("expireIntents") < names.indexOf("listDeletable"),
     "newly expired intents are swept in the SAME run, not the next one",
@@ -371,6 +444,8 @@ console.log("\n--- batch limits and attention ---");
   await runRetentionSweep(deps, FAR_FUTURE);
   const [, deletableLimit] = deps.calls.find((c) => c[0] === "listDeletable");
   const [, purgeLimit] = deps.calls.find((c) => c[0] === "listPurgeable");
+  const [, finalizeLimit] = deps.calls.find((c) => c[0] === "finalizePending");
+  check(finalizeLimit === FINALIZE_BATCH, "the backstop batch is bounded by the module constant");
   const [, expireLimit] = deps.calls.find((c) => c[0] === "expireIntents");
   check(expireLimit === EXPIRE_BATCH, "the expiry batch is bounded by the module constant");
   check(deletableLimit === SWEEP_BATCH, "the deletable batch is bounded by the module constant");

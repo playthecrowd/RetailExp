@@ -1944,16 +1944,39 @@ assert(
   "the internal guard is granted to nobody",
 );
 
-// --- TESTIMONIAL_SUBMITTED is unreachable, by contract --------------------
-// Comments stripped: the component documents why the prop was removed.
+// --- TESTIMONIAL_SUBMITTED fires only from an explicit choice -------------
+//
+// These two assertions used to say the action was unreachable, which was the
+// right rule while nothing was uploaded and no provider had confirmed
+// anything. Uploads are real now, so advancing IS a legitimate outcome — but
+// only as the visitor's decision. The rule that replaces "unreachable" is
+// "never a side effect of submitting", which is the property that actually
+// mattered all along.
+//
+// Comments stripped, because the component explains this at length.
 assert(
-  !/onSubmitted/.test(stripComments(capUi)),
-  "the capture component has no success callback at all",
+  /onContinueToJourney/.test(stripComments(capUi)),
+  "the capture component reports success through an explicit continue callback",
 );
 assert(
-  !/TESTIMONIAL_SUBMITTED/.test(stripComments(capPage)),
-  "no code path in Phase 4B dispatches TESTIMONIAL_SUBMITTED",
+  /onContinueToJourney=\{\(\) => dispatch\(\{ type: "TESTIMONIAL_SUBMITTED" \}\)\}/.test(
+    stripComments(capPage),
+  ),
+  "TESTIMONIAL_SUBMITTED is dispatched from that callback and nowhere else",
 );
+assert(
+  (stripComments(capPage).match(/TESTIMONIAL_SUBMITTED/g) || []).length === 1,
+  "there is exactly ONE dispatch site, so submitting cannot advance the journey by itself",
+);
+{
+  // It must not fire from the submit path. Everything before the success
+  // screen's own block is checked, so a call added to submit() fails here.
+  const beforeSuccess = stripComments(capUi).split('step === "submitted"')[0];
+  assert(
+    !/onContinueToJourney\(\)/.test(beforeSuccess),
+    "the continue callback is never invoked from the upload path itself",
+  );
+}
 assert(
   /TESTIMONIAL_SUBMITTED/.test(capActionsUnion),
   "the action remains declared for Phase 4C, but unreachable today",

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createSecretClient } from "@/lib/supabase/secret";
+import { mediaEnvironment } from "@/lib/cloudflare/config";
 import { logProviderEvent } from "./provider-assets";
 import { reconcileImage, reconcileVideo } from "./validation";
 
@@ -34,6 +35,9 @@ import { reconcileImage, reconcileVideo } from "./validation";
  */
 
 export type FinalizeState = "validated" | "processing" | "failed";
+
+/** How many stalled uploads one scheduled sweep will attempt. */
+export const FINALIZE_BACKSTOP_BATCH = 25;
 
 /**
  * @param visitorId already verified against the visitor's own session by the
@@ -111,4 +115,80 @@ export async function finalizeUpload(
   // spin for ever.
   if (outcome.status === "processing") return "processing";
   return "failed";
+}
+
+/**
+ * The scheduled backstop.
+ *
+ * WHAT IT IS FOR
+ *   finalizeUpload() is triggered by the browser. A visitor who uploads
+ *   successfully and then closes the tab, loses signal, or has the page
+ *   killed by the OS never triggers it — and for a PHOTO nothing else ever
+ *   will, because Cloudflare Images publishes no webhook this codebase can
+ *   verify. Without this, that submission sits at 'initiated' until the
+ *   expiry sweep abandons it, and a perfectly good upload is thrown away.
+ *
+ * ORDER MATTERS, AND IT RUNS BEFORE EXPIRY
+ *   Expiry is what abandons a stalled intent. Running this first gives every
+ *   upload that actually reached the provider a chance to become valid before
+ *   anything decides it never will.
+ *
+ * NO OWNERSHIP CHECK, BECAUSE THERE IS NO CALLER TO CHECK
+ *   This is a trusted scheduled sweep, not a request. It takes no identity,
+ *   accepts no input, and reaches only rows this deployment's own environment
+ *   marker claims — the same isolation the deletion sweep uses, for the same
+ *   reason: Preview and Production share one database and one Cloudflare
+ *   account.
+ *
+ * The decision is still Cloudflare's. This only asks; reconcileImage and
+ * reconcileVideo perform the authenticated read and every eligibility check.
+ */
+export async function finalizePendingUploads(
+  limit: number = FINALIZE_BACKSTOP_BATCH,
+): Promise<{ examined: number; validated: number }> {
+  const supabase = createSecretClient();
+  const environment = mediaEnvironment();
+  const summary = { examined: 0, validated: 0 };
+
+  // Attached, current attempts only, in this environment, whose submission is
+  // still waiting. A superseded attempt's asset is already scheduled for
+  // deletion and must never be the one that validates.
+  const { data, error } = await supabase
+    .from("testimonial_provider_assets")
+    .select(
+      "provider, provider_asset_id, opaque_reference, media_type, submission_id, testimonial_submissions!inner(upload_status, validation_status)",
+    )
+    .eq("environment_marker", environment)
+    .not("attached_at", "is", null)
+    .is("superseded_at", null)
+    .is("failed_at", null)
+    .is("deleted_at", null)
+    .not("provider_asset_id", "is", null)
+    .eq("testimonial_submissions.upload_status", "initiated")
+    .eq("testimonial_submissions.validation_status", "pending")
+    .order("reserved_at", { ascending: true })
+    .limit(limit);
+
+  if (error || !data) return summary;
+
+  for (const row of data) {
+    if (row.provider_asset_id === null) continue;
+    summary.examined += 1;
+
+    const outcome =
+      row.media_type === "image"
+        ? await reconcileImage(row.provider_asset_id, row.opaque_reference)
+        : await reconcileVideo(row.provider_asset_id, row.opaque_reference);
+
+    if (outcome.status === "validated") summary.validated += 1;
+
+    logProviderEvent({
+      correlationId: row.opaque_reference,
+      provider: row.provider,
+      event: `backstop_${outcome.status}`,
+      code: "reason" in outcome ? outcome.reason : undefined,
+    });
+  }
+
+  return summary;
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button } from "@/components/ui/Button";
+import { Button, LinkButton } from "@/components/ui/Button";
+import { GALLERY_ROUTE } from "@/lib/testimonials/routes";
 import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
 import {
   CAPTURE_ACCEPT,
@@ -86,17 +87,27 @@ const EMPTY_CONSENT: Consent = {
 /**
  * NOTE ON THE MISSING onSubmitted PROP.
  *
- * There is deliberately no way for this component to report success, because
- * in Phase 4B there is no success to report: nothing is uploaded and no
- * provider has confirmed anything. An earlier draft declared an onSubmitted
- * prop and never called it — the right behaviour, but only because a
- * destructure happened to omit it, which one tidy-up would have restored.
+/**
+ * THE SUCCESS SCREEN DOES NOT ADVANCE THE JOURNEY BY ITSELF.
  *
- * Removing it from the contract makes advancing the journey an explicit act
- * that Phase 4C has to add, not something a refactor can reinstate by
- * accident.
+ * There was no way to report success at all until the upload chain existed —
+ * an earlier draft declared an onSubmitted prop and never called it, which was
+ * correct behaviour reached by accident, and one tidy-up would have restored
+ * it. Now that a submission is real, advancing IS a legitimate outcome, but it
+ * is the visitor's choice rather than a consequence of submitting: the screen
+ * offers the Journey, the Gallery, or going back, and does nothing on its own.
+ *
+ * onContinueToJourney is what dispatches TESTIMONIAL_SUBMITTED. That action
+ * deliberately does not set arCompleted and awards no reward — sharing a story
+ * opens the journey on its own terms, it is not AR completion.
  */
-export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
+export function TestimonialCapture({
+  onCancel,
+  onContinueToJourney,
+}: {
+  onCancel: () => void;
+  onContinueToJourney: () => void;
+}) {
   const [step, setStep] = useState<Step>("choose");
   const [mediaType, setMediaType] = useState<CaptureMediaType | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -450,14 +461,37 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
             <p className="text-sm text-kameleon-text">Thank you — your story is in.</p>
             {/* Deliberately does NOT say published. The submission still has to
                 finish processing at the provider and then be reviewed, and
-                promising more than that would be untrue. */}
+                promising more than that would be untrue. The Gallery link below
+                is offered anyway: seeing that it is not there yet is a truthful
+                answer to "where did it go?". */}
             <p className="text-xs text-kameleon-text-muted">
-              It needs to finish processing and be reviewed before it can appear in the Gallery.
-              You can close this screen — nothing else is needed from you.
+              It needs to finish processing and be reviewed before it can appear in the
+              Gallery. Nothing else is needed from you.
             </p>
-            <Button brand="kameleon" size="lg" fullWidth onClick={onCancel}>
-              Back to choices
+
+            {/* Three ways on, and none of them happens on its own. Submitting
+                used to drop the visitor straight into the Journey, which took
+                the decision away from them at the one moment they were most
+                likely to want the Gallery instead. */}
+            <Button brand="kameleon" size="lg" fullWidth onClick={onContinueToJourney}>
+              Continue to Journey
             </Button>
+            <LinkButton
+              brand="kameleon"
+              variant="secondary"
+              size="lg"
+              fullWidth
+              href={GALLERY_ROUTE}
+            >
+              View Stakeholder Gallery
+            </LinkButton>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-xs text-kameleon-text-muted underline underline-offset-4"
+            >
+              Return to experience choices
+            </button>
           </div>
         )}
 

@@ -150,10 +150,14 @@ export default function KameleonExperiencePage() {
 
       case "testimonial-capture":
         return (
-          // TESTIMONIAL_SUBMITTED is intentionally NOT dispatched anywhere in
-          // Phase 4B. It may fire only after a real Cloudflare upload and
-          // authoritative provider confirmation, neither of which exists yet.
-          <TestimonialCapture onCancel={() => dispatch({ type: "CANCEL_TESTIMONIAL" })} />
+          // TESTIMONIAL_SUBMITTED now fires, but only from the success
+          // screen's "Continue to Journey" button — never as a side effect of
+          // submitting. The visitor may go to the Gallery or back to the
+          // choices instead, and the action still awards no AR reward.
+          <TestimonialCapture
+            onCancel={() => dispatch({ type: "CANCEL_TESTIMONIAL" })}
+            onContinueToJourney={() => dispatch({ type: "TESTIMONIAL_SUBMITTED" })}
+          />
         );
 
       case "ar-permission":

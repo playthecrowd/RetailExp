@@ -3,6 +3,7 @@ import "server-only";
 import { deleteImage } from "@/lib/cloudflare/images";
 import { deleteVideo } from "@/lib/cloudflare/stream";
 import { mediaEnvironment } from "@/lib/cloudflare/config";
+import { finalizePendingUploads } from "./finalize";
 import { logProviderEvent } from "./provider-assets";
 import { pendingSchemaRpc } from "./pending-schema-rpc";
 import {
@@ -46,6 +47,11 @@ export function runRetention(deadlineMs: number): Promise<RetentionSummary> {
   const environment = mediaEnvironment();
 
   const deps: RetentionDeps = {
+    async finalizePending(limit) {
+      const result = await finalizePendingUploads(limit);
+      return result.validated;
+    },
+
     async expireIntents(limit) {
       const { data, error } = await supabase.rpc("expire_testimonial_upload_intents", {
         p_limit: limit,
