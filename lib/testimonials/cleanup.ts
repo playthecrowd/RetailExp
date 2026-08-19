@@ -4,6 +4,7 @@ import { deleteImage } from "@/lib/cloudflare/images";
 import { deleteVideo } from "@/lib/cloudflare/stream";
 import { mediaEnvironment } from "@/lib/cloudflare/config";
 import { finalizePendingUploads } from "./finalize";
+import { recoverOrphanedAssets } from "./orphan-recovery";
 import { logProviderEvent } from "./provider-assets";
 import { pendingSchemaRpc } from "./pending-schema-rpc";
 import {
@@ -50,6 +51,11 @@ export function runRetention(deadlineMs: number): Promise<RetentionSummary> {
     async finalizePending(limit) {
       const result = await finalizePendingUploads(limit);
       return result.validated;
+    },
+
+    async recoverOrphans(limit) {
+      const result = await recoverOrphanedAssets(limit);
+      return result.recovered;
     },
 
     async expireIntents(limit) {

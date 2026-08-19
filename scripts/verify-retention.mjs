@@ -20,6 +20,7 @@ const {
   runRetentionSweep,
   authorizeCronRequest,
   FINALIZE_BATCH,
+  RECOVERY_BATCH,
   EXPIRE_BATCH,
   SWEEP_BATCH,
   PURGE_BATCH,
@@ -61,6 +62,13 @@ function makeDeps(overrides = {}) {
       calls.push(["finalizePending", limit]);
       if (deps.finalizeThrows) throw new Error("finalize failed");
       return deps.finalizedCount;
+    },
+    recoveredCount: 0,
+    recoverThrows: false,
+    async recoverOrphans(limit) {
+      calls.push(["recoverOrphans", limit]);
+      if (deps.recoverThrows) throw new Error("recovery failed");
+      return deps.recoveredCount;
     },
     expiredCount: 0,
     expireThrows: false,
@@ -221,7 +229,54 @@ console.log("\n--- the finalize backstop, tier 0 ---");
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n--- expiry, tier 1 ---");
+console.log("\n--- orphan recovery, tier 1 ---");
+//
+// A create that timed out may have left an asset whose identifier never
+// reached us. The deletion listing requires an identifier, so until one is
+// recovered that asset is invisible - and billable - for ever.
+// ---------------------------------------------------------------------------
+{
+  const deps = makeDeps();
+  deps.recoveredCount = 2;
+  deps.deletable = [asset("a")];
+
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+  const names = deps.calls.map((c) => c[0]);
+
+  check(summary.recovered === 2, "recovered identifiers are counted");
+  check(
+    names.indexOf("recoverOrphans") < names.indexOf("listDeletable"),
+    "recovery runs BEFORE the deletion listing, so a recovered asset is deleted on the SAME run",
+  );
+  check(
+    names.indexOf("finalizePending") < names.indexOf("recoverOrphans"),
+    "finalization still runs first - a live upload matters more than a lost one",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_recovered" && l.code === "count=2"),
+    "the recovery count is logged",
+  );
+}
+
+{
+  const deps = makeDeps();
+  deps.recoverThrows = true;
+  deps.deletable = [asset("a")];
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+
+  check(summary.recovered === 0, "a failed recovery counts nothing");
+  check(
+    deps.calls.some((c) => c[0] === "deleteAsset"),
+    "a failed recovery does not stop deletion",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_recovery_failed"),
+    "a failed recovery is logged",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- expiry, tier 2 ---");
 //
 // Order is the whole point. An intent expired here stamps media_purge_after
 // through the lifecycle trigger, which is what makes its provider media
@@ -446,6 +501,12 @@ console.log("\n--- batch limits and attention ---");
   const [, purgeLimit] = deps.calls.find((c) => c[0] === "listPurgeable");
   const [, finalizeLimit] = deps.calls.find((c) => c[0] === "finalizePending");
   check(finalizeLimit === FINALIZE_BATCH, "the backstop batch is bounded by the module constant");
+  const [, recoveryLimit] = deps.calls.find((c) => c[0] === "recoverOrphans");
+  check(recoveryLimit === RECOVERY_BATCH, "the recovery batch is bounded by the module constant");
+  check(
+    RECOVERY_BATCH <= FINALIZE_BATCH,
+    "recovery is the smallest batch - each row costs an authenticated provider lookup",
+  );
   const [, expireLimit] = deps.calls.find((c) => c[0] === "expireIntents");
   check(expireLimit === EXPIRE_BATCH, "the expiry batch is bounded by the module constant");
   check(deletableLimit === SWEEP_BATCH, "the deletable batch is bounded by the module constant");

@@ -120,6 +120,7 @@ export async function GET(request: Request): Promise<Response> {
 
   return json(200, {
     finalized: summary.finalized,
+    recovered: summary.recovered,
     expired: summary.expired,
     examined: summary.examined,
     deleted: summary.deleted,

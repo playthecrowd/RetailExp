@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 25, `exactly 25 migration files exist (found ${files.length})`);
+assert(files.length === 26, `exactly 26 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -2193,6 +2193,81 @@ assert(
   !/primary_video_asset_id\s*(as|,|\))/.test(video360),
   "the standard video reference is untouched - 360 is additive, never a substitution",
 );
+
+// --- Video poster readiness -----------------------------------------------
+//
+// Reproduced from the applied validate function with two lines added. The
+// reversal check below is the real assertion: a superseded SECURITY DEFINER
+// function that lost a guard in transcription would pass every other check
+// here and fail this one.
+{
+  const posterPath = join(migrationsDir, "20260821130000_video_poster_readiness.sql");
+  const posterRaw = readFileSync(posterPath, "utf8");
+
+  const grabValidate = (text) => {
+    const start = text.indexOf(
+      "create or replace function public.validate_testimonial_provider_asset(",
+    );
+    if (start === -1) return null;
+    const end = text.indexOf("end $fn$;", start);
+    return end === -1 ? null : text.slice(start, end + "end $fn$;".length);
+  };
+
+  const appliedValidate = grabValidate(
+    readFileSync(join(migrationsDir, "20260820090000_testimonial_provider_assets.sql"), "utf8"),
+  );
+  const posterValidate = grabValidate(posterRaw);
+
+  assert(appliedValidate !== null, "the applied validate function was located");
+  assert(posterValidate !== null, "the poster migration supersedes the validate function");
+
+  if (appliedValidate && posterValidate) {
+    const NEWLINE = String.fromCharCode(10);
+    const added = (line) =>
+      line.includes("provider_poster_id") || line.includes("poster_ready_at");
+    const lines = posterValidate.split(NEWLINE);
+    assert(
+      lines.filter(added).length === 2,
+      "exactly two lines were added to the validate function",
+    );
+    assert(
+      lines.filter((l) => !added(l)).join(NEWLINE) === appliedValidate,
+      "removing those two lines reproduces the applied validate function EXACTLY",
+    );
+  }
+
+  const poster = stripPilotComments(posterRaw);
+  assert(
+    /provider_poster_id\s*=\s*case when v_row\.provider = 'cloudflare_stream'/.test(poster),
+    "the poster handle is recorded for Stream only",
+  );
+  assert(
+    /then v_row\.provider_asset_id else null end/.test(poster),
+    "an image gets NULL - it is its own poster, and Images documents no separate rendition",
+  );
+  // The earlier form of this checked for "moderation_status" anywhere in the
+  // file and matched the validate function's OWN pre-existing eligibility
+  // guard — it was testing the applied code, not the change. What the change
+  // can actually be held to is that poster readiness is only ever ASSIGNED:
+  // it appears in no condition, so nothing branches on it.
+  assert(
+    !/\bif\b[^;]*poster_ready_at|poster_ready_at\s+is\s+(not\s+)?null|where[^;]*poster_ready_at/i.test(
+      poster,
+    ),
+    "poster readiness is assigned and never tested, so no lifecycle decision depends on it",
+  );
+  assert(
+    /revoke all on function public\.validate_testimonial_provider_asset/.test(poster) &&
+      /grant execute on function public\.validate_testimonial_provider_asset[\s\S]{0,200}?to service_role;/.test(
+        poster,
+      ),
+    "the superseded function restates its privileges rather than trusting the preserved ACL",
+  );
+  assert(
+    !/\bto (anon|authenticated)\b/.test(poster),
+    "the poster migration grants nothing to a browser role",
+  );
+}
 
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {

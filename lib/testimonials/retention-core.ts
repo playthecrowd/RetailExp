@@ -16,19 +16,23 @@ import { timingSafeEqual } from "node:crypto";
  *   recorded but never executed is worse than none: it reads as a promise in
  *   the schema and in any Privacy page derived from it.
  *
- * FOUR TIERS, IN THIS ORDER, ALWAYS
+ * FIVE TIERS, IN THIS ORDER, ALWAYS
  *   0. FINALIZE catches uploads that reached the provider but whose browser
  *      never came back to say so. It runs FIRST because expiry is what throws
  *      those away, and a perfectly good upload deserves a chance to become
  *      valid before anything decides it never will.
- *   1. EXPIRY moves intents whose upload window closed long ago to abandoned,
+ *   1. RECOVERY finds assets whose identifier died in a timed-out create.
+ *      Without it those are invisible to tier 3 for ever, because the deletion
+ *      listing requires an identifier. Running it here means a recovered asset
+ *      is deleted on the SAME invocation.
+ *   2. EXPIRY moves intents whose upload window closed long ago to abandoned,
  *      which is what stamps media_purge_after and therefore what makes their
- *      provider media visible to tier 2 at all. Without it a visitor who
+ *      provider media visible to tier 3 at all. Without it a visitor who
  *      closes the tab mid-upload leaves an image nothing can ever delete.
- *   2. The LEDGER sweep deletes provider assets and records each outcome.
- *   3. The SUBMISSION purge records that a submission's media is gone.
+ *   3. The LEDGER sweep deletes provider assets and records each outcome.
+ *   4. The SUBMISSION purge records that a submission's media is gone.
  *
- *   Tier 3 must never run ahead of tier 2. A submission marked purged while a
+ *   Tier 4 must never run ahead of tier 3. A submission marked purged while a
  *   provider asset survives is a false record of a deletion — the one failure
  *   mode a retention statement cannot survive. The database refuses it too
  *   (record_testimonial_media_purged raises 55000), so this ordering is belt
@@ -37,6 +41,8 @@ import { timingSafeEqual } from "node:crypto";
 
 /** The RPC clamps to 200; 50 is its default and comfortably fits one run. */
 export const FINALIZE_BATCH = 25;
+/** Small: each row costs at least one authenticated provider lookup. */
+export const RECOVERY_BATCH = 10;
 export const EXPIRE_BATCH = 50;
 export const SWEEP_BATCH = 50;
 export const PURGE_BATCH = 50;
@@ -66,7 +72,9 @@ export interface PurgeableSubmission {
 export interface RetentionDeps {
   /** Tier 0. Returns how many stalled uploads became valid. */
   finalizePending(limit: number): Promise<number>;
-  /** Tier 1. Returns how many intents were expired. */
+  /** Tier 1. Returns how many lost identifiers were recovered. */
+  recoverOrphans(limit: number): Promise<number>;
+  /** Tier 2. Returns how many intents were expired. */
   expireIntents(limit: number): Promise<number>;
   listDeletable(limit: number): Promise<DeletableAsset[]>;
   /** Marks the START of an attempt (`pending`) or its outcome. */
@@ -83,6 +91,7 @@ export interface RetentionDeps {
 
 export interface RetentionSummary {
   finalized: number;
+  recovered: number;
   expired: number;
   examined: number;
   deleted: number;
@@ -98,6 +107,7 @@ export interface RetentionSummary {
 
 const EMPTY: RetentionSummary = {
   finalized: 0,
+  recovered: 0,
   expired: 0,
   examined: 0,
   deleted: 0,
@@ -150,6 +160,18 @@ export async function runRetentionSweep(
   }
 
   // ---- Tier 1, before anything is listed for deletion --------------------
+  //
+  // A create that timed out may have left an asset whose identifier never
+  // reached us. The deletion listing requires an identifier, so until one is
+  // recovered that asset is invisible — and billable — for ever.
+  try {
+    summary.recovered = await deps.recoverOrphans(RECOVERY_BATCH);
+    if (summary.recovered > 0) deps.log("retention_recovered", `count=${summary.recovered}`);
+  } catch {
+    deps.log("retention_recovery_failed");
+  }
+
+  // ---- Tier 2 ------------------------------------------------------------
   //
   // Order matters: an intent expired here stamps media_purge_after through the
   // lifecycle trigger, so its provider media becomes deletable in THIS run
@@ -227,7 +249,8 @@ export async function runRetentionSweep(
 
   deps.log(
     "retention_sweep",
-    `finalized=${summary.finalized} expired=${summary.expired}` +
+    `finalized=${summary.finalized} recovered=${summary.recovered}` +
+      ` expired=${summary.expired}` +
       ` examined=${summary.examined}` +
       ` deleted=${summary.deleted} notfound=${summary.notFound}` +
       ` failed=${summary.failed} purged=${summary.purged} refused=${summary.purgeRefused}`,
