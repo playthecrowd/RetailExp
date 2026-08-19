@@ -7,8 +7,8 @@ import {
   approveSubmissionAction,
   rejectSubmissionAction,
   removeSubmissionAction,
-  IDLE_MODERATION_STATE,
 } from "@/app/admin/(protected)/clients/kameleon/testimonials/actions";
+import { IDLE_MODERATION_STATE } from "@/lib/testimonials/moderation-state";
 import {
   REJECTION_REASONS,
   IMMEDIATE_PURGE_REASONS,

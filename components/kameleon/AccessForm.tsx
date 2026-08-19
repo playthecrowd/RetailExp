@@ -1,10 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import {
-  unlockPilotAction,
-  IDLE_ACCESS_STATE,
-} from "@/app/experience/kameleon/access/actions";
+import { unlockPilotAction } from "@/app/experience/kameleon/access/actions";
+import { IDLE_ACCESS_STATE } from "@/lib/pilot/access-state";
 
 /**
  * The access-code form.

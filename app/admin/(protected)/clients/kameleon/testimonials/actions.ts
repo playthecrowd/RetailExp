@@ -14,6 +14,7 @@ import {
 } from "@/lib/testimonials/moderation";
 import { createSecretClient } from "@/lib/supabase/secret";
 import { MODERATION_ROUTE, GALLERY_ROUTE } from "@/lib/testimonials/routes";
+import type { ModerationActionState } from "@/lib/testimonials/moderation-state";
 
 /**
  * Moderation decisions.
@@ -34,19 +35,9 @@ import { MODERATION_ROUTE, GALLERY_ROUTE } from "@/lib/testimonials/routes";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export interface ModerationActionState {
-  status: "idle" | "success" | "error";
-  message: string | null;
-  /** Which submission the result refers to, so the UI can show feedback on
-   *  the right card without re-deriving it. */
-  submissionId: string | null;
-}
-
-export const IDLE_MODERATION_STATE: ModerationActionState = {
-  status: "idle",
-  message: null,
-  submissionId: null,
-};
+// ModerationActionState and IDLE_MODERATION_STATE live in
+// lib/testimonials/moderation-state.ts, for the same reason the access gate's
+// state does: a "use server" module may export ONLY async functions.
 
 /**
  * One message for every refusal that is not a plain validation error.

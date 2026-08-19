@@ -8,6 +8,7 @@ import {
   derivePilotCookie,
   submittedCodeMatches,
 } from "@/lib/pilot/access-gate";
+import type { AccessState } from "@/lib/pilot/access-state";
 
 /**
  * Unlocks the stakeholder evaluation for this browser.
@@ -27,13 +28,10 @@ import {
  * evaluation ever widens, this is the first thing that needs revisiting.
  */
 
-export interface AccessState {
-  status: "idle" | "error";
-  message: string | null;
-}
-
-export const IDLE_ACCESS_STATE: AccessState = { status: "idle", message: null };
-
+// AccessState and IDLE_ACCESS_STATE live in lib/pilot/access-state.ts. A
+// "use server" module may export ONLY async functions - exporting the object
+// from here is what produced "a 'use server' file can only export async
+// functions, found object" and took the POST down while the GET still worked.
 const REFUSED = "That access code was not recognised.";
 
 export async function unlockPilotAction(
