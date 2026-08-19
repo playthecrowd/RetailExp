@@ -2564,6 +2564,508 @@ end $$;
 -- ===========================================================================
 select pg_temp.act_as_ambient();
 
+-- ===========================================================================
+-- SECTION 26 — the 18+ submitter attestation
+--
+-- attested_no_minors has always been about WHO APPEARS IN THE MEDIA. Nothing
+-- recorded the submitter's own age, so an 18+ restriction had no
+-- representation in the schema at all. These checks assert the new column is
+-- mandatory, immutable, and genuinely required by the creation RPC rather
+-- than asserted on the visitor's behalf.
+-- ===========================================================================
+do $$
+declare
+  v_sub uuid;
+  v_def text;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- --- Catalog shape ------------------------------------------------------
+  select count(*) into n from information_schema.columns
+  where table_schema = 'public' and table_name = 'testimonial_submissions'
+    and column_name = 'attested_submitter_adult'
+    and is_nullable = 'NO' and column_default = 'false';
+  perform pg_temp.record('26 adult', 'attested_submitter_adult is NOT NULL DEFAULT FALSE', '1', n::text);
+
+  select pg_get_constraintdef(con.oid) into v_def
+  from pg_constraint con
+  join pg_class c on c.oid = con.conrelid
+  join pg_namespace ns on ns.oid = c.relnamespace
+  where ns.nspname = 'public' and c.relname = 'testimonial_submissions'
+    and con.conname = 'testimonial_attestations_required';
+  perform pg_temp.record('26 adult', 'all three attestations are mandatory', 'true',
+    (v_def like '%attested_no_minors%'
+     and v_def like '%attested_subjects_consented%'
+     and v_def like '%attested_submitter_adult%')::text);
+
+  -- The immutability guard is INSTALLED, not merely written in a migration
+  -- file. Read from the catalog, so a migration that failed to apply cannot
+  -- pass this.
+  select pg_get_functiondef(p.oid) into v_def
+  from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
+  where ns.nspname = 'public' and p.proname = 'protect_testimonial_update';
+  perform pg_temp.record('26 adult',
+    'the live update trigger guards the new attestation', 'true',
+    (v_def like '%attested_submitter_adult%')::text);
+
+  -- --- The old signature is GONE ------------------------------------------
+  -- Not merely superseded: if it still resolved, a two-argument call would
+  -- reach the version with no attestation check.
+  perform pg_temp.record('26 adult', 'the two-argument intent signature no longer resolves', 'true',
+    (to_regprocedure('public.create_testimonial_intent(uuid, public.testimonial_media_type)') is null)::text);
+  perform pg_temp.record('26 adult', 'the three-argument intent signature resolves', 'true',
+    (to_regprocedure('public.create_testimonial_intent(uuid, public.testimonial_media_type, boolean)') is not null)::text);
+
+  select count(*) into n from pg_proc p
+  join pg_namespace ns on ns.oid = p.pronamespace
+  where ns.nspname = 'public' and p.proname = 'create_testimonial_intent';
+  perform pg_temp.record('26 adult', 'create_testimonial_intent is still not overloaded', '1', n::text);
+
+  -- --- The CHECK fails closed on a direct insert --------------------------
+  perform pg_temp.try_sql('26 adult', 'a direct insert omitting the attestation is refused',
+    'blocked-23514',
+    $q$insert into public.testimonial_submissions
+         (id, client_id, experience_id, experience_user_id, auth_user_id,
+          media_type, client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented)
+       values ('00000000-0000-4000-8000-00000000fc00',
+               '00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               '00000000-0000-4000-8000-0000000000f1',
+               'image','fc00-key','v1', now(), true, true)$q$);
+
+  perform pg_temp.try_sql('26 adult', 'a direct insert asserting it FALSE is refused',
+    'blocked-23514',
+    $q$insert into public.testimonial_submissions
+         (id, client_id, experience_id, experience_user_id, auth_user_id,
+          media_type, client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented, attested_submitter_adult)
+       values ('00000000-0000-4000-8000-00000000fc00',
+               '00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               '00000000-0000-4000-8000-0000000000f1',
+               'image','fc00-key','v1', now(), true, true, false)$q$);
+
+  -- --- The RPC refuses without an explicit attestation --------------------
+  -- The gate is opened for the duration, inside the transaction that ends in
+  -- ROLLBACK. Authorization is NOT relaxed.
+  update public.experiences set testimonial_capture_enabled = true
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  -- Every live intent is expired first, so the reuse branch cannot return an
+  -- older row and make the insert path look tested when it was not.
+  update public.testimonial_submissions
+  set upload_expires_at = now() - interval '1 minute'
+  where upload_status = 'initiated';
+
+  perform pg_temp.try_sql('26 adult', 'the RPC refuses when the attestation is omitted',
+    'blocked-22023',
+    $q$select * from public.create_testimonial_intent(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         'video'::public.testimonial_media_type)$q$);
+
+  perform pg_temp.try_sql('26 adult', 'the RPC refuses when the attestation is explicitly false',
+    'blocked-22023',
+    $q$select * from public.create_testimonial_intent(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         'video'::public.testimonial_media_type, false)$q$);
+
+  perform pg_temp.try_sql('26 adult', 'the RPC refuses when the attestation is null',
+    'blocked-22023',
+    $q$select * from public.create_testimonial_intent(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         'video'::public.testimonial_media_type, null)$q$);
+
+  -- Authorization still comes FIRST: a permanent account is refused with
+  -- 42501, not with the attestation error, so a refusal reveals nothing about
+  -- which later condition it would have failed.
+  perform pg_temp.try_sql('26 adult', 'a permanent account is refused BEFORE the attestation check',
+    'blocked-42501',
+    $q$select * from public.create_testimonial_intent(
+         '00000000-0000-4000-8000-0000000000f2'::uuid,
+         'video'::public.testimonial_media_type, true)$q$);
+
+  -- --- The successful path stores what was attested -----------------------
+  select r.submission_id into v_sub
+  from public.create_testimonial_intent(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    'video'::public.testimonial_media_type, true) r;
+
+  perform pg_temp.record('26 adult', 'an attested intent is created', 'true', (v_sub is not null)::text);
+
+  select count(*) into n from public.testimonial_submissions
+  where id = v_sub and attested_submitter_adult;
+  perform pg_temp.record('26 adult', 'the created row records the attestation', '1', n::text);
+
+  -- --- Immutable afterwards ----------------------------------------------
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f3');
+  perform pg_temp.try_sql('26 adult', 'an owner/admin cannot alter a recorded attestation',
+    'blocked-42501',
+    format($q$update public.testimonial_submissions
+             set attested_submitter_adult = false where id = %L$q$, v_sub));
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('26 adult', 'the submitter cannot alter their own recorded attestation',
+    'blocked-42501',
+    format($q$update public.testimonial_submissions
+             set attested_submitter_adult = false where id = %L$q$, v_sub));
+
+  perform pg_temp.act_as_ambient();
+
+  update public.experiences set testimonial_capture_enabled = false
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  select count(*) into n from public.experiences where testimonial_capture_enabled;
+  perform pg_temp.record('26 adult', 'the capture gate is closed again after the fixture', '0', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 27 — the evaluation consent scope
+--
+-- consent_scope is the machine-readable record of what was agreed to. A value
+-- that authorized marketing would silently widen every stored consent, so the
+-- refusal below is the assertion that matters most here.
+-- ===========================================================================
+do $$
+declare
+  v_def text;
+begin
+  perform pg_temp.act_as_ambient();
+
+  select pg_get_constraintdef(con.oid) into v_def
+  from pg_constraint con
+  join pg_class c on c.oid = con.conrelid
+  join pg_namespace ns on ns.oid = c.relnamespace
+  where ns.nspname = 'public' and c.relname = 'testimonial_submissions'
+    and con.conname = 'testimonial_consent_scope_known';
+
+  perform pg_temp.record('27 scope', 'the evaluation scope is permitted', 'true',
+    (v_def like '%stakeholder_evaluation_gallery%')::text);
+  perform pg_temp.record('27 scope', 'the original experience scope is still permitted', 'true',
+    (v_def like '%experience_gallery_display%')::text);
+  perform pg_temp.record('27 scope', 'no marketing, advertising or social scope is permitted', 'true',
+    (v_def !~* '(marketing|advertis|social)')::text);
+
+  perform pg_temp.try_sql('27 scope', 'a marketing scope cannot be stored',
+    'blocked-23514',
+    $q$insert into public.testimonial_submissions
+         (id, client_id, experience_id, experience_user_id, auth_user_id,
+          media_type, client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented, attested_submitter_adult,
+          consent_scope)
+       values ('00000000-0000-4000-8000-00000000fc10',
+               '00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               '00000000-0000-4000-8000-0000000000f1',
+               'image','fc10-key','v1', now(), true, true, true,
+               'marketing_reuse')$q$);
+
+  perform pg_temp.try_sql('27 scope', 'the evaluation scope CAN be stored',
+    'ALLOWED',
+    $q$insert into public.testimonial_submissions
+         (id, client_id, experience_id, experience_user_id, auth_user_id,
+          media_type, client_submission_key, consent_version, consented_at,
+          attested_no_minors, attested_subjects_consented, attested_submitter_adult,
+          consent_scope)
+       values ('00000000-0000-4000-8000-00000000fc11',
+               '00000000-0000-4000-8000-00000000ca01',
+               '00000000-0000-4000-8000-00000000ea01',
+               '00000000-0000-4000-8000-00000000da01',
+               '00000000-0000-4000-8000-0000000000f1',
+               'image','fc11-key','v1', now(), true, true, true,
+               'stakeholder_evaluation_gallery')$q$);
+end $$;
+
+-- ===========================================================================
+-- SECTION 28 — the caption CHECK now agrees with the application
+--
+-- limits.ts and update_testimonial_caption both allow 300; the table stopped
+-- at 280. A caption of 281-300 characters passed both validators and then
+-- failed at the table.
+-- ===========================================================================
+do $$
+declare n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  perform pg_temp.try_sql('28 caption', 'a 300-character caption is accepted',
+    'ALLOWED',
+    format($q$update public.testimonial_submissions set caption = %L
+             where id = '00000000-0000-4000-8000-00000000fc11'$q$, repeat('x', 300)));
+
+  perform pg_temp.try_sql('28 caption', 'a 301-character caption is still refused',
+    'blocked-23514',
+    format($q$update public.testimonial_submissions set caption = %L
+             where id = '00000000-0000-4000-8000-00000000fc11'$q$, repeat('x', 301)));
+
+  -- The boundary the RPC enforces and the boundary the table enforces are now
+  -- the same number. Read from the catalog, not from the migration text.
+  select count(*) into n from pg_proc p
+  join pg_namespace ns on ns.oid = p.pronamespace
+  where ns.nspname = 'public' and p.proname = 'update_testimonial_caption'
+    and pg_get_functiondef(p.oid) like '%char_length(v_caption) > 300%';
+  perform pg_temp.record('28 caption', 'the caption RPC uses the same 300 boundary', '1', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 29 — retention: environment isolation, attempt accounting, purge
+--
+-- Preview and Production share ONE database and ONE Cloudflare account, so an
+-- unfiltered sweep is not a tidiness problem — it is a Production data-loss
+-- path reachable from a Preview deployment.
+-- ===========================================================================
+do $$
+declare
+  v_prod_ledger uuid;
+  v_prev_ledger uuid;
+  v_count int;
+  v_first  timestamptz;
+  v_second timestamptz;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- --- Ledger shape -------------------------------------------------------
+  select count(*) into n from information_schema.columns
+  where table_schema = 'public' and table_name = 'testimonial_provider_assets'
+    and column_name in ('last_deletion_attempt_at', 'deletion_attempt_count');
+  perform pg_temp.record('29 retention', 'the ledger carries deletion-attempt accounting', '2', n::text);
+
+  -- --- Two submissions, one per environment -------------------------------
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult)
+  values
+    ('00000000-0000-4000-8000-00000000fc20','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','fc20-key','v1', now(), true, true, true),
+    ('00000000-0000-4000-8000-00000000fc21','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','fc21-key','v1', now(), true, true, true);
+
+  -- Both are due for purge. Set directly: no status changes, so no lifecycle
+  -- machine fires and the fixture stays honest about what it is testing.
+  update public.testimonial_submissions
+  set media_purge_after = now() - interval '1 day',
+      environment_marker = case when id = '00000000-0000-4000-8000-00000000fc20'
+                                then 'production' else 'preview' end
+  where id in ('00000000-0000-4000-8000-00000000fc20',
+               '00000000-0000-4000-8000-00000000fc21');
+
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+  values ('00000000-0000-4000-8000-00000000fc20', 1, 'cloudflare_images', 'image',
+          'production', 'fc20fc20fc20fc20fc20fc20fc20fc20', now() + interval '30 minutes',
+          'cf-image-prod', now())
+  returning id into v_prod_ledger;
+
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+  values ('00000000-0000-4000-8000-00000000fc21', 1, 'cloudflare_images', 'image',
+          'preview', 'fc21fc21fc21fc21fc21fc21fc21fc21', now() + interval '30 minutes',
+          'cf-image-prev', now())
+  returning id into v_prev_ledger;
+
+  -- --- THE ISOLATION ASSERTION -------------------------------------------
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets('production', 200) r
+  where r.ledger_id = v_prev_ledger;
+  perform pg_temp.record('29 retention',
+    'a Production sweep NEVER returns a Preview asset', '0', n::text);
+
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets('production', 200) r
+  where r.ledger_id = v_prod_ledger;
+  perform pg_temp.record('29 retention',
+    'a Production sweep returns the Production asset', '1', n::text);
+
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets('preview', 200) r
+  where r.ledger_id = v_prod_ledger;
+  perform pg_temp.record('29 retention',
+    'a Preview sweep NEVER returns a Production asset', '0', n::text);
+
+  perform pg_temp.try_sql('29 retention', 'an unknown environment is refused, not silently empty',
+    'blocked-22023',
+    $q$select * from public.list_deletable_testimonial_provider_assets('staging', 10)$q$);
+  perform pg_temp.try_sql('29 retention', 'a null environment is refused',
+    'blocked-22023',
+    $q$select * from public.list_deletable_testimonial_provider_assets(null, 10)$q$);
+  perform pg_temp.try_sql('29 retention', 'the purgeable listing refuses an unknown environment',
+    'blocked-22023',
+    $q$select * from public.list_purgeable_testimonial_submissions('staging', 10)$q$);
+
+  -- --- Attempt accounting -------------------------------------------------
+  select r.deletion_attempt_count into v_count
+  from public.mark_testimonial_provider_asset_deleted(v_prod_ledger, 'pending') r;
+  perform pg_temp.record('29 retention', 'the pending mark counts one attempt', '1', v_count::text);
+
+  -- Backoff: the row must now yield its place, or a permanently failing asset
+  -- would occupy the head of every batch forever.
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets('production', 200) r
+  where r.ledger_id = v_prod_ledger;
+  perform pg_temp.record('29 retention',
+    'a just-attempted asset is excluded by the backoff window', '0', n::text);
+
+  select r.deletion_attempt_count into v_count
+  from public.mark_testimonial_provider_asset_deleted(v_prod_ledger, 'deleted') r;
+  perform pg_temp.record('29 retention',
+    'the outcome mark does NOT count a second attempt', '1', v_count::text);
+
+  select count(*) into n from public.testimonial_provider_assets
+  where id = v_prod_ledger and deleted_at is not null and deletion_status = 'deleted';
+  perform pg_temp.record('29 retention', 'the deleted mark stamps deleted_at', '1', n::text);
+
+  perform pg_temp.try_sql('29 retention', 'an unknown deletion status is refused',
+    'blocked-22023',
+    format($q$select * from public.mark_testimonial_provider_asset_deleted(%L, 'vanished')$q$, v_prod_ledger));
+
+  -- --- The submission-level purge record ---------------------------------
+  -- fc21 still holds an undeleted provider asset, so recording a purge for it
+  -- would be a false record. This is the assertion the whole retention story
+  -- rests on.
+  perform pg_temp.try_sql('29 retention',
+    'a purge is REFUSED while a provider asset is still undeleted',
+    'blocked-55000',
+    $q$select * from public.record_testimonial_media_purged(
+         '00000000-0000-4000-8000-00000000fc21'::uuid, 'deleted')$q$);
+
+  select count(*) into n
+  from public.list_purgeable_testimonial_submissions('preview', 200) r
+  where r.submission_id = '00000000-0000-4000-8000-00000000fc21';
+  perform pg_temp.record('29 retention',
+    'the purgeable listing also excludes a submission with an undeleted asset', '0', n::text);
+
+  select count(*) into n
+  from public.list_purgeable_testimonial_submissions('production', 200) r
+  where r.submission_id = '00000000-0000-4000-8000-00000000fc20';
+  perform pg_temp.record('29 retention',
+    'a submission whose assets are all deleted IS purgeable', '1', n::text);
+
+  select r.media_deleted_at into v_first
+  from public.record_testimonial_media_purged(
+    '00000000-0000-4000-8000-00000000fc20'::uuid, 'deleted') r;
+  perform pg_temp.record('29 retention', 'the purge is recorded', 'true',
+    (v_first is not null)::text);
+
+  select count(*) into n from public.testimonial_submissions
+  where id = '00000000-0000-4000-8000-00000000fc20'
+    and media_deleted_at is not null and provider_deletion_status = 'deleted';
+  perform pg_temp.record('29 retention',
+    'both deletion columns are written together', '1', n::text);
+
+  -- Idempotent: a re-run of the sweep must not move the recorded timestamp.
+  select r.media_deleted_at into v_second
+  from public.record_testimonial_media_purged(
+    '00000000-0000-4000-8000-00000000fc20'::uuid, 'deleted') r;
+  perform pg_temp.record('29 retention',
+    'a repeated purge record is idempotent', v_first::text, v_second::text);
+
+  select count(*) into n
+  from public.list_purgeable_testimonial_submissions('production', 200) r
+  where r.submission_id = '00000000-0000-4000-8000-00000000fc20';
+  perform pg_temp.record('29 retention',
+    'a purged submission leaves the purgeable listing', '0', n::text);
+
+  perform pg_temp.try_sql('29 retention', 'an unknown purge status is refused',
+    'blocked-22023',
+    $q$select * from public.record_testimonial_media_purged(
+         '00000000-0000-4000-8000-00000000fc20'::uuid, 'vanished')$q$);
+
+  -- --- Privileges ---------------------------------------------------------
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
+  perform pg_temp.try_sql('29 retention', 'a browser role cannot list deletable assets',
+    'blocked-42501',
+    $q$select * from public.list_deletable_testimonial_provider_assets('production', 10)$q$);
+  perform pg_temp.try_sql('29 retention', 'a browser role cannot list purgeable submissions',
+    'blocked-42501',
+    $q$select * from public.list_purgeable_testimonial_submissions('production', 10)$q$);
+  perform pg_temp.try_sql('29 retention', 'a browser role cannot record a purge',
+    'blocked-42501',
+    $q$select * from public.record_testimonial_media_purged(
+         '00000000-0000-4000-8000-00000000fc20'::uuid, 'deleted')$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+
+-- ===========================================================================
+-- SECTION 30 — immediate purge, and what it deliberately cannot do
+--
+-- The 30-day window exists for moderation reversibility. That is not a reason
+-- that applies when a person withdraws their own consent, or when a
+-- submission is pulled because the submitter was not an adult.
+-- ===========================================================================
+do $$
+declare
+  v_purge  timestamptz;
+  v_status text;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- fa02 was rejected in section 10, so it is in one of the two states the
+  -- function accepts.
+  select s.moderation_status::text into v_status
+  from public.testimonial_submissions s
+  where s.id = '00000000-0000-4000-8000-00000000fa02';
+  perform pg_temp.record('30 purge-now', 'the fixture is in a rejected state', 'rejected', v_status);
+
+  perform pg_temp.try_sql('30 purge-now', 'an unknown reason is refused',
+    'blocked-22023',
+    $q$select * from public.purge_testimonial_media_now(
+         '00000000-0000-4000-8000-00000000fa02'::uuid, 'because')$q$);
+
+  -- fc11 is pending. An item that has not been removed or rejected must not
+  -- have its retention shortened — that would be a deletion path around the
+  -- moderation decision.
+  perform pg_temp.try_sql('30 purge-now', 'a PENDING submission cannot be immediately purged',
+    'blocked-42501',
+    $q$select * from public.purge_testimonial_media_now(
+         '00000000-0000-4000-8000-00000000fc11'::uuid, 'visitor_withdrawal')$q$);
+
+  select r.media_purge_after into v_purge
+  from public.purge_testimonial_media_now(
+    '00000000-0000-4000-8000-00000000fa02'::uuid, 'visitor_withdrawal') r;
+  perform pg_temp.record('30 purge-now', 'a withdrawal purges immediately rather than in 30 days',
+    'true', (v_purge is not null and v_purge <= now())::text);
+
+  select count(*) into n
+  from public.purge_testimonial_media_now(
+    '00000000-0000-4000-8000-00000000fa02'::uuid, 'underage_submitter') r;
+  perform pg_temp.record('30 purge-now', 'an underage removal is also an accepted reason', '1', n::text);
+
+  -- IT MOVES NO LIFECYCLE. A function that could remove an item would be a
+  -- second moderation path with no review provenance.
+  select s.moderation_status::text into v_status
+  from public.testimonial_submissions s
+  where s.id = '00000000-0000-4000-8000-00000000fa02';
+  perform pg_temp.record('30 purge-now', 'immediate purge did not move moderation_status',
+    'rejected', v_status);
+
+  -- An unknown submission is a silent no-op, not an error, so the function
+  -- cannot be used to probe which submission ids exist.
+  select count(*) into n
+  from public.purge_testimonial_media_now(
+    '00000000-0000-4000-8000-0000000000ff'::uuid, 'visitor_withdrawal') r;
+  perform pg_temp.record('30 purge-now', 'an unknown submission returns no row and no error', '0', n::text);
+
+  perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f3');
+  perform pg_temp.try_sql('30 purge-now', 'an owner/admin cannot call immediate purge directly',
+    'blocked-42501',
+    $q$select * from public.purge_testimonial_media_now(
+         '00000000-0000-4000-8000-00000000fa02'::uuid, 'visitor_withdrawal')$q$);
+  perform pg_temp.act_as_ambient();
+end $$;
+
 -- Full listing, failures first.
 --
 -- Ordering by `passed` ascending puts false before true, so a failure is at
