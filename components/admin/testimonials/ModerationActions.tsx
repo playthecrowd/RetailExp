@@ -6,20 +6,27 @@ import { Label, Select, Textarea } from "@/components/ui/form";
 import {
   approveSubmissionAction,
   rejectSubmissionAction,
+  removeSubmissionAction,
   IDLE_MODERATION_STATE,
 } from "@/app/admin/(protected)/clients/kameleon/testimonials/actions";
 import {
   REJECTION_REASONS,
+  IMMEDIATE_PURGE_REASONS,
   MAX_MODERATION_NOTE_LENGTH,
 } from "@/lib/testimonials/rejection-reasons";
 import type { ModerationItem } from "@/lib/testimonials/moderation";
 
 /**
- * Approve and Reject, each behind a confirmation step.
+ * Approve, Reject and Remove, each behind a confirmation step.
  *
  * Approval is NOT single-click: it publishes someone else's face to a public
  * gallery, and the dialog says so before the moderator commits. Rejection
  * requires a reason from the server-enforced allow-list.
+ *
+ * REMOVE IS THE ONLY WAY BACK. There is no publication kill switch by design,
+ * so an approved item is live until somebody removes it individually. It is
+ * also the mechanism for honouring a takedown request, which is why two of its
+ * reasons shorten the retention window to immediate.
  *
  * Nothing here decides anything. The submission id is the only value sent, and
  * the Server Action re-authorizes, re-validates and re-checks the reason. No
@@ -102,9 +109,14 @@ export function ModerationActions({ item }: { item: ModerationItem }) {
     rejectSubmissionAction,
     IDLE_MODERATION_STATE,
   );
+  const [removeState, removeAction, removePending] = useActionState(
+    removeSubmissionAction,
+    IDLE_MODERATION_STATE,
+  );
 
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
 
   // Dialog visibility is DERIVED, not synchronised in an effect: a success
   // closes the dialog because the decision is made, and the buttons disappear
@@ -113,13 +125,16 @@ export function ModerationActions({ item }: { item: ModerationItem }) {
   // confirmation dialog.
   const approveDialogOpen = approveOpen && approveState.status !== "success";
   const rejectDialogOpen = rejectOpen && rejectState.status !== "success";
+  const removeDialogOpen = removeOpen && removeState.status !== "success";
 
   const feedback =
     approveState.status !== "idle"
       ? approveState
       : rejectState.status !== "idle"
         ? rejectState
-        : null;
+        : removeState.status !== "idle"
+          ? removeState
+          : null;
 
   // Only a pending submission can be approved or rejected — the database
   // enforces the same transitions, so this hides controls that would fail.
@@ -140,6 +155,13 @@ export function ModerationActions({ item }: { item: ModerationItem }) {
   // This is a courtesy, not a control: the Server Action reads no readiness
   // value from the browser and the database re-checks regardless.
   const canApprove = item.deliveryReady;
+
+  // approved -> removed and rejected -> removed are the only legal removals;
+  // pending -> removed is not, and the database refuses it. A pending item is
+  // withdrawn by rejecting it, which reaches the same purge.
+  const removable =
+    (item.moderationStatus === "approved" || item.moderationStatus === "rejected") &&
+    removeState.status !== "success";
 
   return (
     <div className="flex flex-col gap-2">
@@ -171,6 +193,20 @@ export function ModerationActions({ item }: { item: ModerationItem }) {
               version is ready. You can still reject it.
             </p>
           )}
+        </div>
+      )}
+
+      {removable && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="destructive"
+            onClick={() => setRemoveOpen(true)}
+            disabled={removePending}
+          >
+            Remove
+          </Button>
         </div>
       )}
 
@@ -275,6 +311,70 @@ export function ModerationActions({ item }: { item: ModerationItem }) {
             </Button>
             <Button type="submit" size="sm" variant="destructive" loading={rejectPending}>
               {rejectPending ? "Rejecting…" : "Confirm rejection"}
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* ---------------------------------------------------------------- */}
+      <Dialog open={removeDialogOpen} onClose={() => setRemoveOpen(false)} labelledBy="remove-title">
+        <h2 id="remove-title" className="text-base font-semibold">
+          Remove this submission?
+        </h2>
+        <p className="mt-2 text-sm text-admin-text-muted">
+          It leaves the Gallery immediately. Its media is deleted at the provider within
+          30 days — or on the next sweep if you choose one of the two reasons marked
+          below. Removal cannot be undone.
+        </p>
+
+        <form action={removeAction} className="mt-4 flex flex-col gap-3">
+          <input type="hidden" name="submissionId" value={item.submissionId} />
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`remove-reason-${item.submissionId}`}>Reason (required)</Label>
+            <Select id={`remove-reason-${item.submissionId}`} name="rejectionReason" required defaultValue="">
+              <option value="" disabled>
+                Choose a reason…
+              </option>
+              {REJECTION_REASONS.map((reason) => (
+                <option key={reason.id} value={reason.id}>
+                  {reason.label}
+                  {(IMMEDIATE_PURGE_REASONS as readonly string[]).includes(reason.id)
+                    ? " — deletes immediately"
+                    : ""}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor={`remove-note-${item.submissionId}`}>
+              Moderation note <span className="text-admin-text-muted">(optional)</span>
+            </Label>
+            {/* Internal only, retained indefinitely. A takedown request should be
+                referenced by ticket, never by pasting the requester's contact
+                details into a field that outlives the media. */}
+            <Textarea
+              id={`remove-note-${item.submissionId}`}
+              name="moderationNote"
+              rows={2}
+              maxLength={MAX_MODERATION_NOTE_LENGTH}
+              placeholder="Internal reference only — no contact details"
+            />
+          </div>
+
+          {removeState.status === "error" && removeState.message && (
+            <p role="alert" className="rounded-md bg-admin-danger-bg px-2.5 py-1.5 text-sm text-admin-danger">
+              {removeState.message}
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setRemoveOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" variant="destructive" loading={removePending}>
+              {removePending ? "Removing…" : "Confirm removal"}
             </Button>
           </div>
         </form>

@@ -1,5 +1,7 @@
 import { createSecretClient } from "@/lib/supabase/secret";
-import { requireAdminAccess } from "@/lib/auth/admin";
+import { requireAdminAccess, requireFreshAdminAccess } from "@/lib/auth/admin";
+import { signModerationPreview } from "@/lib/testimonials/delivery";
+import { deliveryConfigurationComplete } from "@/lib/cloudflare/config";
 import type { Database } from "@/lib/supabase/database.types";
 
 /**
@@ -89,10 +91,9 @@ export interface ModerationItem {
   /**
    * Whether a signed preview COULD be produced for this item.
    *
-   * Deliberately a boolean, not a URL and not a handle. Cloudflare is not
-   * configured, so this is false for everything today; when signed delivery is
-   * added the URL will be minted server-side per request and still never
-   * stored. See createSignedPreviewUrl() at the bottom of this file.
+   * Deliberately a boolean, not a URL and not a handle. The URL is minted
+   * per request by createModerationPreview() at the bottom of this file, only
+   * for the item a reviewer actually asks to see, and is never stored.
    */
   previewAvailable: boolean;
 }
@@ -188,9 +189,12 @@ function toItem(row: IdentifiedRow): ModerationItem {
     durationSeconds: row.validated_duration_seconds,
     sizeBytes: row.validated_size_bytes,
     detectedMimeType: row.detected_mime_type,
-    // Signed delivery is not built yet, and no provider handle leaves this
-    // function regardless. Always false until createSignedPreviewUrl() exists.
-    previewAvailable: false,
+    // Derived, not hard-coded. A preview can only exist once a delivery
+    // rendition is ready AND the provider handed back a delivery handle —
+    // exactly the two things createModerationPreview() needs. The handle
+    // itself is tested for presence and then discarded; ModerationItem has no
+    // field capable of carrying it.
+    previewAvailable: row.delivery_ready_at !== null && row.provider_delivery_id !== null,
   };
 }
 
@@ -291,23 +295,76 @@ export async function loadModerationQueue(query: ModerationQuery): Promise<Moder
   };
 }
 
+/** What a reviewer's browser receives. Short-lived, minted per request. */
+export interface SignedModerationPreview {
+  mediaUrl: string;
+  /** Video only. Images have no separate poster. */
+  posterUrl: string | null;
+  expiresAt: string;
+}
+
 /**
- * The seam where signed preview generation will live.
+ * Mints a signed preview for ONE submission.
  *
- * Not implemented, and deliberately not stubbed with a guess. When Cloudflare
- * is configured this will: re-authorize, re-read the row server-side to
- * confirm it is still queue-eligible, exchange provider_delivery_id for a
- * SHORT-LIVED signed token using a server-only secret, and return that URL to
- * be rendered once. The handle must never be sent to the browser, no URL is
- * ever persisted, and no URL is ever built by concatenating a provider
- * hostname.
+ * WHY PER ITEM, AND NOT DURING loadModerationQueue()
+ *   Signing an image calls Cloudflare: requireSafeDeliveryVariant() re-reads
+ *   the variant every time, deliberately uncached, because a variant can be
+ *   reconfigured in the dashboard at any moment and a cached "safe" answer
+ *   would outlive the fact. Minting for a whole page would therefore mean one
+ *   API round trip per card before anything rendered. Minting on demand costs
+ *   one call for the one item a reviewer actually opened.
+ *
+ * WHAT IT DOES BEFORE SIGNING, IN THIS ORDER
+ *   1. Re-authorizes, freshly. A decision computed during an earlier render is
+ *      not evidence about this request, and the value it returns is a bearer
+ *      credential for its lifetime.
+ *   2. Re-reads the row through the moderation queue VIEW, scoped to the
+ *      caller's own resolved tenant. The view's own predicate carries the
+ *      eligibility rules — uploaded, trusted-valid, not purged — so "still
+ *      eligible" is enforced by the same definition the queue uses rather than
+ *      by a second copy of it here.
+ *   3. Requires a delivery handle and a ready rendition.
+ *
+ * The handle never leaves this function, the URL is never persisted or logged,
+ * and no URL is built by concatenating a provider hostname.
  */
-export async function createSignedPreviewUrl(submissionId: string): Promise<null> {
-  // The id shape is validated even though nothing is minted yet, so the guard
-  // is already in place when the provider exchange is added rather than being
-  // something to remember later.
+export async function createModerationPreview(
+  submissionId: string,
+): Promise<SignedModerationPreview | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(submissionId)) {
     return null;
   }
-  return null;
+
+  // FIRST, and fresh. Everything below is unreachable for an unauthorized
+  // caller, and requireFreshAdminAccess redirects rather than returning.
+  const access = await requireFreshAdminAccess();
+
+  // Fail closed on partial configuration rather than throwing out of a signing
+  // helper: an unconfigured deployment reports "no preview", which is what the
+  // UI already knows how to render.
+  if (!deliveryConfigurationComplete()) return null;
+
+  const { data, error } = await createSecretClient()
+    .from("testimonial_moderation_queue")
+    .select("media_type, provider_delivery_id, delivery_ready_at")
+    // The tenant filter is the value AUTHORIZATION resolved. No search
+    // parameter, form field or header contributes to it.
+    .eq("client_id", access.clientId)
+    .eq("submission_id", submissionId)
+    .maybeSingle();
+
+  if (error || data === null) return null;
+  if (data.delivery_ready_at === null || data.provider_delivery_id === null) return null;
+  if (data.media_type !== "image" && data.media_type !== "video") return null;
+
+  const bundle = await signModerationPreview(data.media_type, data.provider_delivery_id);
+
+  return {
+    mediaUrl: bundle.media.url,
+    posterUrl: bundle.poster?.url ?? null,
+    // Serialized here rather than passed as a Date: this crosses the Server
+    // Action boundary into a Client Component, and an ISO string survives that
+    // unambiguously.
+    expiresAt: bundle.media.expiresAt.toISOString(),
+  };
 }

@@ -189,3 +189,29 @@ export function deletionConfigurationComplete(): boolean {
   }
   return true;
 }
+
+/**
+ * Whether SIGNED DELIVERY is completely configured.
+ *
+ * Distinct from the deletion and webhook checks because it needs a different
+ * set: the signing material and the delivery hostnames, not the API tokens.
+ * A moderation preview that threw a configuration error out of a signing
+ * helper would surface as a broken page; reported as "no preview", it renders
+ * the state the UI already has.
+ */
+export function deliveryConfigurationComplete(): boolean {
+  for (const name of [
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_IMAGES_API_TOKEN",
+    "CLOUDFLARE_IMAGES_SIGNING_KEY",
+    "CLOUDFLARE_IMAGES_DELIVERY_HOST",
+    "CLOUDFLARE_IMAGES_VARIANT",
+    "CLOUDFLARE_STREAM_SIGNING_KEY_ID",
+    "CLOUDFLARE_STREAM_SIGNING_KEY_PEM",
+    "CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN",
+  ] as const) {
+    const raw = process.env[name];
+    if (typeof raw !== "string" || raw.trim().length === 0) return false;
+  }
+  return true;
+}

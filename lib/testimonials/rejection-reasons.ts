@@ -61,11 +61,45 @@ export const REJECTION_REASONS: readonly RejectionReason[] = [
     description: "Too dark, blurred, silent or short to publish.",
   },
   {
+    id: "visitor_withdrawal",
+    label: "Withdrawn by the person who submitted it",
+    description: "They asked for it to be taken down. Purges immediately rather than in 30 days.",
+  },
+  {
+    id: "underage_submitter",
+    label: "Submitter was not 18 or older",
+    description: "The 18+ attestation turned out to be untrue. Purges immediately.",
+  },
+  {
     id: "other",
     label: "Other",
     description: "Something else — explain in the moderation note.",
   },
 ] as const;
+
+/**
+ * The reasons that shorten retention to immediate.
+ *
+ * The lifecycle trigger stamps media_purge_after 30 days out for every removal
+ * and rejection. That window exists for moderation reversibility and for
+ * abuse-report retention — neither of which applies when a person withdraws
+ * their own consent, and both of which are outweighed when the submitter was
+ * not an adult. For those two, purge_testimonial_media_now() brings the
+ * deletion forward to the next sweep.
+ *
+ * Deliberately a set of two, not a boolean on RejectionReason: it must match
+ * the reasons purge_testimonial_media_now() accepts, and keeping the list in
+ * one shape makes a mismatch a one-line diff rather than a search.
+ */
+export const IMMEDIATE_PURGE_REASONS = ["visitor_withdrawal", "underage_submitter"] as const;
+export type ImmediatePurgeReason = (typeof IMMEDIATE_PURGE_REASONS)[number];
+
+export function isImmediatePurgeReason(value: unknown): value is ImmediatePurgeReason {
+  return (
+    typeof value === "string" &&
+    (IMMEDIATE_PURGE_REASONS as readonly string[]).includes(value)
+  );
+}
 
 const REJECTION_REASON_IDS: ReadonlySet<string> = new Set(REJECTION_REASONS.map((r) => r.id));
 

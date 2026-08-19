@@ -617,9 +617,22 @@ for (const [name, src] of [
 const allPhase3 = [modPage, modActions, modLoader, modCard, modQueue, modActionsUi, modPreview].join("\n");
 // Comments stripped: several files explain what WILL happen once Cloudflare is
 // configured. What must not exist is executable code naming a provider host.
+// Narrowed when signed previews landed. The point of this check was never
+// "the word Cloudflare must not appear" - it was that no delivery URL may be
+// ASSEMBLED here from a provider hostname. moderation.ts now legitimately
+// imports lib/cloudflare/config to ask whether signing is configured, which
+// the old pattern flagged. Hostnames are still forbidden outright, and the
+// only permitted occurrences of the vendor name are import specifiers.
 assert(
-  !/cloudflare|videodelivery|imagedelivery|cloudflarestream/i.test(stripComments(allPhase3)),
-  "no Cloudflare hostname or product name appears in executable Phase 3 code",
+  !/videodelivery|imagedelivery|cloudflarestream|cloudflare\.com/i.test(stripComments(allPhase3)),
+  "no Cloudflare hostname appears in executable Phase 3 code",
+);
+assert(
+  stripComments(allPhase3)
+    .split(String.fromCharCode(10))
+    .filter((line) => /cloudflare/i.test(line))
+    .every((line) => /^\s*import |from "@\/lib\/cloudflare\//.test(line)),
+  "every remaining Cloudflare reference in Phase 3 code is an import, never a value",
 );
 assert(
   !/https?:\/\//.test(stripComments(allPhase3).replace(/example\.com/g, "")),
@@ -628,16 +641,20 @@ assert(
 
 // --- Mutations: fresh authorization, RPC only ------------------------------
 assert(
-  (modActions.match(/await requireFreshAdminAccess\(\)/g) || []).length === 2,
-  "both moderation actions call requireFreshAdminAccess()",
+  (modActions.match(/await requireFreshAdminAccess\(\)/g) || []).length === 3,
+  "all three moderation actions call requireFreshAdminAccess() (approve, reject, remove)",
 );
 assert(
   !/requireAdminAccess\(\)/.test(stripComments(modActions).replace(/requireFreshAdminAccess\(\)/g, "")),
   "the mutations never use the request-CACHED authorization",
 );
 assert(
-  (modActions.match(/rpc\("moderate_testimonial_submission"/g) || []).length === 2,
-  "both actions go through the moderation RPC",
+  (modActions.match(/rpc\("moderate_testimonial_submission"/g) || []).length === 3,
+  "all three decisions go through the moderation RPC",
+);
+assert(
+  (modActions.match(/rpc\("purge_testimonial_media_now"/g) || []).length === 1,
+  "exactly one action can shorten retention, and it is not approve or reject",
 );
 assert(
   !/from\("testimonial_submissions"\)/.test(modActions) &&
@@ -857,8 +874,8 @@ assert(
   "both routes are revalidated through the shared constants, not literals",
 );
 assert(
-  (modActions.match(/revalidatePath\(/g) || []).length === 4,
-  "both decisions revalidate both routes (4 calls across approve and reject)",
+  (modActions.match(/revalidatePath\(/g) || []).length === 6,
+  "all three decisions revalidate both routes (6 calls across approve, reject and remove)",
 );
 
 // --- Error boundary --------------------------------------------------------
@@ -1460,11 +1477,37 @@ assert(
     !/nullableArgumentRpc/.test(stripComments(capProviderAssets)),
   "provider-assets.ts calls its RPCs on the generated Database type directly",
 );
+// TEMPORARY EXPECTATION. cleanup.ts moved onto pending-schema-rpc.ts because
+// the retention RPCs do not exist in the generated types until the pilot
+// migrations are applied. When they are, the shim is deleted and this
+// assertion reverts to the createSecretClient() form the other files use.
+// It is written as a two-sided check so it fails EITHER WAY - if the shim is
+// removed without updating this, or if cleanup.ts quietly reaches for the
+// permanent nullable-argument layer instead.
 assert(
-  /createSecretClient\(\)/.test(stripComments(capCleanup)) &&
+  /pendingSchemaRpc\(\)/.test(stripComments(capCleanup)) &&
     !/nullableArgumentRpc/.test(stripComments(capCleanup)),
-  "cleanup.ts calls its RPCs on the generated Database type directly",
+  "cleanup.ts uses the TEMPORARY pending-schema shim, never the permanent nullable-argument one",
 );
+{
+  const pendingShim = read("lib/testimonials/pending-schema-rpc.ts");
+  assert(
+    /TEMPORARY\. Delete this file once types are regenerated\./.test(pendingShim),
+    "the pending-schema shim states plainly that it is temporary",
+  );
+  assert(
+    /REMOVAL, CONCRETELY/.test(pendingShim),
+    "the pending-schema shim carries its own removal procedure",
+  );
+  assert(
+    !/rpc\(name: string/.test(stripComments(pendingShim)),
+    "the pending-schema shim has no generic rpc() escape hatch",
+  );
+  assert(
+    /import "server-only"/.test(pendingShim),
+    "the pending-schema shim is server-only, like every other trusted surface",
+  );
+}
 
 // --- No call site casts an RPC RESULT --------------------------------------
 // Parsing untrusted provider JSON is a different thing and is allowed; casting
@@ -2047,6 +2090,116 @@ assert(
   /requireAnonymousVisitor\(\)/.test(capServer),
   "status reads verify identity without requiring the capture feature gate",
 );
+
+// ---------------------------------------------------------------------------
+// Moderation previews and removal.
+//
+// A reviewer who cannot see the media cannot moderate it, and a signed URL is
+// a bearer credential for its lifetime. Both facts have structural
+// consequences, and all of these read comment-stripped source.
+// ---------------------------------------------------------------------------
+{
+  const moderationLib = read("lib/testimonials/moderation.ts");
+  const moderationSrc = stripComments(moderationLib);
+  const actionsSrc = stripComments(
+    read("app/admin/(protected)/clients/kameleon/testimonials/actions.ts"),
+  );
+  const previewSrc = stripComments(read("components/admin/testimonials/MediaPreview.tsx"));
+  const reasonsSrc = stripComments(read("lib/testimonials/rejection-reasons.ts"));
+
+  assert(
+    /requireFreshAdminAccess\(\)/.test(moderationSrc),
+    "the preview minter re-authorizes FRESHLY - an earlier render is not evidence about this request",
+  );
+  assert(
+    moderationSrc.indexOf("requireFreshAdminAccess()") <
+      moderationSrc.indexOf("signModerationPreview("),
+    "authorization happens before anything is signed",
+  );
+  assert(
+    /\.eq\("client_id", access\.clientId\)[\s\S]{0,200}?\.eq\("submission_id", submissionId\)/.test(
+      moderationSrc,
+    ),
+    "the preview read is scoped to the tenant AUTHORIZATION resolved, never to a submitted value",
+  );
+  assert(
+    /from\("testimonial_moderation_queue"\)[\s\S]{0,400}?provider_delivery_id/.test(moderationSrc),
+    "eligibility comes from the queue VIEW's own predicate rather than a second copy of the rules",
+  );
+  assert(
+    /deliveryConfigurationComplete\(\)/.test(moderationSrc),
+    "an unconfigured deployment reports no preview instead of throwing out of a signing helper",
+  );
+  assert(
+    !/previewAvailable: false/.test(moderationSrc),
+    "previewAvailable is derived, not hard-coded",
+  );
+  assert(
+    /previewAvailable: row\.delivery_ready_at !== null && row\.provider_delivery_id !== null/.test(
+      moderationSrc,
+    ),
+    "previewAvailable tests the delivery handle for PRESENCE and then discards it",
+  );
+
+  // The DTO must still be incapable of carrying a handle.
+  const itemInterface = /export interface ModerationItem \{[\s\S]*?\n\}/.exec(moderationSrc);
+  assert(itemInterface !== null, "the ModerationItem interface was located");
+  assert(
+    itemInterface !== null &&
+      !/provider_delivery_id|providerDeliveryId|provider_poster_id|posterHandle/.test(
+        itemInterface[0],
+      ),
+    "ModerationItem still has no field capable of carrying a provider handle",
+  );
+
+  assert(
+    !/next\/image/.test(previewSrc),
+    "the preview is not routed through next/image, whose optimizer would CACHE a bearer credential",
+  );
+  assert(
+    !/localStorage|sessionStorage|document\.cookie/.test(previewSrc),
+    "the signed URL is never persisted in the browser",
+  );
+
+  assert(
+    /export async function removeSubmissionAction/.test(actionsSrc),
+    "a removal action exists - without it an approved item could never be taken down",
+  );
+  assert(
+    /removeSubmissionAction[\s\S]{0,400}?requireFreshAdminAccess\(\)/.test(actionsSrc),
+    "removal re-authorizes freshly",
+  );
+  assert(
+    /p_decision: "removed"[\s\S]{0,600}?purge_testimonial_media_now/.test(actionsSrc),
+    "the immediate purge happens AFTER the moderation decision, so review provenance is recorded first",
+  );
+  assert(
+    /const supabase = await createClient\(\);[\s\S]{0,400}?p_decision: "removed"/.test(actionsSrc),
+    "the removal decision uses the ADMINISTRATOR's own session, so reviewed_by is the real reviewer",
+  );
+  assert(
+    /isImmediatePurgeReason\(reason\)/.test(actionsSrc),
+    "only the two allow-listed reasons shorten retention",
+  );
+  assert(
+    /purgedNow = !purgeError/.test(actionsSrc) &&
+      !/if \(purgeError\)[\s\S]{0,120}?status: "error"/.test(actionsSrc),
+    "a failed purge is not reported as a failed removal - the item is still down either way",
+  );
+
+  for (const id of ["visitor_withdrawal", "underage_submitter"]) {
+    assert(
+      new RegExp('id: "' + id + '"').test(reasonsSrc),
+      `${id} is an available moderation reason`,
+    );
+    assert(
+      new RegExp('"' + id + '"').test(
+        /IMMEDIATE_PURGE_REASONS = \[[\s\S]*?\]/.exec(reasonsSrc)?.[0] ?? "",
+      ),
+      `${id} is in the immediate-purge set, matching what the database RPC accepts`,
+    );
+  }
+}
 
 console.log(
   `\n${passed} structural assertions passed, ${failures.length} failed.\n`,
