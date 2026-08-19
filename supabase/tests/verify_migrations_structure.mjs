@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 19, `exactly 19 migration files exist (found ${files.length})`);
+assert(files.length === 20, `exactly 20 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -1409,6 +1409,182 @@ assert(
 assert(
   /and s\.environment_marker = 'production'/.test(capExec),
   "the public Gallery view filters on the production environment marker",
+);
+
+// --- Phase 4C provider-asset ledger ----------------------------------------
+// The ledger is what makes a provider asset impossible to orphan and a stale
+// callback impossible to act on, so its constraints are asserted structurally
+// rather than left to the runtime suite alone.
+
+const ledgerMigrationFile = "20260820090000_testimonial_provider_assets.sql";
+assert(files.includes(ledgerMigrationFile), `the ledger migration exists (${ledgerMigrationFile})`);
+
+const ledgerSql = files.includes(ledgerMigrationFile)
+  ? readFileSync(join(migrationsDir, ledgerMigrationFile), "utf8")
+  : "";
+const ledgerExec = ledgerSql.replace(/--[^\n]*/g, "").replace(/comment on [\s\S]*?;/gi, "");
+
+// APPLIED MIGRATIONS ARE NEVER EDITED. This one may only add.
+assert(
+  !/drop (table|view|function|trigger|constraint|column)/i.test(ledgerExec),
+  "the corrective migration drops no existing object",
+);
+
+// The two-step: a reservation exists before the provider is called, and the
+// identifier is attached afterwards.
+assert(
+  /provider_asset_id\s+text,/.test(ledgerExec),
+  "provider_asset_id is nullable, so a row can be reserved before the provider is called",
+);
+assert(
+  /check \(\(attached_at is null\) = \(provider_asset_id is null\)\)/.test(ledgerExec),
+  "attachment is all-or-nothing: an identifier and its timestamp arrive together",
+);
+
+// Exactly one active attempt, and unique provider identity once assigned.
+assert(
+  /create unique index if not exists testimonial_provider_assets_one_active[\s\S]*?where superseded_at is null and failed_at is null and deleted_at is null;/.test(ledgerExec),
+  "exactly one active attempt per submission is enforced by a partial unique index",
+);
+assert(
+  /create unique index if not exists testimonial_provider_assets_identity[\s\S]*?where provider_asset_id is not null;/.test(ledgerExec),
+  "provider asset identity is unique, conditionally on being assigned",
+);
+
+// The environment is recorded here and cannot be null.
+assert(
+  /environment_marker\s+text not null,/.test(ledgerExec),
+  "the ledger records a trusted environment that cannot be null",
+);
+assert(
+  /check \(environment_marker in \('preview', 'production'\)\)/.test(ledgerExec),
+  "the ledger environment is constrained to known values",
+);
+
+// THE CENTRAL GUARANTEE: validation takes no environment argument, so there is
+// no parameter through which a wrong environment could arrive.
+const validateStart = ledgerExec.indexOf(
+  "create or replace function public.validate_testimonial_provider_asset",
+);
+const validateSignature = ledgerExec.slice(
+  validateStart,
+  ledgerExec.indexOf("language plpgsql", validateStart),
+);
+assert(validateStart !== -1 && validateSignature.length > 0, "the validation function was found");
+assert(
+  !/p_environment/.test(validateSignature),
+  "validate_testimonial_provider_asset takes NO environment argument",
+);
+assert(
+  /environment_marker\s+= coalesce\(s\.environment_marker, v_row\.environment_marker\)/.test(ledgerExec),
+  "the environment is stamped FROM THE LEDGER ROW, never from an argument",
+);
+
+// The ledger must never become a credential store.
+for (const forbidden of ["upload_url", "uploadurl", "signing_key", "secret", "token", "raw_payload", "signature"]) {
+  assert(
+    !new RegExp("\\b" + forbidden + "\\s+(text|jsonb|bytea)").test(ledgerExec.toLowerCase()),
+    `the ledger has no ${forbidden} column`,
+  );
+}
+
+// Grants follow the Phase 4B trusted-caller pattern exactly.
+assert(
+  /revoke all on public\.testimonial_provider_assets from public, anon, authenticated;/.test(ledgerExec),
+  "the ledger table is revoked from every browser role",
+);
+assert(
+  /alter table public\.testimonial_provider_assets enable row level security;/.test(ledgerExec),
+  "row level security is enabled on the ledger",
+);
+
+const ledgerFunctions = [
+  "reserve_testimonial_provider_attempt",
+  "attach_testimonial_provider_asset",
+  "fail_testimonial_provider_attempt",
+  "record_testimonial_provider_progress",
+  "validate_testimonial_provider_asset",
+  "list_deletable_testimonial_provider_assets",
+  "mark_testimonial_provider_asset_deleted",
+];
+for (const fn of ledgerFunctions) {
+  const revokes = ledgerExec.match(
+    new RegExp("revoke all on function public\\." + fn + "\\([^)]*\\)[^;]*;", "g"),
+  ) || [];
+  assert(
+    revokes.length === 1 && /\bpublic\b/.test(revokes[0].split("from")[1] || ""),
+    `${fn} explicitly revokes the default PUBLIC EXECUTE grant`,
+  );
+  const grants = ledgerExec.match(
+    new RegExp("grant execute on function public\\." + fn + "\\([^)]*\\)[^;]*;", "g"),
+  ) || [];
+  assert(
+    grants.length === 1 && /to service_role;\s*$/.test(grants[0]),
+    `${fn} is granted to service_role and to no other role`,
+  );
+  assert(
+    new RegExp("create or replace function public\\." + fn + "[\\s\\S]{0,600}?security definer").test(ledgerExec),
+    `${fn} is SECURITY DEFINER`,
+  );
+  assert(
+    new RegExp("create or replace function public\\." + fn + "[\\s\\S]{0,600}?set search_path = public, pg_catalog").test(ledgerExec),
+    `${fn} pins a safe search_path`,
+  );
+}
+
+// THREE destinations in total, enforced in three independent places.
+assert(
+  /if v_next > 3 then/.test(ledgerExec),
+  "the reservation refuses a fourth attempt",
+);
+assert(
+  /check \(attempt_no between 1 and 3\)/.test(ledgerExec),
+  "the ledger CHECK caps attempt numbers at three",
+);
+assert(
+  /create or replace function public\.retry_testimonial_upload/.test(ledgerExec) &&
+    /if v_attempts >= 2 then/.test(ledgerExec),
+  "retry_testimonial_upload is superseded to cap upload_attempt_count at 2, so three destinations is the ceiling",
+);
+assert(
+  !/if v_attempts >= 3 then/.test(ledgerExec),
+  "the superseded retry does not keep the old four-destination cap",
+);
+// One destination per attempt, even under concurrency.
+assert(
+  /an upload destination has already been issued for this attempt/.test(ledgerExec),
+  "a second reservation while one is active is refused",
+);
+
+// --- Orphan recovery: a provider identifier is never discarded -------------
+assert(
+  /create or replace function public\.record_orphaned_testimonial_provider_asset/.test(ledgerExec),
+  "an orphan-recovery RPC exists, so a returned identifier can always be persisted",
+);
+assert(
+  /check \(orphaned_at is null\s+or \(failed_at is not null and validated_at is null and superseded_at is not null\)\)/.test(ledgerExec),
+  "an orphan is inert by CONSTRAINT, not merely by the recovery function's logic",
+);
+assert(
+  /this reservation already refers to a different provider asset/.test(ledgerExec),
+  "recording a conflicting provider identifier is refused",
+);
+assert(
+  /a validated attempt cannot be recorded as an orphan/.test(ledgerExec),
+  "a validated attempt can never be reclassified as an orphan",
+);
+assert(
+  /when a\.orphaned_at is not null\s+then 'orphaned'/.test(ledgerExec),
+  "the cleanup sweep lists orphans and says why",
+);
+// The recovery RPC must not be able to move a submission lifecycle.
+const orphanFn = ledgerExec.slice(
+  ledgerExec.indexOf("create or replace function public.record_orphaned_testimonial_provider_asset"),
+  ledgerExec.indexOf("revoke all on function public.record_orphaned_testimonial_provider_asset"),
+);
+assert(
+  !/update public\.testimonial_submissions/.test(orphanFn),
+  "orphan recovery never touches testimonial_submissions, so it can move no lifecycle and stamp no environment",
 );
 
 console.log(`\n${files.length} migration files checked.`);

@@ -1758,6 +1758,550 @@ begin
 end $$;
 
 -- ===========================================================================
+-- SECTION 20 — the provider-asset ledger is trusted-only
+--
+-- REQUIRES migration 20260820090000. Fails by design until it is applied.
+-- ===========================================================================
+do $$
+declare n int; v text;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- --- privileges ---------------------------------------------------------
+  -- The full verb set, not just SELECT: the ledger correlates callbacks to
+  -- attempts, so a browser role holding ANY privilege on it could forge or
+  -- erase that correlation.
+  foreach v in array array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'] loop
+    perform pg_temp.record('20 ledger', 'anon holds no ' || v || ' on the ledger', 'false',
+      has_table_privilege('anon','public.testimonial_provider_assets',v)::text);
+    perform pg_temp.record('20 ledger', 'authenticated holds no ' || v || ' on the ledger', 'false',
+      has_table_privilege('authenticated','public.testimonial_provider_assets',v)::text);
+    perform pg_temp.record('20 ledger', 'PUBLIC holds no ' || v || ' on the ledger', 'false',
+      has_table_privilege('public','public.testimonial_provider_assets',v)::text);
+  end loop;
+
+  perform pg_temp.record('20 ledger', 'row level security is enabled on the ledger', 'true',
+    (select c.relrowsecurity::text from pg_class c
+     where c.oid = 'public.testimonial_provider_assets'::regclass));
+
+  -- --- the ledger is not a credential store -------------------------------
+  select count(*) into n from information_schema.columns
+  where table_schema='public' and table_name='testimonial_provider_assets'
+    and (column_name like '%url%' or column_name like '%secret%'
+         or column_name like '%token%' or column_name like '%payload%'
+         or column_name like '%signature%' or column_name like '%key%');
+  perform pg_temp.record('20 ledger', 'the ledger stores no URL, secret, token, payload or key', '0', n::text);
+
+  -- --- function privileges ------------------------------------------------
+  foreach v in array array[
+    'reserve_testimonial_provider_attempt','attach_testimonial_provider_asset',
+    'fail_testimonial_provider_attempt','record_testimonial_provider_progress',
+    'validate_testimonial_provider_asset','list_deletable_testimonial_provider_assets',
+    'mark_testimonial_provider_asset_deleted'
+  ] loop
+    perform pg_temp.record('20 ledger', v || ': authenticated may NOT execute', 'false',
+      has_function_privilege('authenticated', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('20 ledger', v || ': anon may NOT execute', 'false',
+      has_function_privilege('anon', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('20 ledger', v || ': PUBLIC may NOT execute', 'false',
+      has_function_privilege('public', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+
+    perform pg_temp.record('20 ledger', v || ': service_role MAY execute', 'true',
+      has_function_privilege('service_role', p.oid, 'EXECUTE')::text)
+    from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+    where ns.nspname='public' and p.proname=v;
+  end loop;
+
+  -- --- validation takes no environment argument ---------------------------
+  -- The whole environment guarantee rests on this: if no parameter carries an
+  -- environment, no caller can supply the wrong one.
+  perform pg_temp.record('20 ledger', 'validate_testimonial_provider_asset has no environment parameter', '0',
+    (select count(*) from unnest(coalesce(p.proargnames, array[]::text[])) a(name)
+     where a.name ilike '%environment%')::text)
+  from pg_proc p join pg_namespace ns on ns.oid=p.pronamespace
+  where ns.nspname='public' and p.proname='validate_testimonial_provider_asset';
+
+  -- --- the ledger starts empty --------------------------------------------
+  select count(*) into n from public.testimonial_provider_assets;
+  perform pg_temp.record('20 ledger', 'the ledger is empty on application', '0', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 21 — reservation, attachment and the one-active rule
+-- ===========================================================================
+do $$
+declare
+  v_ledger uuid;
+  v_ref    text;
+  v_second uuid;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- fa04 is the unpromoted pending intent from the Phase 4B fixtures: still
+  -- 'initiated', still owned by the anonymous visitor f1.
+  --
+  -- Capture is disabled for every experience, so a reservation must be
+  -- REFUSED here even for a legitimate visitor. This is the database gate
+  -- holding independently of the application.
+  perform pg_temp.try_sql('21 reservation', 'reservation refused while capture is disabled',
+    'blocked-42501',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa04'::uuid,
+         'cloudflare_images', 'preview', now() + interval '30 minutes')$q$);
+
+  -- A permanent account is refused regardless.
+  perform pg_temp.try_sql('21 reservation', 'a permanent account cannot reserve',
+    'blocked-42501',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f2'::uuid,
+         '00000000-0000-4000-8000-00000000fa04'::uuid,
+         'cloudflare_images', 'preview', now() + interval '30 minutes')$q$);
+
+  -- An unknown environment is rejected before anything else.
+  perform pg_temp.try_sql('21 reservation', 'an unknown environment is rejected',
+    'blocked-22023',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa04'::uuid,
+         'cloudflare_images', 'staging', now() + interval '30 minutes')$q$);
+
+  perform pg_temp.try_sql('21 reservation', 'an unknown provider is rejected',
+    'blocked-22023',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa04'::uuid,
+         'aws_s3', 'preview', now() + interval '30 minutes')$q$);
+
+  perform pg_temp.try_sql('21 reservation', 'a past expiry is rejected',
+    'blocked-22023',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa04'::uuid,
+         'cloudflare_images', 'preview', now() - interval '1 minute')$q$);
+
+  -- --- the one-active rule, asserted directly on the table ----------------
+  -- Inserted as the trusted tier, which is what the RPCs execute as. Two
+  -- active rows for one submission must be impossible, because "the current
+  -- attempt" is what makes a stale callback provably stale.
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa04', 1, 'cloudflare_images', 'image',
+     'preview', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', now() + interval '30 minutes')
+  returning id into v_ledger;
+
+  perform pg_temp.try_sql('21 reservation', 'a second ACTIVE attempt is refused',
+    'blocked-23505',
+    $q$insert into public.testimonial_provider_assets
+         (submission_id, attempt_no, provider, media_type, environment_marker,
+          opaque_reference, reservation_expires_at)
+       values ('00000000-0000-4000-8000-00000000fa04', 2, 'cloudflare_images', 'image',
+               'preview', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', now() + interval '30 minutes')$q$);
+
+  -- Superseding the first makes room for the second: this is exactly what a
+  -- retry does.
+  update public.testimonial_provider_assets set superseded_at = now() where id = v_ledger;
+
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa04', 2, 'cloudflare_images', 'image',
+     'preview', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', now() + interval '30 minutes')
+  returning id into v_second;
+
+  perform pg_temp.record('21 reservation', 'a superseded attempt frees the active slot', 'true',
+    (v_second is not null)::text);
+
+  -- --- attachment ---------------------------------------------------------
+  perform pg_temp.record('21 reservation', 'a reserved row has no provider asset yet', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where id = v_second and provider_asset_id is null and attached_at is null)::text);
+
+  -- A superseded reservation can never be attached.
+  perform pg_temp.try_sql('21 reservation', 'a superseded reservation cannot be attached',
+    'blocked-42501',
+    format($q$select * from public.attach_testimonial_provider_asset(%L, 'cloudflare_images', 'cf-image-1')$q$, v_ledger));
+
+  perform public.attach_testimonial_provider_asset(v_second, 'cloudflare_images', 'cf-image-2');
+  perform pg_temp.record('21 reservation', 'attachment records the identifier and its timestamp', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where id = v_second and provider_asset_id = 'cf-image-2' and attached_at is not null)::text);
+
+  -- Immutable once attached.
+  perform pg_temp.try_sql('21 reservation', 'an attached asset cannot be re-attached',
+    'blocked-42501',
+    format($q$select * from public.attach_testimonial_provider_asset(%L, 'cloudflare_images', 'cf-image-3')$q$, v_second));
+
+  -- Provider identity is globally unique once assigned.
+  perform pg_temp.try_sql('21 reservation', 'the same provider asset cannot be attached twice',
+    'blocked-23505',
+    $q$insert into public.testimonial_provider_assets
+         (submission_id, attempt_no, provider, media_type, environment_marker,
+          opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+       values ('00000000-0000-4000-8000-00000000fa02', 1, 'cloudflare_images', 'image',
+               'preview', 'cccccccccccccccccccccccccccccccc', now() + interval '30 minutes',
+               'cf-image-2', now())$q$);
+
+  -- Many reserved rows may coexist with NULL identifiers: the unique index is
+  -- conditional, or every second reservation anywhere would collide.
+  select count(*) into n from public.testimonial_provider_assets where provider_asset_id is null;
+  perform pg_temp.record('21 reservation', 'reserved rows with no identifier coexist', '1', n::text);
+end $$;
+
+-- ===========================================================================
+-- SECTION 22 — validation stamps the environment from the LEDGER
+-- ===========================================================================
+do $$
+declare
+  v_ledger uuid;
+  v_marker text;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- fa02 was rejected in section 10, so it is NOT eligible for validation.
+  -- A callback for it must change nothing rather than raise.
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa02', 1, 'cloudflare_stream', 'image',
+     'production', 'dddddddddddddddddddddddddddddddd', now() + interval '30 minutes',
+     'cf-video-rejected', now())
+  returning id into v_ledger;
+
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_stream', 'cf-video-rejected', 'dddddddddddddddddddddddddddddddd',
+    true, 1000, 10, 720, 1280, 'ready', 'evt-1') r
+  where r.validated;
+  perform pg_temp.record('22 validation', 'a moderated submission is not validatable', '0', n::text);
+
+  -- An unknown asset resolves to nothing and stamps nothing.
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_stream', 'cf-does-not-exist', 'dddddddddddddddddddddddddddddddd',
+    true, 1000, 10, 720, 1280, 'ready', 'evt-2') r
+  where r.validated;
+  perform pg_temp.record('22 validation', 'an unknown provider asset validates nothing', '0', n::text);
+
+  -- The right asset with the WRONG opaque reference is refused: the reference
+  -- is what binds a provider asset to one attempt.
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_stream', 'cf-video-rejected', 'ffffffffffffffffffffffffffffffff',
+    true, 1000, 10, 720, 1280, 'ready', 'evt-3') r
+  where r.validated;
+  perform pg_temp.record('22 validation', 'a mismatched opaque reference validates nothing', '0', n::text);
+
+  -- Signed delivery is mandatory before anything can become valid.
+  perform pg_temp.try_sql('22 validation', 'validation refuses an unsigned asset',
+    'blocked-42501',
+    $q$select * from public.validate_testimonial_provider_asset(
+         'cloudflare_stream', 'cf-video-rejected', 'dddddddddddddddddddddddddddddddd',
+         false, 1000, 10, 720, 1280, 'ready', 'evt-4')$q$);
+
+  -- --- the stamp itself ---------------------------------------------------
+  -- A FRESH submission, because every earlier fixture already carries a marker
+  -- from section 17 and coalesce() would keep it - the test would then pass
+  -- while proving nothing about the stamp.
+  --
+  -- fa06 is inserted exactly as the insert guard produces it: initiated,
+  -- pending, and with NO environment marker, because the guard clears it.
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented)
+  values
+    ('00000000-0000-4000-8000-00000000fa06','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','aa-key-6','v1', now(), true, true);
+
+  perform pg_temp.record('22 validation', 'a new intent starts with NO environment marker', '1',
+    (select count(*) from public.testimonial_submissions
+     where id = '00000000-0000-4000-8000-00000000fa06' and environment_marker is null)::text);
+
+  -- Its ledger row says 'preview', and that is what must land on the
+  -- submission - no argument carries an environment into this call.
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at, provider_asset_id, attached_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa06', 1, 'cloudflare_images', 'image',
+     'preview', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', now() + interval '30 minutes',
+     'cf-image-fa06', now())
+  returning id into v_ledger;
+
+  select r.environment_marker into v_marker
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_images', 'cf-image-fa06', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    true, null, null, null, null, 'uploaded', 'evt-5') r;
+
+  perform pg_temp.record('22 validation', 'the environment is stamped from the ledger row', 'preview', v_marker);
+
+  select s.environment_marker into v_marker from public.testimonial_submissions s
+  where s.id = '00000000-0000-4000-8000-00000000fa06';
+  perform pg_temp.record('22 validation', 'the submission carries the ledger environment', 'preview', v_marker);
+
+  perform pg_temp.record('22 validation', 'the submission is now valid and uploaded', 'valid,uploaded',
+    (select s.validation_status || ',' || s.upload_status from public.testimonial_submissions s
+     where s.id = '00000000-0000-4000-8000-00000000fa06'));
+
+  perform pg_temp.record('22 validation', 'the ledger row is marked validated', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where id = v_ledger and validated_at is not null)::text);
+
+  -- IDEMPOTENT. A duplicate callback must be a no-op, not a second stamp.
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_images', 'cf-image-fa06', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    true, null, null, null, null, 'uploaded', 'evt-5') r
+  where r.validated;
+  perform pg_temp.record('22 validation', 'a duplicate validation is an idempotent no-op', '1', n::text);
+
+  -- THE PRODUCTION-ONLY INVARIANT, stated over the whole gallery rather than
+  -- one row: nothing that is not production-marked can ever be served.
+  select count(*) into n
+  from public.testimonial_gallery_items g
+  join public.testimonial_submissions s on s.id = g.submission_id
+  where s.environment_marker is distinct from 'production';
+  perform pg_temp.record('22 validation', 'the gallery contains nothing that is not production', '0', n::text);
+
+  -- And the marker it received is immutable, exactly as for any other.
+  perform pg_temp.try_sql('22 validation', 'the stamped environment cannot be changed',
+    'blocked-42501',
+    $q$update public.testimonial_submissions set environment_marker = 'production'
+       where id = '00000000-0000-4000-8000-00000000fa06'$q$);
+end $$;
+
+-- ===========================================================================
+-- SECTION 23 — THREE upload destinations in total, and no fourth
+--
+-- The applied 20260819103000 allowed upload_attempt_count to reach 3, which
+-- authorises FOUR uploads (0 -> 1 -> 2 -> 3). The product limit is three
+-- INCLUDING the first. 20260820090000 supersedes retry_testimonial_upload to
+-- cap the count at 2, and this section proves the whole sequence end to end.
+--
+-- FIXTURE NOTE: capture must be switched on for the reservation guard to pass.
+-- That is done here, inside the transaction that ends in ROLLBACK, exactly as
+-- every other fixture write in this file is. It is switched off again at the
+-- end of section 24 so nothing after it sees a changed gate.
+-- ===========================================================================
+do $$
+declare
+  v_ref  text;
+  v_att  integer;
+  n      int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  update public.experiences set testimonial_capture_enabled = true
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  -- A fresh intent: upload_attempt_count 0, so the next attempt is number 1.
+  insert into public.testimonial_submissions
+    (id, client_id, experience_id, experience_user_id, auth_user_id,
+     media_type, client_submission_key, consent_version, consented_at,
+     attested_no_minors, attested_subjects_consented)
+  values
+    ('00000000-0000-4000-8000-00000000fa07','00000000-0000-4000-8000-00000000ca01',
+     '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
+     '00000000-0000-4000-8000-0000000000f1',
+     'image','aa-key-7','v1', now(), true, true);
+
+  -- ---- attempt 1 ---------------------------------------------------------
+  select r.attempt_no into v_att
+  from public.reserve_testimonial_provider_attempt(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-00000000fa07'::uuid,
+    'cloudflare_images', 'preview', now() + interval '30 minutes') r;
+  perform pg_temp.record('23 attempts', 'the initial destination is attempt 1', '1', v_att::text);
+
+  -- A SECOND reservation while one is active must be refused, or two
+  -- destinations would exist for the same attempt.
+  perform pg_temp.try_sql('23 attempts', 'a concurrent second reservation is refused',
+    'blocked-42501',
+    $q$select * from public.reserve_testimonial_provider_attempt(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa07'::uuid,
+         'cloudflare_images', 'preview', now() + interval '30 minutes')$q$);
+
+  -- ---- retry 1 -> attempt 2 ---------------------------------------------
+  update public.testimonial_submissions set upload_status = 'failed'
+  where id = '00000000-0000-4000-8000-00000000fa07';
+  perform public.retry_testimonial_upload(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-00000000fa07'::uuid);
+
+  perform pg_temp.record('23 attempts', 'the retry superseded the previous ledger attempt', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where submission_id = '00000000-0000-4000-8000-00000000fa07'
+       and superseded_at is not null)::text);
+
+  select r.attempt_no into v_att
+  from public.reserve_testimonial_provider_attempt(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-00000000fa07'::uuid,
+    'cloudflare_images', 'preview', now() + interval '30 minutes') r;
+  perform pg_temp.record('23 attempts', 'the first retry is attempt 2', '2', v_att::text);
+
+  -- ---- retry 2 -> attempt 3 ---------------------------------------------
+  update public.testimonial_submissions set upload_status = 'failed'
+  where id = '00000000-0000-4000-8000-00000000fa07';
+  perform public.retry_testimonial_upload(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-00000000fa07'::uuid);
+
+  select r.attempt_no into v_att
+  from public.reserve_testimonial_provider_attempt(
+    '00000000-0000-4000-8000-0000000000f1'::uuid,
+    '00000000-0000-4000-8000-00000000fa07'::uuid,
+    'cloudflare_images', 'preview', now() + interval '30 minutes') r;
+  perform pg_temp.record('23 attempts', 'the second retry is attempt 3', '3', v_att::text);
+
+  -- ---- the fourth is refused --------------------------------------------
+  update public.testimonial_submissions set upload_status = 'failed'
+  where id = '00000000-0000-4000-8000-00000000fa07';
+
+  perform pg_temp.try_sql('23 attempts', 'a THIRD retry is refused - three destinations is the limit',
+    'blocked-42501',
+    $q$select * from public.retry_testimonial_upload(
+         '00000000-0000-4000-8000-0000000000f1'::uuid,
+         '00000000-0000-4000-8000-00000000fa07'::uuid)$q$);
+
+  perform pg_temp.record('23 attempts', 'upload_attempt_count stopped at 2', '2',
+    (select s.upload_attempt_count::text from public.testimonial_submissions s
+     where s.id = '00000000-0000-4000-8000-00000000fa07'));
+
+  select count(*) into n from public.testimonial_provider_assets
+  where submission_id = '00000000-0000-4000-8000-00000000fa07';
+  perform pg_temp.record('23 attempts', 'exactly THREE destinations were ever issued', '3', n::text);
+
+  -- attempt_no and upload_attempt_count describe the same attempt: the highest
+  -- attempt_no is always the count plus one.
+  perform pg_temp.record('23 attempts', 'attempt_no and upload_attempt_count agree', 'true',
+    (select (max(a.attempt_no) = s.upload_attempt_count + 1)::text
+     from public.testimonial_provider_assets a
+     join public.testimonial_submissions s on s.id = a.submission_id
+     where a.submission_id = '00000000-0000-4000-8000-00000000fa07'
+     group by s.upload_attempt_count));
+
+  -- The ledger CHECK backs the same limit independently of the RPCs.
+  perform pg_temp.try_sql('23 attempts', 'a fourth attempt number is refused by CHECK',
+    'blocked-23514',
+    $q$insert into public.testimonial_provider_assets
+         (submission_id, attempt_no, provider, media_type, environment_marker,
+          opaque_reference, reservation_expires_at)
+       values ('00000000-0000-4000-8000-00000000fa07', 4, 'cloudflare_images', 'image',
+               'preview', '11111111111111111111111111111111', now() + interval '30 minutes')$q$);
+end $$;
+
+-- ===========================================================================
+-- SECTION 24 — an orphaned provider asset is recorded, never usable
+-- ===========================================================================
+do $$
+declare
+  v_ledger uuid;
+  v_status text;
+  n int;
+begin
+  perform pg_temp.act_as_ambient();
+
+  -- A reservation whose provider call succeeded but whose attachment failed.
+  insert into public.testimonial_provider_assets
+    (submission_id, attempt_no, provider, media_type, environment_marker,
+     opaque_reference, reservation_expires_at)
+  values
+    ('00000000-0000-4000-8000-00000000fa02', 2, 'cloudflare_images', 'image',
+     'production', '22222222222222222222222222222222', now() + interval '30 minutes')
+  returning id into v_ledger;
+
+  select r.deletion_status into v_status
+  from public.record_orphaned_testimonial_provider_asset(
+    v_ledger, 'cloudflare_images', 'cf-orphan-1', 'failed') r;
+  perform pg_temp.record('24 orphans', 'the provider identifier is durably recorded', 'failed', v_status);
+
+  -- INERT: superseded, failed, orphaned, never validated.
+  perform pg_temp.record('24 orphans', 'the orphan row is superseded, failed and never validated', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where id = v_ledger and superseded_at is not null and failed_at is not null
+       and orphaned_at is not null and validated_at is null)::text);
+
+  -- It does not hold the active slot, so a later attempt is unaffected.
+  select count(*) into n from public.testimonial_provider_assets
+  where submission_id = '00000000-0000-4000-8000-00000000fa02'
+    and superseded_at is null and failed_at is null and deleted_at is null;
+  perform pg_temp.record('24 orphans', 'an orphan does not occupy the active slot', '0', n::text);
+
+  -- IDEMPOTENT.
+  select r.provider_asset_id into v_status
+  from public.record_orphaned_testimonial_provider_asset(
+    v_ledger, 'cloudflare_images', 'cf-orphan-1', 'failed') r;
+  perform pg_temp.record('24 orphans', 'recording the same orphan twice is a no-op', 'cf-orphan-1', v_status);
+
+  -- A CONFLICTING identifier is refused: that would mean losing track of which
+  -- asset the row describes.
+  perform pg_temp.try_sql('24 orphans', 'a conflicting provider identifier is refused',
+    'blocked-42501',
+    format($q$select * from public.record_orphaned_testimonial_provider_asset(
+              %L, 'cloudflare_images', 'cf-orphan-DIFFERENT', 'failed')$q$, v_ledger));
+
+  -- It can never be validated or published.
+  select count(*) into n
+  from public.validate_testimonial_provider_asset(
+    'cloudflare_images', 'cf-orphan-1', '22222222222222222222222222222222',
+    true, null, null, null, null, 'uploaded', 'evt-orphan') r
+  where r.validated;
+  perform pg_temp.record('24 orphans', 'an orphan can never be validated', '0', n::text);
+
+  -- The sweeper can see it, and says why.
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets(200) d
+  where d.provider_asset_id = 'cf-orphan-1' and d.reason = 'orphaned';
+  perform pg_temp.record('24 orphans', 'the sweeper lists the orphan for deletion', '1', n::text);
+
+  -- Cleanup is idempotent: not_found counts as deleted, because the goal is
+  -- that the provider is no longer storing it.
+  perform public.mark_testimonial_provider_asset_deleted(v_ledger, 'not_found');
+  perform pg_temp.record('24 orphans', 'not_found resolves the orphan', '1',
+    (select count(*) from public.testimonial_provider_assets
+     where id = v_ledger and deleted_at is not null)::text);
+
+  select count(*) into n
+  from public.list_deletable_testimonial_provider_assets(200) d
+  where d.provider_asset_id = 'cf-orphan-1';
+  perform pg_temp.record('24 orphans', 'a resolved orphan leaves the sweep list', '0', n::text);
+
+  -- A validated attempt can never be reclassified as an orphan.
+  perform pg_temp.try_sql('24 orphans', 'a validated attempt cannot be recorded as an orphan',
+    'blocked-42501',
+    format($q$select * from public.record_orphaned_testimonial_provider_asset(
+              (select id from public.testimonial_provider_assets
+               where provider_asset_id = 'cf-image-fa06'),
+              'cloudflare_images', 'cf-image-fa06', 'failed')$q$));
+
+  -- Restore the gate the fixtures opened in section 23.
+  update public.experiences set testimonial_capture_enabled = false
+  where id = '00000000-0000-4000-8000-00000000ea01';
+
+  select count(*) into n from public.experiences where testimonial_capture_enabled;
+  perform pg_temp.record('24 orphans', 'the capture gate is closed again after the fixtures', '0', n::text);
+end $$;
+
+-- ===========================================================================
 -- RESULTS
 -- ===========================================================================
 select pg_temp.act_as_ambient();
