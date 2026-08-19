@@ -9,7 +9,7 @@
 //
 // Run with: node supabase/tests/verify_migrations_structure.mjs
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -2266,6 +2266,113 @@ assert(
   assert(
     !/\bto (anon|authenticated)\b/.test(poster),
     "the poster migration grants nothing to a browser role",
+  );
+}
+
+// ===========================================================================
+// The SQL suite's CALL SITES, not just the migrations.
+//
+// A signature change could break the transactional suite invisibly: this file
+// read migration text and verify-admin-auth.mjs read application source, and
+// NEITHER read supabase/tests/*.sql. That is how
+// list_deletable_testimonial_provider_assets(200) survived the Phase 1
+// migration and aborted a live run on the first section that reached it.
+//
+// Arity alone would not have caught it either. p_limit is defaulted, so a
+// one-argument call is arity-legal and only fails on TYPE: an integer literal
+// cannot bind to p_environment text. These guards therefore match the shape of
+// the argument, not the count.
+//
+// Comments are stripped first. The corrected call sites are documented in
+// prose that names the old form, and matching that prose would be the exact
+// false pass this project has produced five times.
+// ===========================================================================
+/** Same shape as the helper in scripts/verify-admin-auth.mjs: block comments
+ *  and line comments removed, so an assertion cannot match its own rationale. */
+const stripSqlComments = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/--[^\n]*/g, "");
+
+const sqlSuites = ["admin_authorization_check.sql", "testimonial_security_check.sql"]
+  .map((name) => join(__dirname, name))
+  .filter((path) => existsSync(path));
+
+assert(sqlSuites.length > 0, "the SQL suites were located");
+
+for (const suitePath of sqlSuites) {
+  const suiteName = suitePath.split(/[\\/]/).pop();
+  const executable = stripSqlComments(readFileSync(suitePath, "utf8"));
+
+  // --- environment-first functions ----------------------------------------
+  for (const fn of [
+    "list_deletable_testimonial_provider_assets",
+    "list_purgeable_testimonial_submissions",
+  ]) {
+    // A numeric first argument is the legacy one-argument form.
+    assert(
+      !new RegExp("public\\." + fn + "\\(\\s*\\d").test(executable),
+      `${suiteName}: no call to ${fn} passes a number first (the legacy one-argument form)`,
+    );
+    // ...and the reverse order, which is arity-legal and type-illegal too.
+    assert(
+      !new RegExp("public\\." + fn + "\\(\\s*\\d+\\s*,").test(executable),
+      `${suiteName}: no call to ${fn} passes limit before environment`,
+    );
+    // Every remaining call must lead with something that can bind to text:
+    // a quoted literal, NULL, or a variable. Checked positively so the two
+    // negatives above cannot pass merely because no call exists at all.
+    const calls = executable.match(new RegExp("public\\." + fn + "\\([^)]*", "g")) ?? [];
+    for (const call of calls) {
+      const first = call.slice(call.indexOf("(") + 1).trim();
+      assert(
+        /^('|null\b|v_|p_)/i.test(first),
+        `${suiteName}: ${fn} is called with a text-compatible environment first (saw: ${first.slice(0, 24)})`,
+      );
+    }
+  }
+
+  // --- legacy signatures superseded by the five pilot migrations ----------
+  //
+  // Each entry is a form that RESOLVED before Phase 1 and does not now. They
+  // are matched against executable SQL only; a to_regprocedure() string
+  // asserting that a signature no longer resolves is legitimate and must not
+  // trip these.
+  const withoutCatalogStrings = executable.replace(/to_regprocedure\([^)]*\)[^)]*\)/g, "");
+  for (const [pattern, description] of [
+    ["public\\.list_deletable_testimonial_provider_assets\\(\\s*\\d+\\s*\\)", "the dropped (integer) sweep signature"],
+    ["public\\.create_testimonial_intent\\(\\s*\\)", "a zero-argument intent call"],
+    ["public\\.mark_testimonial_provider_asset_deleted\\(\\s*\\)", "a zero-argument deletion mark"],
+  ]) {
+    assert(
+      !new RegExp(pattern).test(withoutCatalogStrings),
+      `${suiteName}: no executable use of ${description}`,
+    );
+  }
+}
+
+// --- the suite still proves the dropped intent signature is gone -----------
+//
+// Positive, and deliberately separate from the negatives above: those would
+// all pass against a suite that had simply deleted its coverage.
+{
+  const adminSuite = stripSqlComments(
+    readFileSync(join(__dirname, "admin_authorization_check.sql"), "utf8"),
+  );
+  assert(
+    /to_regprocedure\('public\.create_testimonial_intent\(uuid, public\.testimonial_media_type\)'\) is null/.test(
+      adminSuite,
+    ),
+    "the SQL suite still asserts the two-argument intent signature NO LONGER resolves",
+  );
+  assert(
+    /to_regprocedure\('public\.create_testimonial_intent\(uuid, public\.testimonial_media_type, boolean\)'\) is not null/.test(
+      adminSuite,
+    ),
+    "the SQL suite still asserts the three-argument intent signature DOES resolve",
+  );
+  assert(
+    /list_deletable_testimonial_provider_assets\('production', 200\)/.test(adminSuite) &&
+      /list_deletable_testimonial_provider_assets\('preview', 200\)/.test(adminSuite),
+    "the SQL suite exercises the sweep in BOTH environments, so the filter is proved in both directions",
   );
 }
 

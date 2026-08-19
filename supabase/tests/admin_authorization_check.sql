@@ -1263,6 +1263,7 @@ declare
   v_ndefaults int;
   v_argtypes  oid[];
   v_argnames  text[];
+  v_defexpr   text;
 begin
   perform pg_temp.act_as_ambient();
 
@@ -1359,16 +1360,19 @@ begin
     into v_nargs, v_ndefaults, v_argtypes, v_argnames
     from pg_proc p where p.oid = v_oid;
 
-    -- (2) Exactly two INPUT arguments. pronargs counts inputs only, so the
-    -- RETURNS TABLE columns cannot pad this number.
-    perform pg_temp.record('15 signature', 'it declares exactly two input arguments', '2', v_nargs::text);
-    perform pg_temp.record('15 signature', 'proargtypes holds exactly two entries', '2',
+    -- (2) Exactly THREE input arguments as of 20260821090000, which added the
+    -- 18+ attestation. pronargs counts inputs only, so the RETURNS TABLE
+    -- columns cannot pad this number.
+    perform pg_temp.record('15 signature', 'it declares exactly three input arguments', '3', v_nargs::text);
+    perform pg_temp.record('15 signature', 'proargtypes holds exactly three entries', '3',
       coalesce(array_length(v_argtypes, 1), 0)::text);
 
     -- (3) Argument NAMES, in order. proargnames spans IN then OUT names when a
-    -- function returns a table, so this is sliced to the two inputs.
-    perform pg_temp.record('15 signature', 'the input argument names are exactly p_visitor_id, p_media_type',
-      '{p_visitor_id,p_media_type}', coalesce(v_argnames[1:2]::text, '<null>'));
+    -- function returns a table, so this is sliced to the inputs.
+    perform pg_temp.record('15 signature',
+      'the input argument names are exactly p_visitor_id, p_media_type, p_attested_submitter_adult',
+      '{p_visitor_id,p_media_type,p_attested_submitter_adult}',
+      coalesce(v_argnames[1:3]::text, '<null>'));
 
     -- (4) Argument TYPES, by OID. Not by printed name: an enum of the same
     -- name in another schema has a different OID and is rejected here.
@@ -1381,6 +1385,9 @@ begin
     perform pg_temp.record('15 signature', 'argument 2 is the public.testimonial_media_type enum OID',
       coalesce((to_regtype('public.testimonial_media_type'))::oid::text, '<unresolved>'),
       coalesce(v_argtypes[2]::text, '<null>'));
+    perform pg_temp.record('15 signature', 'argument 3 is boolean',
+      coalesce((to_regtype('boolean'))::oid::text, '<unresolved>'),
+      coalesce(v_argtypes[3]::text, '<null>'));
 
     -- ...and that OID really is an enum in public, so the assertion above is
     -- anchored to a real enum rather than to whatever the name resolves to.
@@ -1389,9 +1396,36 @@ begin
                 from pg_type t join pg_namespace tns on tns.oid = t.typnamespace
                 where t.oid = v_argtypes[2]), '<unresolved>'));
 
-    -- (5) No defaulted arguments - a default would let a caller omit the
-    -- verified visitor id and have the server supply one.
-    perform pg_temp.record('15 signature', 'no argument carries a default', '0', v_ndefaults::text);
+    -- (5) Defaults. This previously asserted that NO argument carries one,
+    -- because a default on the visitor id or the media type would let a caller
+    -- omit a value the server then invents. That reasoning is unchanged and is
+    -- asserted more precisely below - it is the REQUIRED count that carries
+    -- it, not the absence of every default.
+    --
+    -- 20260821090000 gives p_attested_submitter_adult a default of false. That
+    -- is a fail-closed default, not a convenience one: a caller that has not
+    -- been updated to collect the attestation is REFUSED by the check inside
+    -- the function rather than having adulthood asserted on the visitor's
+    -- behalf. Dropping the old assertion without replacing it would have
+    -- silently retired a real guard, so it is replaced by four.
+    perform pg_temp.record('15 signature',
+      'the visitor id and media type are REQUIRED - no caller can omit either',
+      '2', (v_nargs - v_ndefaults)::text);
+    perform pg_temp.record('15 signature', 'exactly one argument carries a default', '1',
+      v_ndefaults::text);
+    -- Defaults are trailing in PostgreSQL, so the defaulted names are the last
+    -- v_ndefaults of the inputs. Naming them pins WHICH argument may be
+    -- omitted; a default that migrated onto p_visitor_id would fail here.
+    perform pg_temp.record('15 signature', 'the only defaulted argument is the 18+ attestation',
+      '{p_attested_submitter_adult}',
+      coalesce(v_argnames[v_nargs - v_ndefaults + 1:v_nargs]::text, '<null>'));
+
+    select pg_get_expr(p.proargdefaults, 0) into v_defexpr
+    from pg_proc p where p.oid = v_oid;
+    -- FALSE, not true. This is the difference between a stale caller being
+    -- refused and a stale caller silently attesting on someone's behalf.
+    perform pg_temp.record('15 signature', 'that default is false, so a stale caller is refused',
+      'true', (coalesce(v_defexpr, '') ~* '\mfalse\M')::text);
 
     -- No VARIADIC tail, and no OUT/INOUT smuggled into the input list:
     -- proargmodes is NULL when every argument is plain IN plus table columns.
@@ -2411,8 +2445,13 @@ begin
   perform pg_temp.record('24 orphans', 'an orphan can never be validated', '0', n::text);
 
   -- The sweeper can see it, and says why.
+  --
+  -- The environment argument is REQUIRED as of 20260821090000 and comes first.
+  -- 'production' is not arbitrary: the ledger fixture above is inserted with
+  -- environment_marker = 'production', so a Preview sweep must not return it -
+  -- which section 29 asserts in both directions.
   select count(*) into n
-  from public.list_deletable_testimonial_provider_assets(200) d
+  from public.list_deletable_testimonial_provider_assets('production', 200) d
   where d.provider_asset_id = 'cf-orphan-1' and d.reason = 'orphaned';
   perform pg_temp.record('24 orphans', 'the sweeper lists the orphan for deletion', '1', n::text);
 
@@ -2424,7 +2463,7 @@ begin
      where id = v_ledger and deleted_at is not null)::text);
 
   select count(*) into n
-  from public.list_deletable_testimonial_provider_assets(200) d
+  from public.list_deletable_testimonial_provider_assets('production', 200) d
   where d.provider_asset_id = 'cf-orphan-1';
   perform pg_temp.record('24 orphans', 'a resolved orphan leaves the sweep list', '0', n::text);
 
