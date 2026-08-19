@@ -17,7 +17,6 @@ import {
   type UploadDestination,
 } from "@/lib/testimonials/provider-assets";
 import { finalizeUpload, type FinalizeState } from "@/lib/testimonials/finalize";
-import { pendingSchemaRpc } from "@/lib/testimonials/pending-schema-rpc";
 
 /**
  * Visitor-facing testimonial actions.
@@ -169,7 +168,7 @@ export async function createTestimonialIntentAction(
   // supplied from here, and neither can be supplied by a browser. The 18+
   // attestation IS supplied, because it is a statement the visitor made and
   // nobody else can make it for them.
-  const { data, error } = await pendingSchemaRpc()
+  const { data, error } = await createSecretClient()
     .rpc("create_testimonial_intent", {
       p_visitor_id: gate.visitorId,
       p_media_type: mediaType,

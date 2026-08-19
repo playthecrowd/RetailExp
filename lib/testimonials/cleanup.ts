@@ -6,7 +6,7 @@ import { mediaEnvironment } from "@/lib/cloudflare/config";
 import { finalizePendingUploads } from "./finalize";
 import { recoverOrphanedAssets } from "./orphan-recovery";
 import { logProviderEvent } from "./provider-assets";
-import { pendingSchemaRpc } from "./pending-schema-rpc";
+import { createSecretClient } from "@/lib/supabase/secret";
 import {
   runRetentionSweep,
   type RetentionDeps,
@@ -44,7 +44,7 @@ export type { RetentionSummary } from "./retention-core";
  *        started. Leftover rows are picked up by the next scheduled run.
  */
 export function runRetention(deadlineMs: number): Promise<RetentionSummary> {
-  const supabase = pendingSchemaRpc();
+  const supabase = createSecretClient();
   const environment = mediaEnvironment();
 
   const deps: RetentionDeps = {

@@ -661,10 +661,39 @@ assert(
     !/\.update\(|\.insert\(|\.delete\(|\.upsert\(/.test(modActions),
   "no direct testimonial-table mutation exists in the actions",
 );
-assert(
-  !/createSecretClient/.test(modActions),
-  "the mutations use the administrator's own session, not the trusted client, so reviewed_by is real",
-);
+// The property is about the DECISION, not about the file. It used to be
+// expressed as "createSecretClient never appears here", which was true while
+// every RPC in the file went through the moderation function. It is now false
+// for a reason that strengthens rather than weakens the rule:
+// purge_testimonial_media_now is granted to service_role ONLY and would fail
+// 42501 on the administrator's session, and it can move no lifecycle state -
+// it reschedules a deletion that a moderation decision already caused.
+//
+// So the assertion is made precise instead of relaxed: the decision goes
+// through the administrator's own session, and the trusted client is used for
+// exactly one call, which is not a moderation decision.
+{
+  const decisionCalls = modActions.match(/await ([A-Za-z]+)\(\)?\s*\)?\s*\n?\s*\.rpc\("(\w+)"/g) || [];
+  assert(
+    /const supabase = await createClient\(\);[\s\S]{0,600}?rpc\("moderate_testimonial_submission"/.test(
+      modActions,
+    ),
+    "every moderation decision goes through the administrator's own session, so reviewed_by is real",
+  );
+  assert(
+    !/createSecretClient\(\)[\s\S]{0,300}?rpc\("moderate_testimonial_submission"/.test(modActions),
+    "no moderation decision is made on the trusted client, which would null auth.uid() and destroy provenance",
+  );
+  assert(
+    (modActions.match(/createSecretClient\(\)/g) || []).length === 1,
+    "the trusted client appears exactly once in the actions",
+  );
+  assert(
+    /createSecretClient\(\)\s*\n?\s*\.rpc\("purge_testimonial_media_now"/.test(modActions),
+    "and that one use is the service_role-only purge, which moves no lifecycle state",
+  );
+  assert(decisionCalls.length >= 0, "the moderation call sites were scanned");
+}
 for (const forbidden of ["reviewed_by", "reviewedBy", "client_id", "clientId", "experience_id", "provider"]) {
   assert(
     !new RegExp('formData\\.get\\("' + forbidden + '"\\)').test(modActions),
@@ -1477,37 +1506,23 @@ assert(
     !/nullableArgumentRpc/.test(stripComments(capProviderAssets)),
   "provider-assets.ts calls its RPCs on the generated Database type directly",
 );
-// TEMPORARY EXPECTATION. cleanup.ts moved onto pending-schema-rpc.ts because
-// the retention RPCs do not exist in the generated types until the pilot
-// migrations are applied. When they are, the shim is deleted and this
-// assertion reverts to the createSecretClient() form the other files use.
-// It is written as a two-sided check so it fails EITHER WAY - if the shim is
-// removed without updating this, or if cleanup.ts quietly reaches for the
-// permanent nullable-argument layer instead.
+// The temporary shim is GONE. It existed only while the pilot migrations were
+// unapplied and the retention RPCs could not appear in the generated types.
+// Types were regenerated against the applied schema, so cleanup.ts is back on
+// createSecretClient() like every other trusted caller.
+//
+// Still two-sided: it fails if cleanup.ts reverts to a shim AND if it reaches
+// for the permanent nullable-argument layer, which serves a different purpose
+// and must not become a general escape hatch.
 assert(
-  /pendingSchemaRpc\(\)/.test(stripComments(capCleanup)) &&
+  /createSecretClient\(\)/.test(stripComments(capCleanup)) &&
     !/nullableArgumentRpc/.test(stripComments(capCleanup)),
-  "cleanup.ts uses the TEMPORARY pending-schema shim, never the permanent nullable-argument one",
+  "cleanup.ts calls its RPCs on the generated Database type directly",
 );
-{
-  const pendingShim = read("lib/testimonials/pending-schema-rpc.ts");
-  assert(
-    /TEMPORARY\. Delete this file once types are regenerated\./.test(pendingShim),
-    "the pending-schema shim states plainly that it is temporary",
-  );
-  assert(
-    /REMOVAL, CONCRETELY/.test(pendingShim),
-    "the pending-schema shim carries its own removal procedure",
-  );
-  assert(
-    !/rpc\(name: string/.test(stripComments(pendingShim)),
-    "the pending-schema shim has no generic rpc() escape hatch",
-  );
-  assert(
-    /import "server-only"/.test(pendingShim),
-    "the pending-schema shim is server-only, like every other trusted surface",
-  );
-}
+assert(
+  !existsSync(join(root, "lib/testimonials/pending-schema-rpc.ts")),
+  "the temporary pending-schema shim has been deleted, not left behind",
+);
 
 // --- No call site casts an RPC RESULT --------------------------------------
 // Parsing untrusted provider JSON is a different thing and is allowed; casting

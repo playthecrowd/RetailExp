@@ -12,31 +12,6 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "14.15"
   }
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       brand_settings: {
@@ -308,6 +283,7 @@ export type Database = {
           title: string
           updated_at: string
           version: number
+          video360_asset_id: string | null
         }
         Insert: {
           branch_code?: string | null
@@ -336,6 +312,7 @@ export type Database = {
           title: string
           updated_at?: string
           version?: number
+          video360_asset_id?: string | null
         }
         Update: {
           branch_code?: string | null
@@ -364,6 +341,7 @@ export type Database = {
           title?: string
           updated_at?: string
           version?: number
+          video360_asset_id?: string | null
         }
         Relationships: [
           {
@@ -418,6 +396,13 @@ export type Database = {
           {
             foreignKeyName: "content_nodes_thumbnail_asset_id_fkey"
             columns: ["thumbnail_asset_id"]
+            isOneToOne: false
+            referencedRelation: "media_assets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "content_nodes_video360_asset_id_fkey"
+            columns: ["video360_asset_id"]
             isOneToOne: false
             referencedRelation: "media_assets"
             referencedColumns: ["id"]
@@ -1007,12 +992,14 @@ export type Database = {
           attached_at: string | null
           attempt_no: number
           deleted_at: string | null
+          deletion_attempt_count: number
           deletion_requested_at: string | null
           deletion_status: string | null
           environment_marker: string
           failed_at: string | null
           failure_reason: string | null
           id: string
+          last_deletion_attempt_at: string | null
           media_type: Database["public"]["Enums"]["testimonial_media_type"]
           opaque_reference: string
           orphaned_at: string | null
@@ -1028,12 +1015,14 @@ export type Database = {
           attached_at?: string | null
           attempt_no: number
           deleted_at?: string | null
+          deletion_attempt_count?: number
           deletion_requested_at?: string | null
           deletion_status?: string | null
           environment_marker: string
           failed_at?: string | null
           failure_reason?: string | null
           id?: string
+          last_deletion_attempt_at?: string | null
           media_type: Database["public"]["Enums"]["testimonial_media_type"]
           opaque_reference: string
           orphaned_at?: string | null
@@ -1049,12 +1038,14 @@ export type Database = {
           attached_at?: string | null
           attempt_no?: number
           deleted_at?: string | null
+          deletion_attempt_count?: number
           deletion_requested_at?: string | null
           deletion_status?: string | null
           environment_marker?: string
           failed_at?: string | null
           failure_reason?: string | null
           id?: string
+          last_deletion_attempt_at?: string | null
           media_type?: Database["public"]["Enums"]["testimonial_media_type"]
           opaque_reference?: string
           orphaned_at?: string | null
@@ -1101,6 +1092,7 @@ export type Database = {
         Row: {
           attested_no_minors: boolean
           attested_subjects_consented: boolean
+          attested_submitter_adult: boolean
           auth_user_id: string | null
           caption: string | null
           capture_mode: string
@@ -1162,6 +1154,7 @@ export type Database = {
         Insert: {
           attested_no_minors?: boolean
           attested_subjects_consented?: boolean
+          attested_submitter_adult?: boolean
           auth_user_id?: string | null
           caption?: string | null
           capture_mode?: string
@@ -1223,6 +1216,7 @@ export type Database = {
         Update: {
           attested_no_minors?: boolean
           attested_subjects_consented?: boolean
+          attested_submitter_adult?: boolean
           auth_user_id?: string | null
           caption?: string | null
           capture_mode?: string
@@ -1367,6 +1361,7 @@ export type Database = {
         Row: {
           attested_no_minors: boolean | null
           attested_subjects_consented: boolean | null
+          attested_submitter_adult: boolean | null
           caption: string | null
           client_id: string | null
           consent_scope: string | null
@@ -1408,6 +1403,7 @@ export type Database = {
         Insert: {
           attested_no_minors?: boolean | null
           attested_subjects_consented?: boolean | null
+          attested_submitter_adult?: boolean | null
           caption?: string | null
           client_id?: string | null
           consent_scope?: string | null
@@ -1449,6 +1445,7 @@ export type Database = {
         Update: {
           attested_no_minors?: boolean | null
           attested_subjects_consented?: boolean | null
+          attested_submitter_adult?: boolean | null
           caption?: string | null
           client_id?: string | null
           consent_scope?: string | null
@@ -1606,6 +1603,7 @@ export type Database = {
       }
       create_testimonial_intent: {
         Args: {
+          p_attested_submitter_adult?: boolean
           p_media_type: Database["public"]["Enums"]["testimonial_media_type"]
           p_visitor_id: string
         }
@@ -1614,6 +1612,13 @@ export type Database = {
           submission_id: string
           upload_attempt_count: number
           upload_expires_at: string
+          upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
+        }[]
+      }
+      expire_testimonial_upload_intents: {
+        Args: { p_limit?: number }
+        Returns: {
+          submission_id: string
           upload_status: Database["public"]["Enums"]["testimonial_upload_status"]
         }[]
       }
@@ -1628,8 +1633,9 @@ export type Database = {
       is_client_owner: { Args: { check_client_id: string }; Returns: boolean }
       is_platform_admin: { Args: never; Returns: boolean }
       list_deletable_testimonial_provider_assets: {
-        Args: { p_limit?: number }
+        Args: { p_environment: string; p_limit?: number }
         Returns: {
+          deletion_attempt_count: number
           environment_marker: string
           ledger_id: string
           provider: string
@@ -1653,9 +1659,18 @@ export type Database = {
           validation_status: Database["public"]["Enums"]["testimonial_validation_status"]
         }[]
       }
+      list_purgeable_testimonial_submissions: {
+        Args: { p_environment: string; p_limit?: number }
+        Returns: {
+          environment_marker: string
+          provider_assets_seen: number
+          submission_id: string
+        }[]
+      }
       mark_testimonial_provider_asset_deleted: {
         Args: { p_ledger_id: string; p_status: string }
         Returns: {
+          deletion_attempt_count: number
           deletion_status: string
           ledger_id: string
         }[]
@@ -1674,6 +1689,13 @@ export type Database = {
           submission_id: string
         }[]
       }
+      purge_testimonial_media_now: {
+        Args: { p_reason: string; p_submission_id: string }
+        Returns: {
+          media_purge_after: string
+          submission_id: string
+        }[]
+      }
       record_orphaned_testimonial_provider_asset: {
         Args: {
           p_deletion_status: string
@@ -1685,6 +1707,14 @@ export type Database = {
           deletion_status: string
           ledger_id: string
           provider_asset_id: string
+        }[]
+      }
+      record_testimonial_media_purged: {
+        Args: { p_status: string; p_submission_id: string }
+        Returns: {
+          media_deleted_at: string
+          provider_deletion_status: string
+          submission_id: string
         }[]
       }
       record_testimonial_provider_progress: {
@@ -1910,9 +1940,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       client_status: ["active", "inactive", "archived"],

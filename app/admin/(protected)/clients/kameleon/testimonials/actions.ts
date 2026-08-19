@@ -12,7 +12,7 @@ import {
   createModerationPreview,
   type SignedModerationPreview,
 } from "@/lib/testimonials/moderation";
-import { pendingSchemaRpc } from "@/lib/testimonials/pending-schema-rpc";
+import { createSecretClient } from "@/lib/supabase/secret";
 import { MODERATION_ROUTE, GALLERY_ROUTE } from "@/lib/testimonials/routes";
 
 /**
@@ -229,7 +229,7 @@ export async function removeSubmissionAction(
 
   let purgedNow = false;
   if (isImmediatePurgeReason(reason)) {
-    const { error: purgeError } = await pendingSchemaRpc()
+    const { error: purgeError } = await createSecretClient()
       .rpc("purge_testimonial_media_now", {
         p_submission_id: submissionId,
         p_reason: reason,
