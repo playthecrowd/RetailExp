@@ -16,6 +16,7 @@ import {
   createUploadDestination,
   type UploadDestination,
 } from "@/lib/testimonials/provider-assets";
+import { finalizeUpload, type FinalizeState } from "@/lib/testimonials/finalize";
 
 /**
  * Visitor-facing testimonial actions.
@@ -40,10 +41,11 @@ import {
  * trust: it re-resolves the id against auth.users, requires is_anonymous to
  * be explicitly true, and re-checks enrollment, tenancy and every gate.
  *
- * Phase 4B stops truthfully before the upload step. There is no action here
- * that returns an upload destination, marks an upload complete, or writes a
- * provider identifier, because Cloudflare is not integrated. Fabricating any
- * of those would create submissions indistinguishable from real ones.
+ * NO ACTION HERE MARKS AN UPLOAD COMPLETE ON THE BROWSER'S SAY-SO.
+ * finalizeTestimonialUploadAction below is a PROMPT to go and look, not a
+ * report to be believed: the decision is made by an authenticated read from
+ * Cloudflare inside lib/testimonials/finalize.ts, and no provider identifier
+ * is accepted from, or returned to, the browser at any point.
  */
 
 const GENERIC_FAILURE = "That didn't work. Please try again.";
@@ -218,6 +220,38 @@ export async function requestUploadDestinationAction(
   if (!result.ok) return failure();
 
   return { status: "ok", message: null, data: result.destination };
+}
+
+/**
+ * Finalizes an upload the browser believes it has completed.
+ *
+ * WHY THIS EXISTS AT ALL, AND ONLY FOR ONE OF THE TWO MEDIA TYPES' SAKE
+ *   A video is reconciled by the signed Stream webhook. Cloudflare Images
+ *   publishes no webhook this codebase can verify, so a photo had NO path to
+ *   validation - reconcileImage() sat uncalled since Phase 4C and every image
+ *   submission expired unvalidated. This is that path.
+ *
+ *   Video is accepted here too, as a fallback for a webhook that never
+ *   arrives. It costs one authenticated provider read and removes a silent
+ *   stall; the webhook remains the primary route and neither can produce a
+ *   different outcome, because both end at the same trusted reconciliation.
+ *
+ * The visitor learns one of three words and never a reason. `processing` is
+ * the only one worth retrying.
+ */
+export async function finalizeTestimonialUploadAction(
+  submissionId: string,
+): Promise<CaptureActionResult<{ state: FinalizeState }>> {
+  const gate = await requireEnabledVisitor();
+  if (!gate.ok) return gate.result;
+  if (!UUID_PATTERN.test(submissionId)) return failure();
+
+  // gate.visitorId is the id verified against the visitor's own session. It is
+  // re-checked against the submission's owner inside finalizeUpload, so
+  // reaching this line is not by itself authority over this submission.
+  const state = await finalizeUpload(gate.visitorId, submissionId);
+
+  return { status: "ok", message: null, data: { state } };
 }
 
 export async function retryTestimonialUploadAction(

@@ -16,7 +16,11 @@ import { timingSafeEqual } from "node:crypto";
  *   recorded but never executed is worse than none: it reads as a promise in
  *   the schema and in any Privacy page derived from it.
  *
- * TWO TIERS, IN THIS ORDER, ALWAYS
+ * THREE TIERS, IN THIS ORDER, ALWAYS
+ *   0. EXPIRY moves intents whose upload window closed long ago to abandoned,
+ *      which is what stamps media_purge_after and therefore what makes their
+ *      provider media visible to tier 1 at all. Without it a visitor who
+ *      closes the tab mid-upload leaves an image nothing can ever delete.
  *   1. The LEDGER sweep deletes provider assets and records each outcome.
  *   2. The SUBMISSION purge records that a submission's media is gone.
  *
@@ -28,6 +32,7 @@ import { timingSafeEqual } from "node:crypto";
  */
 
 /** The RPC clamps to 200; 50 is its default and comfortably fits one run. */
+export const EXPIRE_BATCH = 50;
 export const SWEEP_BATCH = 50;
 export const PURGE_BATCH = 50;
 
@@ -54,6 +59,8 @@ export interface PurgeableSubmission {
 }
 
 export interface RetentionDeps {
+  /** Tier 0. Returns how many intents were expired. */
+  expireIntents(limit: number): Promise<number>;
   listDeletable(limit: number): Promise<DeletableAsset[]>;
   /** Marks the START of an attempt (`pending`) or its outcome. */
   markAttempt(ledgerId: string, status: "pending" | DeletionOutcome): Promise<void>;
@@ -68,6 +75,7 @@ export interface RetentionDeps {
 }
 
 export interface RetentionSummary {
+  expired: number;
   examined: number;
   deleted: number;
   notFound: number;
@@ -81,6 +89,7 @@ export interface RetentionSummary {
 }
 
 const EMPTY: RetentionSummary = {
+  expired: 0,
   examined: 0,
   deleted: 0,
   notFound: 0,
@@ -115,6 +124,21 @@ export async function runRetentionSweep(
   deadlineMs: number,
 ): Promise<RetentionSummary> {
   const summary: RetentionSummary = { ...EMPTY };
+
+  // ---- Tier 0, before anything is listed for deletion --------------------
+  //
+  // Order matters: an intent expired here stamps media_purge_after through the
+  // lifecycle trigger, so its provider media becomes deletable in THIS run
+  // rather than the next one. Running it afterwards would work but would
+  // double every abandoned upload's time at the provider.
+  try {
+    summary.expired = await deps.expireIntents(EXPIRE_BATCH);
+    if (summary.expired > 0) deps.log("retention_expired", `count=${summary.expired}`);
+  } catch {
+    // A failure here must not stop the deletion sweep: the assets already
+    // marked for purge on earlier runs still deserve to be deleted today.
+    deps.log("retention_expire_failed");
+  }
 
   const deletable = await deps.listDeletable(SWEEP_BATCH);
 
@@ -179,7 +203,8 @@ export async function runRetentionSweep(
 
   deps.log(
     "retention_sweep",
-    `examined=${summary.examined} deleted=${summary.deleted} notfound=${summary.notFound}` +
+    `expired=${summary.expired} examined=${summary.examined}` +
+      ` deleted=${summary.deleted} notfound=${summary.notFound}` +
       ` failed=${summary.failed} purged=${summary.purged} refused=${summary.purgeRefused}`,
   );
 

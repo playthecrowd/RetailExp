@@ -7,8 +7,9 @@ import { createSecretClient } from "@/lib/supabase/secret";
  *
  * WHY IT EXISTS
  *   20260821090000_stakeholder_pilot_schema.sql adds three functions and
- *   changes the signature of two more. `supabase gen types` reads the LIVE
- *   database, so none of that can appear in lib/supabase/database.types.ts
+ *   changes the signature of two more; 20260821100000 adds a sixth.
+ *   `supabase gen types` reads the LIVE database, so none of that can appear
+ *   in lib/supabase/database.types.ts
  *   until the migration is applied — and applying it is deliberately gated on
  *   an explicit go-ahead. Without this shim the retention runtime could not be
  *   written until then, which would serialise work that has no reason to be
@@ -29,7 +30,7 @@ import { createSecretClient } from "@/lib/supabase/secret";
  *      because the shapes below are exactly what the generator will produce.
  *
  * WHAT KEEPS IT HONEST IN THE MEANTIME
- *   Five names, five shapes, no generic `rpc(name: string, …)` overload — so
+ *   Six names, six shapes, no generic `rpc(name: string, …)` overload — so
  *   it cannot be used to reach any other function, and adding a name is a
  *   visible change in review. Every type is written to match the migration's
  *   RETURNS TABLE exactly; if the generator later disagrees, step 3 turns that
@@ -41,6 +42,11 @@ import { createSecretClient } from "@/lib/supabase/secret";
  */
 
 export type MediaEnvironmentArg = "preview" | "production";
+
+export interface ExpiredIntentRow {
+  submission_id: string;
+  upload_status: string;
+}
 
 export interface DeletableAssetRow {
   ledger_id: string;
@@ -88,6 +94,11 @@ interface SingleResult<TRow> {
  * The complete surface. Nothing generic, nothing open-ended.
  */
 export interface PendingSchemaRpc {
+  rpc(
+    name: "expire_testimonial_upload_intents",
+    args: { p_limit: number },
+  ): SetResult<ExpiredIntentRow>;
+
   rpc(
     name: "list_deletable_testimonial_provider_assets",
     args: { p_environment: MediaEnvironmentArg; p_limit: number },

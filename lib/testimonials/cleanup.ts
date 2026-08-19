@@ -46,6 +46,14 @@ export function runRetention(deadlineMs: number): Promise<RetentionSummary> {
   const environment = mediaEnvironment();
 
   const deps: RetentionDeps = {
+    async expireIntents(limit) {
+      const { data, error } = await supabase.rpc("expire_testimonial_upload_intents", {
+        p_limit: limit,
+      });
+      if (error) throw new Error("expiry failed");
+      return data?.length ?? 0;
+    },
+
     async listDeletable(limit) {
       const { data, error } = await supabase.rpc("list_deletable_testimonial_provider_assets", {
         p_environment: environment,

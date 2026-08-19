@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 22, `exactly 22 migration files exist (found ${files.length})`);
+assert(files.length === 23, `exactly 23 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -2064,6 +2064,51 @@ if (appliedQueue && pilotQueue) {
 assert(
   /revoke all on public\.testimonial_moderation_queue from public, anon, authenticated;/.test(pilot),
   "the superseded queue view restates its revoke rather than trusting the preserved ACL",
+);
+
+
+// --- Expiry of abandoned upload intents -----------------------------------
+//
+// The hole this closes is not tidiness: media_purge_after is only stamped when
+// upload_status leaves initiated, and the deletion sweep reaches a submission
+// through exactly that column. An intent that never expires therefore has
+// provider media nothing can ever delete.
+const expiryRaw = readFileSync(
+  join(migrationsDir, "20260821100000_expire_testimonial_intents.sql"),
+  "utf8",
+);
+const expiry = stripPilotComments(expiryRaw);
+
+assert(
+  /where s\.id in \(/.test(expiry) && /t\.upload_status = .initiated./.test(expiry),
+  "only initiated intents are selected for expiry",
+);
+assert(
+  /set upload_status = .abandoned./.test(expiry),
+  "an expired intent moves to abandoned, which is what stamps media_purge_after",
+);
+assert(
+  !/moderation_status|published_at|media_deleted_at|provider_asset_id/.test(expiry),
+  "expiry touches no moderation state and no provider reference",
+);
+assert(
+  /t\.upload_expires_at < now\(\) - interval '15 minutes'/.test(expiry),
+  "a grace period is applied, so a slow upload finishing just past the window is not abandoned",
+);
+assert(
+  /limit greatest\(1, least\(coalesce\(p_limit, 50\), 200\)\)/.test(expiry),
+  "the expiry batch is bounded by the same clamp as every other sweep listing",
+);
+assert(
+  /revoke all on function public\.expire_testimonial_upload_intents\(integer\)/.test(expiry) &&
+    /grant execute on function public\.expire_testimonial_upload_intents\(integer\)\s*\r?\n\s*to service_role;/.test(
+      expiry,
+    ),
+  "the expiry function is trusted-tier only",
+);
+assert(
+  !/\bto (anon|authenticated)\b/.test(expiry),
+  "the expiry migration grants nothing to a browser role",
 );
 
 console.log(`\n${files.length} migration files checked.`);

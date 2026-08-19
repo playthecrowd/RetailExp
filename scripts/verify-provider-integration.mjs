@@ -737,6 +737,79 @@ function makeDeps(overrides = {}) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Upload finalization, structurally.
+//
+// finalizeUpload() reaches the database and Cloudflare, so it cannot be driven
+// by fakes from here. What CAN be checked from the text is the set of
+// properties that make it safe: comments stripped first, because this project
+// has repeatedly produced assertions that matched their own rationale.
+// ---------------------------------------------------------------------------
+console.log("\n--- upload finalization ---");
+{
+  const { readFileSync } = await import("node:fs");
+  const raw = readFileSync(join(root, "lib/testimonials/finalize.ts"), "utf8");
+  const finalize = raw
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split(String.fromCharCode(10))
+    .filter((line) => !line.trim().startsWith("//"))
+    .join(String.fromCharCode(10));
+
+  check(
+    /\.eq\("id", submissionId\)[\s\S]{0,120}?\.eq\("auth_user_id", visitorId\)/.test(finalize),
+    "ownership is asserted in the SAME query that fetches the submission, so there is no check-then-use window",
+  );
+  check(
+    finalize.indexOf('.eq("auth_user_id", visitorId)') <
+      finalize.indexOf("testimonial_provider_assets"),
+    "ownership is settled before the provider ledger is read at all",
+  );
+  check(
+    /\.is\("superseded_at", null\)/.test(finalize) &&
+      /\.is\("failed_at", null\)/.test(finalize) &&
+      /\.is\("deleted_at", null\)/.test(finalize),
+    "only the ACTIVE attempt is finalized - a superseded retry's asset is scheduled for deletion",
+  );
+  check(
+    /reconcileImage\(assetId, reference\)/.test(finalize) &&
+      /reconcileVideo\(assetId, reference\)/.test(finalize),
+    "both media types end at the same trusted reconciliation",
+  );
+  // Written as a plain negative. An earlier version of this check was a
+  // disjunction whose second half was unconditionally true, so it would have
+  // passed against a file that wrote to the database directly.
+  check(
+    !/\.update\(|\.insert\(|\.upsert\(|\.delete\(/.test(finalize),
+    "finalization performs no direct write - every state change goes through the validation RPC",
+  );
+  // The reason reaches the LOG and never a return value. Checked by looking at
+  // the return statements themselves rather than at a slice of the file, which
+  // is what an earlier version did - and that slice still contained the log
+  // call, so the assertion was testing the wrong text entirely.
+  const returns = finalize.match(/return [^;]*;/g) ?? [];
+  check(
+    returns.length > 0 && returns.every((r) => !/reason|outcome\./.test(r)),
+    "no provider failure reason is returned to the caller",
+  );
+  check(
+    /FinalizeState = "validated" \| "processing" \| "failed"/.test(finalize),
+    "the browser learns one of exactly three words",
+  );
+
+  const actions = readFileSync(
+    join(root, "app/experience/kameleon/testimonial-actions.ts"),
+    "utf8",
+  );
+  check(
+    /finalizeTestimonialUploadAction[\s\S]{0,400}?requireEnabledVisitor\(\)/.test(actions),
+    "the finalize action is behind the capture gate, so an emergency shutoff stops it too",
+  );
+  check(
+    /finalizeTestimonialUploadAction[\s\S]{0,600}?UUID_PATTERN\.test\(submissionId\)/.test(actions),
+    "the finalize action validates the submission id shape before doing any work",
+  );
+}
+
 console.log(`\n${passed} behavioural checks passed, ${failures.length} failed.`);
 if (failures.length > 0) {
   for (const failure of failures) console.error(`  FAILED: ${failure}`);

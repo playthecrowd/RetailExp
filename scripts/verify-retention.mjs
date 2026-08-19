@@ -19,6 +19,7 @@ const mod = (relative) => pathToFileURL(join(root, relative)).href;
 const {
   runRetentionSweep,
   authorizeCronRequest,
+  EXPIRE_BATCH,
   SWEEP_BATCH,
   PURGE_BATCH,
   ATTEMPT_ALERT_THRESHOLD,
@@ -53,6 +54,13 @@ function makeDeps(overrides = {}) {
       clock = value;
     },
 
+    expiredCount: 0,
+    expireThrows: false,
+    async expireIntents(limit) {
+      calls.push(["expireIntents", limit]);
+      if (deps.expireThrows) throw new Error("expiry failed");
+      return deps.expiredCount;
+    },
     async listDeletable(limit) {
       calls.push(["listDeletable", limit]);
       return deps.deletable;
@@ -141,6 +149,62 @@ check(
   authorizeCronRequest("Bearer ", "") === "unconfigured",
   "an empty secret is never matched by an empty presented value",
 );
+
+// ---------------------------------------------------------------------------
+console.log("\n--- expiry, tier 0 ---");
+//
+// Order is the whole point. An intent expired here stamps media_purge_after
+// through the lifecycle trigger, which is what makes its provider media
+// visible to the deletion sweep AT ALL. Run afterwards, every abandoned upload
+// would spend an extra cycle at the provider.
+// ---------------------------------------------------------------------------
+{
+  const deps = makeDeps();
+  deps.expiredCount = 3;
+  deps.deletable = [asset("a")];
+
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+  const names = deps.calls.map((c) => c[0]);
+
+  check(summary.expired === 3, "expired intents are counted");
+  check(names[0] === "expireIntents", "expiry runs FIRST, before anything is listed for deletion");
+  check(
+    names.indexOf("expireIntents") < names.indexOf("listDeletable"),
+    "newly expired intents are swept in the SAME run, not the next one",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_expired" && l.code === "count=3"),
+    "the expiry count is logged",
+  );
+}
+
+{
+  const deps = makeDeps();
+  deps.expiredCount = 0;
+  await runRetentionSweep(deps, FAR_FUTURE);
+  check(
+    !deps.logs.some((l) => l.event === "retention_expired"),
+    "a run that expired nothing does not log an expiry line",
+  );
+}
+
+{
+  const deps = makeDeps();
+  deps.expireThrows = true;
+  deps.deletable = [asset("a")];
+
+  const summary = await runRetentionSweep(deps, FAR_FUTURE);
+
+  check(summary.expired === 0, "a failed expiry counts nothing");
+  check(
+    deps.calls.some((c) => c[0] === "deleteAsset"),
+    "a failed expiry does NOT stop the deletion sweep - assets marked on earlier runs still deserve deleting today",
+  );
+  check(
+    deps.logs.some((l) => l.event === "retention_expire_failed"),
+    "a failed expiry is logged rather than swallowed",
+  );
+}
 
 // ---------------------------------------------------------------------------
 console.log("\n--- deletion outcomes ---");
@@ -307,6 +371,8 @@ console.log("\n--- batch limits and attention ---");
   await runRetentionSweep(deps, FAR_FUTURE);
   const [, deletableLimit] = deps.calls.find((c) => c[0] === "listDeletable");
   const [, purgeLimit] = deps.calls.find((c) => c[0] === "listPurgeable");
+  const [, expireLimit] = deps.calls.find((c) => c[0] === "expireIntents");
+  check(expireLimit === EXPIRE_BATCH, "the expiry batch is bounded by the module constant");
   check(deletableLimit === SWEEP_BATCH, "the deletable batch is bounded by the module constant");
   check(purgeLimit === PURGE_BATCH, "the purge batch is bounded by the module constant");
   check(SWEEP_BATCH <= 200, "the batch never exceeds the database function's own ceiling");
