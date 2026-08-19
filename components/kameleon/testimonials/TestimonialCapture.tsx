@@ -16,6 +16,7 @@ import {
 } from "@/lib/testimonials/limits";
 import {
   createTestimonialIntentAction,
+  finalizeTestimonialUploadAction,
   requestUploadDestinationAction,
   updateTestimonialCaptionAction,
 } from "@/app/experience/kameleon/testimonial-actions";
@@ -54,12 +55,29 @@ type Step =
   | "blocked";
 
 interface Consent {
+  /** The submitter's OWN age. Distinct from noMinors, which is about who
+   *  appears in the media — the two were conflated until the evaluation was
+   *  scoped to adults, and nothing recorded the submitter's age at all. */
+  submitterAdult: boolean;
   noMinors: boolean;
   subjectsConsented: boolean;
   galleryDisplay: boolean;
 }
 
+/** Every box starts unchecked. A pre-ticked consent box is not consent. */
+/**
+ * How many times the browser asks the server to finalize before giving up.
+ *
+ * Cloudflare needs a moment after the upload POST before an image is
+ * queryable, so the first ask can legitimately answer "processing". Five
+ * attempts two seconds apart covers that without leaving a visitor watching a
+ * spinner if something is genuinely wrong.
+ */
+const FINALIZE_ATTEMPTS = 5;
+const FINALIZE_RETRY_MS = 2000;
+
 const EMPTY_CONSENT: Consent = {
+  submitterAdult: false,
   noMinors: false,
   subjectsConsented: false,
   galleryDisplay: false,
@@ -146,7 +164,11 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
   const captionTooLong = trimmedCaption.length > MAX_CAPTION_LENGTH;
   // Every attestation must be explicitly ticked. Nothing is pre-checked, and
   // the submit control stays disabled until all three are true.
-  const consentComplete = consent.noMinors && consent.subjectsConsented && consent.galleryDisplay;
+  const consentComplete =
+    consent.submitterAdult &&
+    consent.noMinors &&
+    consent.subjectsConsented &&
+    consent.galleryDisplay;
 
   async function submit() {
     if (!consentComplete || !file || !mediaType || busy) return;
@@ -156,7 +178,7 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
 
     // 1. An intent, created server-side. Idempotent by state, so a reload
     //    mid-flow returns the existing one rather than accumulating orphans.
-    const intent = await createTestimonialIntentAction(mediaType);
+    const intent = await createTestimonialIntentAction(mediaType, consent.submitterAdult);
     if (intent.status === "error" || !intent.data) {
       setBusy(false);
       setError(intent.message);
@@ -195,6 +217,26 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
     //    not leave a caption attached to nothing.
     if (trimmedCaption.length > 0) {
       await updateTestimonialCaptionAction(intent.data.submissionId, trimmedCaption);
+    }
+
+    // 5. Finalize.
+    //
+    //    THIS IS NOT A FORMALITY FOR PHOTOS. Cloudflare Images publishes no
+    //    webhook this codebase can verify, so this call is the ONLY thing that
+    //    ever moves an image submission to valid. A video is normally
+    //    reconciled by the signed Stream webhook and this is its fallback.
+    //
+    //    The server does not believe us: it performs an authenticated read
+    //    from the provider and decides for itself. All this loop does is ask
+    //    again while the provider is still working, because an image asked for
+    //    too early answers "processing" and nothing else would ever ask again.
+    //
+    //    Bounded, and giving up is safe: an unfinalized intent is expired by
+    //    the retention sweep and its provider media deleted with it.
+    for (let attempt = 0; attempt < FINALIZE_ATTEMPTS; attempt += 1) {
+      const finalized = await finalizeTestimonialUploadAction(intent.data.submissionId);
+      if (finalized.status === "error" || finalized.data?.state !== "processing") break;
+      await new Promise((resolve) => setTimeout(resolve, FINALIZE_RETRY_MS));
     }
 
     setBusy(false);
@@ -336,6 +378,12 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
               <legend className="text-sm font-medium text-kameleon-text">Before you submit</legend>
 
               <ConsentBox
+                id="consent-adult"
+                checked={consent.submitterAdult}
+                onChange={(v) => setConsent((c) => ({ ...c, submitterAdult: v }))}
+                label="I confirm that I am 18 or older."
+              />
+              <ConsentBox
                 id="consent-no-minors"
                 checked={consent.noMinors}
                 onChange={(v) => setConsent((c) => ({ ...c, noMinors: v }))}
@@ -359,6 +407,10 @@ export function TestimonialCapture({ onCancel }: { onCancel: () => void }) {
               <p>Every submission is reviewed before it can appear. Submitting does not guarantee it will be published.</p>
               <p>If it is not approved, it is kept privately for 30 days and then deleted.</p>
               <p>This consent covers Gallery display in the Kameleon experience only.</p>
+              <p>
+                This evaluation is for adults. We do not verify anyone&rsquo;s age — the
+                confirmation above is yours to make.
+              </p>
               {/* No marketing, advertising or social-media reuse consent appears
                   here, and none may be added without a separate approved scope. */}
             </div>

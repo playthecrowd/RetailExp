@@ -26,11 +26,13 @@ import { createSecretClient } from "@/lib/supabase/secret";
  *   1. Apply the migration.
  *   2. Regenerate lib/supabase/database.types.ts.
  *   3. Delete this file and import createSecretClient() directly in
- *      lib/testimonials/cleanup.ts — the call sites need no other change,
- *      because the shapes below are exactly what the generator will produce.
+ *      lib/testimonials/cleanup.ts and
+ *      app/experience/kameleon/testimonial-actions.ts — the call sites need no
+ *      other change, because the shapes below are exactly what the generator
+ *      will produce.
  *
  * WHAT KEEPS IT HONEST IN THE MEANTIME
- *   Six names, six shapes, no generic `rpc(name: string, …)` overload — so
+ *   Seven names, seven shapes, no generic `rpc(name: string, …)` overload — so
  *   it cannot be used to reach any other function, and adding a name is a
  *   visible change in review. Every type is written to match the migration's
  *   RETURNS TABLE exactly; if the generator later disagrees, step 3 turns that
@@ -42,6 +44,14 @@ import { createSecretClient } from "@/lib/supabase/secret";
  */
 
 export type MediaEnvironmentArg = "preview" | "production";
+
+export interface TestimonialIntentRow {
+  submission_id: string;
+  media_type: "image" | "video";
+  upload_status: string;
+  upload_expires_at: string;
+  upload_attempt_count: number;
+}
 
 export interface ExpiredIntentRow {
   submission_id: string;
@@ -94,6 +104,15 @@ interface SingleResult<TRow> {
  * The complete surface. Nothing generic, nothing open-ended.
  */
 export interface PendingSchemaRpc {
+  rpc(
+    name: "create_testimonial_intent",
+    args: {
+      p_visitor_id: string;
+      p_media_type: "image" | "video";
+      p_attested_submitter_adult: boolean;
+    },
+  ): SingleResult<TestimonialIntentRow>;
+
   rpc(
     name: "expire_testimonial_upload_intents",
     args: { p_limit: number },

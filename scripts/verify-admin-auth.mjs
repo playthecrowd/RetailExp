@@ -1015,7 +1015,7 @@ console.log("\n--- Phase 4B - visitor testimonial capture ---\n");
 const capReducer = read("lib/kameleon/reducer.ts");
 const capTypes = read("lib/kameleon/types.ts");
 const capActionsUnion = read("lib/kameleon/actions.ts");
-const capPage = read("app/experience/kameleon/page.tsx");
+const capPage = read("app/experience/kameleon/(gated)/page.tsx");
 const capChoice = read("components/kameleon/screens/ExperienceChoice.tsx");
 const capUi = read("components/kameleon/testimonials/TestimonialCapture.tsx");
 const capServer = read("app/experience/kameleon/testimonial-actions.ts");
@@ -1729,19 +1729,40 @@ assert(
 
 // --- Consent ---------------------------------------------------------------
 for (const line of [
+  "I confirm that I am 18 or older.",
   "I confirm that no minors appear.",
   "I confirm that every person shown consented.",
   "I consent to displaying this submission in the Kameleon experience Gallery if approved.",
 ]) {
   assert(capUi.includes(line), "the consent step includes: " + line);
 }
+// The submitter's OWN age and "no minors appear" are separate statements. They
+// were conflated until the evaluation was scoped to adults, and nothing
+// recorded the submitter's age at all — so a single combined box would be a
+// regression, not a simplification.
 assert(
-  /const EMPTY_CONSENT: Consent = \{\s*noMinors: false,\s*subjectsConsented: false,\s*galleryDisplay: false,/.test(capUi),
+  /submitterAdult: boolean;[\s\S]{0,200}?noMinors: boolean;/.test(capUi),
+  "the submitter's own age is a DISTINCT field from whether minors appear",
+);
+assert(
+  /const EMPTY_CONSENT: Consent = \{\s*submitterAdult: false,\s*noMinors: false,\s*subjectsConsented: false,\s*galleryDisplay: false,/.test(
+    capUi,
+  ),
   "no consent box is pre-checked",
 );
 assert(
-  /consent\.noMinors && consent\.subjectsConsented && consent\.galleryDisplay/.test(capUi),
-  "submit requires all three attestations explicitly",
+  /consent\.submitterAdult &&\s*consent\.noMinors &&\s*consent\.subjectsConsented &&\s*consent\.galleryDisplay/.test(
+    capUi,
+  ),
+  "submit requires all four attestations explicitly",
+);
+assert(
+  /createTestimonialIntentAction\(mediaType, consent\.submitterAdult\)/.test(capUi),
+  "the 18+ attestation is passed to the server, not merely collected in the browser",
+);
+assert(
+  /We do not verify anyone/.test(capUi),
+  "the consent step says plainly that no age verification is performed",
 );
 assert(
   /disabled=\{!consentComplete/.test(capUi),

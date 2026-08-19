@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 23, `exactly 23 migration files exist (found ${files.length})`);
+assert(files.length === 24, `exactly 24 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -2110,6 +2110,46 @@ assert(
   !/\bto (anon|authenticated)\b/.test(expiry),
   "the expiry migration grants nothing to a browser role",
 );
+
+// --- The Gallery is closed to browser roles -------------------------------
+//
+// The access gate is application-level, so without this the evaluation was
+// closed at the ROUTE and open at the DATA: anyone holding the publishable
+// anon key could read every approved caption straight from PostgREST. The
+// media was never exposed — delivery needs a signed URL — but captions are
+// visitor-written content about an unlaunched product.
+const galleryClose = stripPilotComments(
+  readFileSync(join(migrationsDir, "20260821110000_close_gallery_to_browser_roles.sql"), "utf8"),
+);
+
+assert(
+  /revoke all on public\.testimonial_gallery_items from public, anon, authenticated;/.test(
+    galleryClose,
+  ),
+  "browser SELECT on the Gallery view is revoked",
+);
+assert(
+  !/\bto (anon|authenticated)\b/.test(galleryClose),
+  "the closing migration re-grants nothing to a browser role",
+);
+assert(
+  !/create or replace view|drop view|select .* from public\.testimonial_submissions/i.test(
+    galleryClose,
+  ),
+  "the view's definition, predicate and column list are untouched - only who may read it changes",
+);
+// The revoke must be the LAST word on this view across the whole migration
+// set, or a later file would silently reopen it.
+{
+  const grants = sql.match(
+    /(grant|revoke)[^;]*public\.testimonial_gallery_items[^;]*;/g,
+  ) ?? [];
+  assert(grants.length > 0, "gallery view privilege statements were located");
+  assert(
+    /^revoke/.test(grants[grants.length - 1]),
+    "the LAST privilege statement on the Gallery view is a revoke, so nothing reopens it later",
+  );
+}
 
 console.log(`\n${files.length} migration files checked.`);
 if (failed > 0) {

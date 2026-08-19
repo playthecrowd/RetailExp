@@ -31,6 +31,12 @@ import { type NextRequest, NextResponse } from "next/server";
  *  /admin/login redirecting to /admin/login is the classic infinite loop. */
 const PUBLIC_ADMIN_PATHS = new Set(["/admin/login", "/admin/access-denied"]);
 
+/** The stakeholder gate itself, for the same reason. */
+const PILOT_GATE_PATH = "/experience/kameleon/access";
+
+/** Presence only. See the redirect below for why this does not verify. */
+const PILOT_COOKIE = "kameleon_pilot_access";
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
@@ -56,6 +62,25 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
+
+  // The stakeholder evaluation is closed. Same division of labour as the
+  // admin branch below: this checks only whether an unlock cookie is PRESENT,
+  // never whether it is valid. Verifying it here would mean computing an HMAC
+  // on every prefetch, and would put a security decision in the one place
+  // Next's own guidance says must not be the only line of defence. The real
+  // check is app/experience/kameleon/(gated)/layout.tsx, which recomputes the
+  // derivation and redirects on a mismatch.
+  //
+  // Note what is NOT matched: /api/* is outside this proxy's matcher entirely,
+  // so the Cloudflare Stream webhook and the retention cron are unaffected. A
+  // gate that blocked them would have broken video reconciliation silently.
+  if (
+    pathname.startsWith("/experience/kameleon") &&
+    pathname !== PILOT_GATE_PATH &&
+    !request.cookies.has(PILOT_COOKIE)
+  ) {
+    return NextResponse.redirect(new URL(PILOT_GATE_PATH, request.url));
+  }
 
   if (pathname.startsWith("/admin") && !PUBLIC_ADMIN_PATHS.has(pathname)) {
     // Only the total absence of a user is acted on here. An anonymous

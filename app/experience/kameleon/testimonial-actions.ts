@@ -17,6 +17,7 @@ import {
   type UploadDestination,
 } from "@/lib/testimonials/provider-assets";
 import { finalizeUpload, type FinalizeState } from "@/lib/testimonials/finalize";
+import { pendingSchemaRpc } from "@/lib/testimonials/pending-schema-rpc";
 
 /**
  * Visitor-facing testimonial actions.
@@ -151,19 +152,28 @@ export interface TestimonialIntent {
  */
 export async function createTestimonialIntentAction(
   mediaType: CaptureMediaType,
+  attestedSubmitterAdult: boolean,
 ): Promise<CaptureActionResult<TestimonialIntent>> {
   const gate = await requireEnabledVisitor();
   if (!gate.ok) return gate.result;
 
   if (mediaType !== "image" && mediaType !== "video") return failure();
 
-  // One argument. The consent version and the environment marker are both
-  // resolved by trusted code — neither is supplied from here, and neither can
-  // be supplied by a browser.
-  const { data, error } = await createSecretClient()
+  // Strict === true. A missing, undefined or truthy-but-not-true value is NOT
+  // an attestation, and the RPC refuses anything other than true anyway — this
+  // just makes the refusal happen without a round trip.
+  if (attestedSubmitterAdult !== true) return failure();
+
+  // Two content arguments and the verified visitor id. The consent version and
+  // the environment marker are both resolved by trusted code — neither is
+  // supplied from here, and neither can be supplied by a browser. The 18+
+  // attestation IS supplied, because it is a statement the visitor made and
+  // nobody else can make it for them.
+  const { data, error } = await pendingSchemaRpc()
     .rpc("create_testimonial_intent", {
       p_visitor_id: gate.visitorId,
       p_media_type: mediaType,
+      p_attested_submitter_adult: attestedSubmitterAdult,
     })
     .single();
 
