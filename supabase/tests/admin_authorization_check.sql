@@ -758,7 +758,7 @@ insert into public.experience_users (id, experience_id, client_id, auth_user_id,
 insert into public.testimonial_submissions
   (id, client_id, experience_id, experience_user_id, auth_user_id,
    media_type, client_submission_key, consent_version, consented_at,
-   attested_no_minors, attested_subjects_consented,
+   attested_no_minors, attested_subjects_consented, attested_submitter_adult,
    upload_status, uploaded_at, validation_status, validated_at,
    provider, provider_asset_id, provider_delivery_id, provider_draft_cleared_at,
    provider_signed_urls_required, delivery_ready_at, submitted_at, caption)
@@ -766,19 +766,19 @@ values
   ('00000000-0000-4000-8000-00000000fa01','00000000-0000-4000-8000-00000000ca01',
    '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
    '00000000-0000-4000-8000-0000000000f1',
-   'image','aa-key-1','v1', now(), true, true,
+   'image','aa-key-1','v1', now(), true, true, true,
    'uploaded', now(), 'valid', now(),
    'aa-provider','aa-asset-1','aa-delivery-1', now(), true, now(), now(), 'AA caption one'),
   ('00000000-0000-4000-8000-00000000fa02','00000000-0000-4000-8000-00000000ca01',
    '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
    '00000000-0000-4000-8000-0000000000f1',
-   'image','aa-key-2','v1', now(), true, true,
+   'image','aa-key-2','v1', now(), true, true, true,
    'uploaded', now(), 'valid', now(),
    'aa-provider','aa-asset-2','aa-delivery-2', now(), true, now(), now(), 'AA caption two'),
   ('00000000-0000-4000-8000-00000000fa03','00000000-0000-4000-8000-00000000ca01',
    '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
    '00000000-0000-4000-8000-0000000000f1',
-   'image','aa-key-3','v1', now(), true, true,
+   'image','aa-key-3','v1', now(), true, true, true,
    'uploaded', now(), 'valid', now(),
    'aa-provider','aa-asset-3','aa-delivery-3', now(), true, now(), now(), 'AA caption three');
 
@@ -794,7 +794,7 @@ insert into public.experience_users (id, experience_id, client_id, auth_user_id,
 insert into public.testimonial_submissions
   (id, client_id, experience_id, experience_user_id, auth_user_id,
    media_type, client_submission_key, consent_version, consented_at,
-   attested_no_minors, attested_subjects_consented,
+   attested_no_minors, attested_subjects_consented, attested_submitter_adult,
    upload_status, uploaded_at, validation_status, validated_at,
    provider, provider_asset_id, provider_delivery_id, provider_draft_cleared_at,
    provider_signed_urls_required, delivery_ready_at, submitted_at, caption)
@@ -802,7 +802,7 @@ values
   ('00000000-0000-4000-8000-00000000fb01','00000000-0000-4000-8000-00000000cb01',
    '00000000-0000-4000-8000-00000000eb01','00000000-0000-4000-8000-00000000db01',
    '00000000-0000-4000-8000-0000000000f7',
-   'image','aa-key-b1','v1', now(), true, true,
+   'image','aa-key-b1','v1', now(), true, true, true,
    'uploaded', now(), 'valid', now(),
    'aa-provider','aa-asset-b1','aa-delivery-b1', now(), true, now(), now(), 'AA other tenant caption');
 
@@ -820,12 +820,12 @@ values
 insert into public.testimonial_submissions
   (id, client_id, experience_id, experience_user_id, auth_user_id,
    media_type, client_submission_key, consent_version, consented_at,
-   attested_no_minors, attested_subjects_consented)
+   attested_no_minors, attested_subjects_consented, attested_submitter_adult)
 values
   ('00000000-0000-4000-8000-00000000fa04','00000000-0000-4000-8000-00000000ca01',
    '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
    '00000000-0000-4000-8000-0000000000f1',
-   'image','aa-key-4','v1', now(), true, true);
+   'image','aa-key-4','v1', now(), true, true, true);
 
 -- ---------------------------------------------------------------------------
 -- FIXTURE PROMOTION — required by 20260819103000 section 2d.
@@ -1340,8 +1340,8 @@ begin
   perform pg_temp.record('15 signature', 'create_testimonial_intent is not overloaded', '1', n::text);
 
   -- ...and this exact signature is the one that resolves.
-  v_oid := to_regprocedure('public.create_testimonial_intent(uuid, public.testimonial_media_type)')::oid;
-  perform pg_temp.record('15 signature', 'the (uuid, testimonial_media_type) signature resolves', 'true',
+  v_oid := to_regprocedure('public.create_testimonial_intent(uuid, public.testimonial_media_type, boolean)')::oid;
+  perform pg_temp.record('15 signature', 'the (uuid, testimonial_media_type, boolean) signature resolves', 'true',
     (v_oid is not null)::text);
 
   if v_oid is not null then
@@ -1419,11 +1419,11 @@ begin
     $q$insert into public.testimonial_submissions
          (client_id, experience_id, experience_user_id, media_type,
           client_submission_key, consent_version, consented_at,
-          attested_no_minors, attested_subjects_consented, environment_marker)
+          attested_no_minors, attested_subjects_consented, attested_submitter_adult, environment_marker)
        values ('00000000-0000-4000-8000-00000000ca01',
                '00000000-0000-4000-8000-00000000ea01',
                '00000000-0000-4000-8000-00000000da01',
-               'image', 'forged-key', 'forged-version', now(), true, true, 'production')$q$);
+               'image', 'forged-key', 'forged-version', now(), true, true, true, 'production')$q$);
 
   -- A permanent account, likewise refused.
   perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f2');
@@ -1435,11 +1435,11 @@ begin
     $q$insert into public.testimonial_submissions
          (client_id, experience_id, experience_user_id, media_type,
           client_submission_key, consent_version, consented_at,
-          attested_no_minors, attested_subjects_consented)
+          attested_no_minors, attested_subjects_consented, attested_submitter_adult)
        values ('00000000-0000-4000-8000-00000000ca01',
                '00000000-0000-4000-8000-00000000ea01',
                '00000000-0000-4000-8000-00000000da01',
-               'image', 'forged-key-2', 'forged-version', now(), true, true)$q$);
+               'image', 'forged-key-2', 'forged-version', now(), true, true, true)$q$);
 
   -- The internal guard is not directly callable.
   perform pg_temp.act_as('00000000-0000-4000-8000-0000000000f1');
@@ -1603,12 +1603,12 @@ begin
   insert into public.testimonial_submissions
     (id, client_id, experience_id, experience_user_id, auth_user_id,
      media_type, client_submission_key, consent_version, consented_at,
-     attested_no_minors, attested_subjects_consented, environment_marker)
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult, environment_marker)
   values
     ('00000000-0000-4000-8000-00000000fa05','00000000-0000-4000-8000-00000000ca01',
      '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
      '00000000-0000-4000-8000-0000000000f1',
-     'image','aa-key-5','v1', now(), true, true, 'production');
+     'image','aa-key-5','v1', now(), true, true, true, 'production');
 
   select count(*) into n from public.testimonial_submissions
   where id = '00000000-0000-4000-8000-00000000fa05' and environment_marker is null;
@@ -2066,12 +2066,12 @@ begin
   insert into public.testimonial_submissions
     (id, client_id, experience_id, experience_user_id, auth_user_id,
      media_type, client_submission_key, consent_version, consented_at,
-     attested_no_minors, attested_subjects_consented)
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult)
   values
     ('00000000-0000-4000-8000-00000000fa10','00000000-0000-4000-8000-00000000ca01',
      '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
      '00000000-0000-4000-8000-0000000000f1',
-     'image','aa-key-10','v1', now(), true, true);
+     'image','aa-key-10','v1', now(), true, true, true);
 
   update public.testimonial_submissions set upload_status = 'abandoned'
   where id = '00000000-0000-4000-8000-00000000fa10';
@@ -2147,12 +2147,12 @@ begin
   insert into public.testimonial_submissions
     (id, client_id, experience_id, experience_user_id, auth_user_id,
      media_type, client_submission_key, consent_version, consented_at,
-     attested_no_minors, attested_subjects_consented)
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult)
   values
     ('00000000-0000-4000-8000-00000000fa06','00000000-0000-4000-8000-00000000ca01',
      '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
      '00000000-0000-4000-8000-0000000000f1',
-     'image','aa-key-6','v1', now(), true, true);
+     'image','aa-key-6','v1', now(), true, true, true);
 
   perform pg_temp.record('22 validation', 'a new intent starts with NO environment marker', '1',
     (select count(*) from public.testimonial_submissions
@@ -2239,12 +2239,12 @@ begin
   insert into public.testimonial_submissions
     (id, client_id, experience_id, experience_user_id, auth_user_id,
      media_type, client_submission_key, consent_version, consented_at,
-     attested_no_minors, attested_subjects_consented)
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult)
   values
     ('00000000-0000-4000-8000-00000000fa07','00000000-0000-4000-8000-00000000ca01',
      '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
      '00000000-0000-4000-8000-0000000000f1',
-     'image','aa-key-7','v1', now(), true, true);
+     'image','aa-key-7','v1', now(), true, true, true);
 
   -- ---- attempt 1 ---------------------------------------------------------
   select r.attempt_no into v_att
@@ -2356,12 +2356,12 @@ begin
   insert into public.testimonial_submissions
     (id, client_id, experience_id, experience_user_id, auth_user_id,
      media_type, client_submission_key, consent_version, consented_at,
-     attested_no_minors, attested_subjects_consented)
+     attested_no_minors, attested_subjects_consented, attested_submitter_adult)
   values
     ('00000000-0000-4000-8000-00000000fa09','00000000-0000-4000-8000-00000000ca01',
      '00000000-0000-4000-8000-00000000ea01','00000000-0000-4000-8000-00000000da01',
      '00000000-0000-4000-8000-0000000000f1',
-     'image','aa-key-9','v1', now(), true, true);
+     'image','aa-key-9','v1', now(), true, true, true);
 
   -- A reservation whose provider call succeeded but whose attachment failed.
   insert into public.testimonial_provider_assets
@@ -2510,7 +2510,8 @@ begin
   select r.submission_id into v_sub
   from public.create_testimonial_intent(
     '00000000-0000-4000-8000-0000000000f1'::uuid,
-    'video'::public.testimonial_media_type) r;
+    'video'::public.testimonial_media_type,
+    true) r;
 
   perform pg_temp.record('25 pgcrypto', 'create_testimonial_intent SUCCEEDED and returned a submission', 'true',
     (v_sub is not null)::text);

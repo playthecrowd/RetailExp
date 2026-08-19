@@ -65,7 +65,7 @@ function assert(condition, message) {
 // added or removed without updating this file, which is the signal it was
 // always meant to give.
 
-assert(files.length === 21, `exactly 21 migration files exist (found ${files.length})`);
+assert(files.length === 22, `exactly 22 migration files exist (found ${files.length})`);
 
 // --- Every expected table exists ------------------------------------------
 
@@ -1741,6 +1741,329 @@ assert(
 assert(
   !/to (anon|authenticated)\b/.test(fixExec),
   "the corrective migration grants nothing to a browser role",
+);
+
+
+// ===========================================================================
+// 20260821090000_stakeholder_pilot_schema.sql — the stakeholder-pilot schema
+//
+// Everything below reads the migration TEXT WITH COMMENTS STRIPPED. This file
+// has produced false passes at least five times by matching its own prose:
+// a rationale comment naming an identifier is not evidence that the SQL uses
+// it. Every assertion here is anchored to code.
+// ===========================================================================
+const pilotPath = join(migrationsDir, "20260821090000_stakeholder_pilot_schema.sql");
+const pilotRaw = readFileSync(pilotPath, "utf8");
+
+/** Line comments and `comment on ... is '...'` bodies removed. */
+const stripPilotComments = (text) =>
+  text
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n")
+    .replace(/comment on [\s\S]*?;/g, "");
+
+const pilot = stripPilotComments(pilotRaw);
+
+assert(pilotRaw.length > 0, "the stakeholder-pilot migration exists");
+
+// --- It must refuse to backfill an attestation nobody made -----------------
+assert(
+  /select count\(\*\) into v_rows from public\.testimonial_submissions/.test(pilot) &&
+    /raise exception[\s\S]{0,200}?refusing to add a mandatory 18\+ attestation/.test(pilot),
+  "the migration refuses to run if submission rows already exist, rather than backfilling a false attestation",
+);
+assert(
+  !/update public\.testimonial_submissions[\s\S]{0,200}?attested_submitter_adult\s*=\s*true/.test(pilot),
+  "no statement backfills attested_submitter_adult to true",
+);
+
+// --- The 18+ attestation ---------------------------------------------------
+assert(
+  /add column if not exists attested_submitter_adult boolean not null default false/.test(pilot),
+  "attested_submitter_adult is added NOT NULL DEFAULT FALSE, so it fails closed",
+);
+assert(
+  /add constraint testimonial_attestations_required\s*\n?\s*check \(attested_no_minors and attested_subjects_consented and attested_submitter_adult\)/.test(
+    pilot,
+  ),
+  "all THREE attestations are mandatory in the recreated CHECK",
+);
+
+// --- protect_testimonial_update: superseded, and provably only by one line --
+//
+// The strongest available check on a 212-line security trigger that was
+// reproduced rather than rewritten: strip the inserted line from the new
+// definition and it must equal the applied definition EXACTLY. A dropped
+// clause, a reordered branch or a lost `end if` all fail this.
+const grabProtectUpdate = (text) => {
+  const start = text.indexOf("create or replace function public.protect_testimonial_update()");
+  if (start === -1) return null;
+  const end = text.indexOf("\n$$;", start);
+  return end === -1 ? null : text.slice(start, end + 4);
+};
+
+const appliedProtect = grabProtectUpdate(
+  readFileSync(join(migrationsDir, "20260817193500_add_testimonial_moderation_rpc.sql"), "utf8"),
+);
+const pilotProtect = grabProtectUpdate(pilotRaw);
+
+assert(appliedProtect !== null, "the applied protect_testimonial_update definition was located");
+assert(pilotProtect !== null, "the pilot migration supersedes protect_testimonial_update");
+
+if (appliedProtect && pilotProtect) {
+  const reversed = pilotProtect
+    .split("\n")
+    .filter((line) => !line.includes("attested_submitter_adult"))
+    .join("\n");
+  assert(
+    reversed === appliedProtect,
+    "removing the attested_submitter_adult line from the superseded trigger reproduces the applied text EXACTLY",
+  );
+  assert(
+    pilotProtect.split("\n").length === appliedProtect.split("\n").length + 1,
+    "the superseded trigger differs from the applied one by exactly one line",
+  );
+  const consentBlock = /new\.consent_scope[\s\S]*?recorded consent cannot be altered after submission/.exec(
+    pilotProtect,
+  );
+  assert(
+    consentBlock !== null && consentBlock[0].includes("new.attested_submitter_adult"),
+    "the new attestation is guarded inside the RECORDED-CONSENT block, not merely somewhere in the trigger",
+  );
+}
+
+// --- create_testimonial_intent --------------------------------------------
+assert(
+  /drop function if exists public\.create_testimonial_intent\(uuid, public\.testimonial_media_type\);/.test(
+    pilot,
+  ),
+  "the two-argument create_testimonial_intent is DROPPED, so a two-argument call cannot resolve to the ungated version",
+);
+assert(
+  /create function public\.create_testimonial_intent\([\s\S]{0,400}?p_attested_submitter_adult boolean default false/.test(
+    pilot,
+  ),
+  "the new create_testimonial_intent defaults the attestation to FALSE",
+);
+assert(
+  /if p_attested_submitter_adult is distinct from true then\s*\n\s*raise exception/.test(pilot),
+  "create_testimonial_intent refuses unless the attestation is explicitly true",
+);
+
+// Ordering matters: authorization first, so an unauthorized caller still gets
+// 42501 and learns nothing about which later condition it would have failed.
+{
+  const body = /create function public\.create_testimonial_intent\([\s\S]*?end \$fn\$;/.exec(pilot);
+  assert(body !== null, "the create_testimonial_intent body was located for ordering checks");
+  if (body) {
+    const authIdx = body[0].indexOf("assert_testimonial_visitor");
+    const attIdx = body[0].indexOf("p_attested_submitter_adult is distinct from true");
+    const reuseIdx = body[0].indexOf("if v_existing is not null then");
+    assert(
+      authIdx !== -1 && attIdx !== -1 && authIdx < attIdx,
+      "the 18+ check runs AFTER authorization, so refusals stay indistinguishable",
+    );
+    assert(
+      reuseIdx !== -1 && attIdx < reuseIdx,
+      "the 18+ check runs BEFORE the live-intent reuse branch, so a reload cannot inherit an earlier attestation",
+    );
+  }
+}
+
+// --- Consent scope ---------------------------------------------------------
+assert(
+  /check \(consent_scope in \('experience_gallery_display', 'stakeholder_evaluation_gallery'\)\)/.test(
+    pilot,
+  ),
+  "consent_scope permits exactly the two evaluation-safe values",
+);
+assert(
+  !/consent_scope in \([^)]*(marketing|advertis|social)[^)]*\)/i.test(pilot),
+  "no consent scope authorizing marketing, advertising or social reuse is introduced",
+);
+
+// --- Caption -------------------------------------------------------------
+assert(
+  /add constraint testimonial_caption_length\s*\n?\s*check \(caption is null or char_length\(caption\) <= 300\)/.test(
+    pilot,
+  ),
+  "the caption CHECK is corrected to 300, matching limits.ts and update_testimonial_caption",
+);
+
+// --- Ledger deletion accounting -------------------------------------------
+assert(
+  /add column if not exists last_deletion_attempt_at timestamptz/.test(pilot) &&
+    /add column if not exists deletion_attempt_count integer not null default 0/.test(pilot),
+  "the ledger gains deletion-attempt accounting",
+);
+assert(
+  /deletion_attempt_count\s*=\s*a\.deletion_attempt_count\s*\n?\s*\+ case when p_status = 'pending' then 1 else 0 end/.test(
+    pilot,
+  ),
+  "the attempt counter increments on the PENDING mark only, so two marks per attempt count as one",
+);
+assert(
+  /order by a\.last_deletion_attempt_at nulls first, a\.reserved_at/.test(pilot),
+  "the deletable listing orders never-attempted rows first, which is what makes progress monotonic",
+);
+assert(
+  /a\.last_deletion_attempt_at is null\s*\n?\s*or a\.last_deletion_attempt_at <= now\(\) - interval '6 hours'/.test(
+    pilot,
+  ),
+  "a repeatedly failing asset is excluded by a backoff window rather than starving the batch",
+);
+
+// --- Environment is required, not defaulted -------------------------------
+assert(
+  /drop function if exists public\.list_deletable_testimonial_provider_assets\(integer\);/.test(pilot),
+  "the environment-blind listing function is dropped, not left callable alongside",
+);
+for (const fn of [
+  "list_deletable_testimonial_provider_assets",
+  "list_purgeable_testimonial_submissions",
+]) {
+  const sig = new RegExp("create function public\\." + fn + "\\(\\s*\\n\\s*p_environment text,");
+  assert(sig.test(pilot), `${fn} takes p_environment as its FIRST parameter, with no default`);
+  const body = new RegExp(
+    "create function public\\." + fn + "\\([\\s\\S]*?p_environment not in \\('preview', 'production'\\)[\\s\\S]*?raise exception",
+  );
+  assert(body.test(pilot), `${fn} validates the environment instead of silently returning nothing`);
+}
+assert(
+  !/p_environment text default/.test(pilot),
+  "no environment parameter is defaulted - an environment that defaults to 'all' is the same hazard with a friendlier face",
+);
+
+// --- The submission-level purge record ------------------------------------
+assert(
+  /create function public\.record_testimonial_media_purged\(/.test(pilot),
+  "the missing submission-level purge record now has a function",
+);
+assert(
+  /if v_outstanding > 0 then\s*raise exception/.test(pilot.replace(/\s+/g, " ")),
+  "recording a purge is refused while any provider asset for the submission is still undeleted",
+);
+assert(
+  /select count\(\*\) into v_outstanding[\s\S]{0,400}?a\.provider_asset_id is not null and a\.deleted_at is null/.test(
+    pilot.replace(/\s+/g, " "),
+  ),
+  "the outstanding-asset count is scoped to UNDELETED provider assets, not to every ledger row",
+);
+{
+  const body = /create function public\.record_testimonial_media_purged\([\s\S]*?end \$fn\$;/.exec(pilot);
+  assert(body !== null, "the record_testimonial_media_purged body was located");
+  if (body) {
+    assert(
+      /set media_deleted_at\s*=\s*now\(\),\s*\n\s*provider_deletion_status\s*=\s*p_status/.test(body[0]),
+      "both deletion columns are written together, satisfying the table's both-sides CHECK",
+    );
+    assert(
+      /if v_existing is not null then/.test(body[0]),
+      "an already-purged submission returns its existing record rather than moving media_deleted_at",
+    );
+  }
+}
+
+// --- Immediate purge cannot remove anything -------------------------------
+{
+  const body = /create function public\.purge_testimonial_media_now\([\s\S]*?end \$fn\$;/.exec(pilot);
+  assert(body !== null, "the purge_testimonial_media_now body was located");
+  if (body) {
+    assert(
+      /if v_status not in \('rejected', 'removed'\) then\s*\n\s*raise exception/.test(body[0]),
+      "immediate purge requires a submission that is ALREADY rejected or removed",
+    );
+    assert(
+      !/set[\s\S]{0,200}?moderation_status\s*=/.test(body[0]),
+      "immediate purge never assigns moderation_status, so it cannot be used to remove an item",
+    );
+    assert(
+      /p_reason not in \('visitor_withdrawal', 'underage_submitter'\)/.test(body[0]),
+      "immediate purge accepts only the two reasons it exists for",
+    );
+  }
+}
+
+// --- Privileges: every new function is trusted-tier only -------------------
+const pilotFunctions = [
+  ["create_testimonial_intent", "uuid, public.testimonial_media_type, boolean"],
+  ["list_deletable_testimonial_provider_assets", "text, integer"],
+  ["mark_testimonial_provider_asset_deleted", "uuid, text"],
+  ["list_purgeable_testimonial_submissions", "text, integer"],
+  ["record_testimonial_media_purged", "uuid, text"],
+  ["purge_testimonial_media_now", "uuid, text"],
+];
+for (const [fn, args] of pilotFunctions) {
+  const esc = args.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert(
+    new RegExp("revoke all on function public\\." + fn + "\\(" + esc + "\\)\\s*\\n\\s*from public, anon, authenticated;").test(
+      pilot,
+    ),
+    `${fn} explicitly revokes the default PUBLIC EXECUTE`,
+  );
+  assert(
+    new RegExp("grant execute on function public\\." + fn + "\\(" + esc + "\\)\\s*\\n\\s*to service_role;").test(
+      pilot,
+    ),
+    `${fn} is granted to service_role only`,
+  );
+  assert(
+    new RegExp("(create|create or replace) function public\\." + fn + "\\([\\s\\S]{0,900}?security definer").test(pilot),
+    `${fn} is SECURITY DEFINER`,
+  );
+  assert(
+    new RegExp("(create|create or replace) function public\\." + fn + "\\([\\s\\S]{0,900}?set search_path = public, pg_catalog").test(
+      pilot,
+    ),
+    `${fn} pins the two-element search_path`,
+  );
+}
+assert(
+  !/\bto (anon|authenticated)\b/.test(pilot),
+  "the stakeholder-pilot migration grants nothing to any browser role",
+);
+assert(
+  !/security invoker/i.test(pilot),
+  "the stakeholder-pilot migration introduces no security_invoker surface",
+);
+
+
+
+// --- The moderation queue view gains the attestation, and only that --------
+const grabQueueView = (text) => {
+  const start = text.indexOf("create or replace view public.testimonial_moderation_queue");
+  if (start === -1) return null;
+  const end = text.indexOf("and s.media_deleted_at is null;", start);
+  return end === -1 ? null : text.slice(start, end + "and s.media_deleted_at is null;".length);
+};
+const appliedQueue = grabQueueView(
+  readFileSync(join(migrationsDir, "20260818161500_extend_moderation_queue_view.sql"), "utf8"),
+);
+const pilotQueue = grabQueueView(pilotRaw);
+assert(appliedQueue !== null, "the applied moderation queue view definition was located");
+assert(pilotQueue !== null, "the pilot migration supersedes the moderation queue view");
+if (appliedQueue && pilotQueue) {
+  const NEWLINE = String.fromCharCode(10);
+  const reversed = pilotQueue
+    .split(NEWLINE)
+    .filter((line) => !line.includes("attested_submitter_adult"))
+    .map((line) =>
+      line.trim() === "s.attested_subjects_consented," ? line.replace(/,(\s*)$/, "$1") : line,
+    )
+    .join(NEWLINE);
+  assert(
+    reversed === appliedQueue,
+    "removing the appended column reproduces the applied moderation queue view EXACTLY",
+  );
+  assert(
+    /s\.attested_submitter_adult\s+from public\.testimonial_submissions/.test(pilotQueue),
+    "the new column is APPENDED LAST, which is the only shape CREATE OR REPLACE VIEW permits",
+  );
+}
+assert(
+  /revoke all on public\.testimonial_moderation_queue from public, anon, authenticated;/.test(pilot),
+  "the superseded queue view restates its revoke rather than trusting the preserved ACL",
 );
 
 console.log(`\n${files.length} migration files checked.`);
