@@ -12,6 +12,7 @@ export function createInitialSessionState(): KameleonSessionState {
     ...createInitialOpeningGate(),
     screen: "tap-to-begin",
     hydrated: false,
+    justSubmittedTestimonial: false,
     progress: createInitialProgress(),
     activeNodeId: null,
     activePathwayId: null,
@@ -75,21 +76,35 @@ export function kameleonReducer(
 
     // The ONLY route into the AR screen. Its component, callbacks, rewards and
     // fallback behaviour are unchanged; this just moves the user in front of it.
+    // Both choices clear the one-time banner: it has been seen, and leaving
+    // the choice screen is what "one-time" means here.
     case "CHOOSE_AR":
-      return { ...state, screen: "ar-permission" };
+      return { ...state, screen: "ar-permission", justSubmittedTestimonial: false };
 
     case "CHOOSE_TESTIMONIAL":
-      return { ...state, screen: "testimonial-capture" };
+      return { ...state, screen: "testimonial-capture", justSubmittedTestimonial: false };
 
     // Cancelling returns to the choice, so AR is still reachable afterwards.
     case "CANCEL_TESTIMONIAL":
       return { ...state, screen: "experience-choice" };
 
     case "TESTIMONIAL_SUBMITTED": {
-      // Deliberately does NOT set arCompleted and awards no reward. Sharing a
-      // story opens the journey on its own terms; it is not AR completion.
-      const submitted = { ...state, testimonialSubmitted: true };
-      return { ...submitted, screen: postOpeningScreen(submitted) };
+      // Returns to the EXPERIENCE CHOICE, not into the journey.
+      //
+      // It used to go straight to postOpeningScreen, which dropped the visitor
+      // into the journey at the exact moment they most needed to see that the
+      // submission had landed - and left them without an obvious way to reach
+      // AR, or to submit a second story.
+      //
+      // Still deliberately does NOT set arCompleted and awards no reward:
+      // sharing a story satisfies the opening gate on its own terms, it is not
+      // AR completion. progress is untouched, so journey state is unchanged.
+      return {
+        ...state,
+        testimonialSubmitted: true,
+        justSubmittedTestimonial: true,
+        screen: "experience-choice",
+      };
     }
 
     case "ENTER_JOURNEY":

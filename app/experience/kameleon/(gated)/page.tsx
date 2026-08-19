@@ -142,6 +142,7 @@ export default function KameleonExperiencePage() {
       case "experience-choice":
         return (
           <ExperienceChoice
+            justSubmittedTestimonial={state.justSubmittedTestimonial}
             captureAvailable={captureAvailable}
             onChooseAr={() => dispatch({ type: "CHOOSE_AR" })}
             onChooseTestimonial={() => dispatch({ type: "CHOOSE_TESTIMONIAL" })}
@@ -150,13 +151,14 @@ export default function KameleonExperiencePage() {
 
       case "testimonial-capture":
         return (
-          // TESTIMONIAL_SUBMITTED now fires, but only from the success
-          // screen's "Continue to Journey" button — never as a side effect of
-          // submitting. The visitor may go to the Gallery or back to the
-          // choices instead, and the action still awards no AR reward.
+          // TESTIMONIAL_SUBMITTED fires only from the success screen's
+          // "Continue Experience" button — never as a side effect of
+          // submitting — and returns to the experience choice, where the
+          // banner appears and AR is still one press away. It awards no AR
+          // reward and leaves journey progress untouched.
           <TestimonialCapture
             onCancel={() => dispatch({ type: "CANCEL_TESTIMONIAL" })}
-            onContinueToJourney={() => dispatch({ type: "TESTIMONIAL_SUBMITTED" })}
+            onContinueExperience={() => dispatch({ type: "TESTIMONIAL_SUBMITTED" })}
           />
         );
 

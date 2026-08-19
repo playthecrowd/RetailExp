@@ -98,16 +98,17 @@ const EMPTY_CONSENT: Consent = {
  * is the visitor's choice rather than a consequence of submitting: the screen
  * offers the Journey, the Gallery, or going back, and does nothing on its own.
  *
- * onContinueToJourney is what dispatches TESTIMONIAL_SUBMITTED. That action
- * deliberately does not set arCompleted and awards no reward — sharing a story
- * opens the journey on its own terms, it is not AR completion.
+ * onContinueExperience is what dispatches TESTIMONIAL_SUBMITTED, which returns
+ * the visitor to the experience choice. That action deliberately does not set
+ * arCompleted, awards no reward and does not touch journey progress — sharing
+ * a story satisfies the opening gate on its own terms, it is not AR completion.
  */
 export function TestimonialCapture({
   onCancel,
-  onContinueToJourney,
+  onContinueExperience,
 }: {
   onCancel: () => void;
-  onContinueToJourney: () => void;
+  onContinueExperience: () => void;
 }) {
   const [step, setStep] = useState<Step>("choose");
   const [mediaType, setMediaType] = useState<CaptureMediaType | null>(null);
@@ -479,8 +480,26 @@ export function TestimonialCapture({
         )}
 
         {step === "submitted" && (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-kameleon-text">Thank you — your story is in.</p>
+          // Visually distinct from every other step: a bordered, tinted panel
+          // with a mark, so "it worked" is legible at a glance on a phone held
+          // at arm's length rather than being one more paragraph.
+          <div className="flex flex-col gap-4 rounded-xl border border-kameleon-copper/40 bg-kameleon-copper/10 p-4 text-center">
+            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full border border-kameleon-copper/60">
+              <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5">
+                <path
+                  d="M5 13l4 4L19 7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-kameleon-copper-light"
+                />
+              </svg>
+            </div>
+            <p className="text-base font-medium text-kameleon-text">
+              Thank you — your testimonial was submitted for review.
+            </p>
             {/* Deliberately does NOT say published. The submission still has to
                 finish processing at the provider and then be reviewed, and
                 promising more than that would be untrue. The Gallery link below
@@ -491,12 +510,13 @@ export function TestimonialCapture({
               Gallery. Nothing else is needed from you.
             </p>
 
-            {/* Three ways on, and none of them happens on its own. Submitting
-                used to drop the visitor straight into the Journey, which took
-                the decision away from them at the one moment they were most
-                likely to want the Gallery instead. */}
-            <Button brand="kameleon" size="lg" fullWidth onClick={onContinueToJourney}>
-              Continue to Journey
+            {/* NOTHING HAPPENS ON ITS OWN HERE. No timer, no redirect: the
+                visitor sees that it landed and then chooses. Cancel is not
+                offered at this step - after a successful submission it would
+                be the wrong word for the only way out, which is what left
+                people stranded. */}
+            <Button brand="kameleon" size="lg" fullWidth onClick={onContinueExperience}>
+              Continue Experience
             </Button>
             <LinkButton
               brand="kameleon"
@@ -507,13 +527,6 @@ export function TestimonialCapture({
             >
               View Stakeholder Gallery
             </LinkButton>
-            <button
-              type="button"
-              onClick={onCancel}
-              className="text-xs text-kameleon-text-muted underline underline-offset-4"
-            >
-              Return to experience choices
-            </button>
           </div>
         )}
 

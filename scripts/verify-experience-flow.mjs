@@ -106,16 +106,53 @@ console.log("\n--- a testimonial is not AR completion ---");
     submitted.arCompleted !== true,
     "TESTIMONIAL_SUBMITTED does NOT mark AR complete - sharing a story is not an AR reward",
   );
+  // Continuing returns to the CHOICE, not into the journey. It used to go
+  // straight to postOpeningScreen, which dropped the visitor into the journey
+  // at the exact moment they most needed to see the submission had landed, and
+  // left them with no obvious way to reach AR or submit a second story.
   check(
-    submitted.screen !== "ar-permission" && submitted.screen !== "experience-choice",
-    "continuing after a submission moves past the opening gate",
+    submitted.screen === "experience-choice",
+    "continuing after a submission returns to the experience choice",
+  );
+  check(
+    submitted.justSubmittedTestimonial === true,
+    "the one-time banner flag is set for that return",
+  );
+  check(
+    submitted.progress === createInitialSessionState().progress ||
+      JSON.stringify(submitted.progress) === JSON.stringify(createInitialSessionState().progress),
+    "journey progress is untouched by a submission",
+  );
+
+  // Both choices clear the banner - that is what makes it one-time.
+  check(
+    run(...base, "CHOOSE_TESTIMONIAL", "TESTIMONIAL_SUBMITTED", "CHOOSE_AR")
+      .justSubmittedTestimonial === false,
+    "choosing AR clears the one-time banner",
+  );
+  check(
+    run(...base, "CHOOSE_TESTIMONIAL", "TESTIMONIAL_SUBMITTED", "CHOOSE_TESTIMONIAL")
+      .justSubmittedTestimonial === false,
+    "choosing to submit another story clears it too",
+  );
+
+  // Both options remain reachable from the returned choice screen.
+  check(
+    run(...base, "CHOOSE_TESTIMONIAL", "TESTIMONIAL_SUBMITTED", "CHOOSE_AR").screen ===
+      "ar-permission",
+    "AR is reachable from the screen a submission returns to",
+  );
+  check(
+    run(...base, "CHOOSE_TESTIMONIAL", "TESTIMONIAL_SUBMITTED", "CHOOSE_TESTIMONIAL").screen ===
+      "testimonial-capture",
+    "a second testimonial is reachable too",
   );
 
   const arDone = run(...base, "CHOOSE_AR", "ENTER_JOURNEY");
   check(arDone.arCompleted === true, "the AR path still marks AR complete");
   check(
-    arDone.screen === submitted.screen,
-    "both routes satisfy the opening gate and arrive at the same next screen",
+    arDone.arCompleted === true && submitted.arCompleted !== true,
+    "the two routes remain distinguishable: only AR marks AR complete",
   );
 }
 
@@ -181,14 +218,28 @@ console.log("\n--- placement, structurally ---");
   );
 
   check(
-    /onContinueToJourney=\{\(\) => dispatch\(\{ type: "TESTIMONIAL_SUBMITTED" \}\)\}/.test(page),
+    /onContinueExperience=\{\(\) => dispatch\(\{ type: "TESTIMONIAL_SUBMITTED" \}\)\}/.test(page),
     "TESTIMONIAL_SUBMITTED is dispatched from the success screen's own button",
   );
   check(
-    !/onSubmitted|TESTIMONIAL_SUBMITTED/.test(
+    (page.match(/TESTIMONIAL_SUBMITTED/g) || []).length === 1,
+    "there is exactly one dispatch site, so submitting cannot advance by itself",
+  );
+  check(
+    /justSubmittedTestimonial=\{state\.justSubmittedTestimonial\}/.test(page),
+    "the choice screen receives the one-time banner flag",
+  );
+  check(
+    !/onSubmitted|TESTIMONIAL_SUBMITTED|onContinueExperience\(\)/.test(
       capture.slice(0, capture.indexOf('step === "submitted"')),
     ),
-    "the capture component never advances the journey on its own before the success screen",
+    "the capture component never leaves the subflow on its own before the success screen",
+  );
+  // One submit path serves both media types, so the success state cannot
+  // differ between a photo and a video.
+  check(
+    (capture.match(/setStep\("submitted"\)/g) || []).length === 1,
+    "photo and video reach the SAME success state through one shared path",
   );
 
   // The three ways on, in the order the brief fixes.
@@ -197,31 +248,72 @@ console.log("\n--- placement, structurally ---");
   if (successBlock) {
     const block = successBlock[0];
     check(
-      block.includes("Continue to Journey"),
-      "the success screen offers Continue to Journey",
+      block.includes("Thank you — your testimonial was submitted for review."),
+      "the success screen states plainly that the submission landed",
+    );
+    check(
+      block.includes("Continue Experience"),
+      "the primary action is Continue Experience",
     );
     check(
       block.includes("View Stakeholder Gallery"),
-      "the success screen offers View Stakeholder Gallery",
+      "the Gallery remains reachable as a secondary action",
     );
     check(
-      block.includes("Return to experience choices"),
-      "the success screen offers a way back to the experience choices",
+      block.indexOf("Continue Experience") < block.indexOf("View Stakeholder Gallery"),
+      "Continue Experience is offered first",
     );
     check(
-      block.indexOf("Continue to Journey") < block.indexOf("View Stakeholder Gallery") &&
-        block.indexOf("View Stakeholder Gallery") < block.indexOf("Return to experience choices"),
-      "they appear in the order the flow fixes: Journey, Gallery, back",
+      /onClick=\{onContinueExperience\}/.test(block),
+      "only the explicit button leaves the success screen",
+    );
+    // Cancel would be the wrong word for the only way out of a SUCCESS, and
+    // being the only visible action there is exactly what stranded people.
+    check(
+      !/onCancel/.test(block),
+      "Cancel is not offered after a successful submission",
     );
     check(
-      /onClick=\{onContinueToJourney\}/.test(block),
-      "only the explicit button advances the journey",
+      !/setTimeout|router\.push|redirect\(/.test(block),
+      "nothing redirects on its own - the visitor sees the result first",
     );
     check(
       !/published|is live|now in the Gallery/i.test(block),
       "the success screen never claims the submission is published",
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- the returned choice screen ---");
+// ---------------------------------------------------------------------------
+{
+  const choice = stripComments(read("components/kameleon/screens/ExperienceChoice.tsx"));
+
+  check(
+    choice.includes("Your testimonial was submitted. Continue your experience below."),
+    "the one-time banner carries the required copy",
+  );
+  check(
+    /justSubmittedTestimonial &&/.test(choice),
+    "the banner renders only after a submission",
+  );
+  // Anchored to the JSX, not the prop name: onChooseTestimonial also appears
+  // in the destructure at the top of the file, so comparing against that
+  // measured declaration order rather than render order.
+  check(
+    /Recommended next/.test(choice) &&
+      choice.indexOf("Recommended next") < choice.indexOf("onClick={onChooseTestimonial}"),
+    "the AR option is marked as the recommended next action, above the testimonial one",
+  );
+  check(
+    /onChooseTestimonial/.test(choice) && /Share Another Story/.test(choice),
+    "the testimonial option is kept, so a visitor may submit another",
+  );
+  check(
+    !/justSubmittedTestimonial \?\s*null/.test(choice),
+    "the testimonial option is never hidden by the banner state",
+  );
 }
 
 // ---------------------------------------------------------------------------

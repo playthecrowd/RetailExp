@@ -12,6 +12,11 @@ import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
  * the only route into that screen and behaves exactly as the flow did before
  * this screen existed.
  *
+ * `justSubmittedTestimonial` shows a one-time banner after a submission. It
+ * lives in session state and is cleared by either choice, so it never survives
+ * a reload or a second visit to this screen — it is a message about what just
+ * happened, not a fact about the session.
+ *
  * `captureAvailable` is resolved on the SERVER from the feature gate and
  * passed in. When it is false the option is visibly unavailable with honest
  * copy rather than hidden — a visitor who was told about it should see that it
@@ -20,10 +25,12 @@ import { EnvironmentArt } from "@/components/kameleon/art/EnvironmentArt";
  */
 export function ExperienceChoice({
   captureAvailable,
+  justSubmittedTestimonial = false,
   onChooseAr,
   onChooseTestimonial,
 }: {
   captureAvailable: boolean;
+  justSubmittedTestimonial?: boolean;
   onChooseAr: () => void;
   onChooseTestimonial: () => void;
 }) {
@@ -33,6 +40,15 @@ export function ExperienceChoice({
 
       <div className="relative flex flex-1 flex-col items-center justify-center gap-8 px-6 py-10 text-center">
         <KameleonEmblem className="h-14 w-14" />
+
+        {justSubmittedTestimonial && (
+          <p
+            role="status"
+            className="w-full max-w-xs rounded-lg border border-kameleon-copper/40 bg-kameleon-copper/10 px-3 py-2 text-xs text-kameleon-text"
+          >
+            Your testimonial was submitted. Continue your experience below.
+          </p>
+        )}
 
         <div className="flex flex-col gap-2">
           <h1 className="font-display text-2xl font-semibold uppercase tracking-wide text-kameleon-copper-light">
@@ -44,7 +60,14 @@ export function ExperienceChoice({
         </div>
 
         <div className="flex w-full max-w-xs flex-col gap-4">
+          {/* The recommended next action, and marked as such. The testimonial
+              option stays available and unchanged - a visitor may submit
+              another - but after a submission the obvious thing to do next is
+              the part of the experience they have not seen. */}
           <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase tracking-widest text-kameleon-copper-light">
+              Recommended next
+            </span>
             <Button brand="kameleon" size="lg" fullWidth onClick={onChooseAr}>
               AR Experience
             </Button>
@@ -63,7 +86,7 @@ export function ExperienceChoice({
               disabled={!captureAvailable}
               aria-describedby={!captureAvailable ? "capture-unavailable" : undefined}
             >
-              Share Your Kameleon Story
+              {justSubmittedTestimonial ? "Share Another Story" : "Share Your Kameleon Story"}
             </Button>
             {captureAvailable ? (
               <p className="text-xs text-kameleon-text-muted">

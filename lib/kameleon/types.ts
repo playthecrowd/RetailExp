@@ -83,6 +83,16 @@ export function createInitialOpeningGate(): OpeningGateState {
 export interface KameleonSessionState extends OpeningGateState {
   screen: KameleonScreen;
   hydrated: boolean;
+  /**
+   * A testimonial was submitted moments ago and the visitor has just been
+   * returned to the experience choice.
+   *
+   * ONE-TIME, and session-only. Deliberately NOT part of OpeningGateState, so
+   * saveOpeningGate() never writes it to sessionStorage: it is a message about
+   * what just happened, not a fact about the session, and a banner that
+   * survived a reload would be lying about "just".
+   */
+  justSubmittedTestimonial: boolean;
   progress: ViewerProgress;
   /** Node/pathway being previewed (choose-path -> selected-path-preview), before committed to progress.currentNodeId. */
   activeNodeId: string | null;
