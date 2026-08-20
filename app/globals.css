@@ -35,6 +35,11 @@
   --kameleon-copper-dark: #8a5c34;
   --kameleon-red: #b23a3a;
   --kameleon-blue: #2e5c8a;
+  /* The restrained teal from the bottle label. Distinct from
+     --kameleon-blue, which is the cinematic pathway accent: this one is a
+     product colour and is used to accent the 360 viewer's controls. */
+  --kameleon-teal: #1d5a6f;
+  --kameleon-teal-light: #2f7d97;
   --kameleon-text: #f5efe6;
   --kameleon-text-muted: #b8afa2;
   --kameleon-focus-ring: #e3b583;
@@ -72,6 +77,8 @@
   --color-kameleon-copper-dark: var(--kameleon-copper-dark);
   --color-kameleon-red: var(--kameleon-red);
   --color-kameleon-blue: var(--kameleon-blue);
+  --color-kameleon-teal: var(--kameleon-teal);
+  --color-kameleon-teal-light: var(--kameleon-teal-light);
   --color-kameleon-text: var(--kameleon-text);
   --color-kameleon-text-muted: var(--kameleon-text-muted);
 }
@@ -106,4 +113,49 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   360 viewer — the attention pulse on "Use Device Motion".
+
+   A glow that breathes, not a blink. The control has to be noticed against a
+   moving panorama without ever reading as an alert, so this animates only the
+   ring and the shadow, never opacity or size: nothing about it flashes, and at
+   3.2 seconds a full cycle it is comfortably slower than the once-per-second
+   floor the brief sets.
+
+   The platform-wide reduced-motion rule above already collapses this to a
+   single 0.01ms pass, so the control settles on its lit state rather than its
+   dim one — which is why the 100% keyframe is the LIT end. The viewer also
+   detects the preference in JavaScript and applies a static class instead, so
+   the calm outcome does not depend on which guard runs first.
+   --------------------------------------------------------------------------- */
+@keyframes kameleon-attention {
+  0% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--kameleon-copper) 55%, transparent),
+      0 0 14px -2px color-mix(in srgb, var(--kameleon-copper) 35%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--kameleon-copper-light) 85%, transparent),
+      0 0 26px 2px color-mix(in srgb, var(--kameleon-teal-light) 55%, transparent);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--kameleon-copper) 55%, transparent),
+      0 0 14px -2px color-mix(in srgb, var(--kameleon-copper) 35%, transparent);
+  }
+}
+
+.kameleon-attention {
+  animation: kameleon-attention 3.2s ease-in-out infinite;
+}
+
+/* What someone who asked for less motion sees instead: the same emphasis,
+   held still. Not "no highlight" — the control still needs to be found. */
+.kameleon-attention-static {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--kameleon-copper-light) 85%, transparent),
+    0 0 22px 0 color-mix(in srgb, var(--kameleon-teal-light) 40%, transparent);
 }

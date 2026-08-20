@@ -2,16 +2,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import {
+  DeviceMotionIcon,
+  MuteIcon,
+  PauseIcon,
+  PlayIcon,
+  RecenterIcon,
+  ReplayIcon,
+  SoundIcon,
+} from "./icons";
+import { cn } from "@/lib/cn";
 
 /**
  * A 2:1 equirectangular video viewer.
  *
  * WHAT IT IS FOR
- *   An OPTIONAL immersive view offered alongside a decision, and an optional
- *   alternate view of a chapter that has a genuine 360 asset. Either way it is
- *   opened from a button and closed back to exactly what was underneath. It is
- *   not a second journey, it never replaces the standard playback path, and
- *   closing it never advances anything.
+ *   An OPTIONAL immersive view offered alongside a decision. It is opened from
+ *   a button and closed back to exactly what was underneath. It is not a second
+ *   journey, it never replaces the standard playback path, and closing it never
+ *   advances anything.
  *
  * IT WILL NOT FAKE 360
  *   The caller is responsible for only rendering this when the source is a
@@ -24,6 +33,12 @@ import * as THREE from "three";
  *   on X, which flips the faces inward and un-mirrors the texture. This is the
  *   standard equirectangular projection and needs no shader of its own.
  *
+ * THE END OF THE CLIP IS NOT THE END OF THE VISIT
+ *   Reaching 0:00 keeps the overlay open on the final frame, still draggable,
+ *   still explorable, with Replay offered. A lounge that evicted the visitor
+ *   the moment the minute ran out would punish them for looking around slowly,
+ *   which is the one thing this feature exists to encourage.
+ *
  * MOTION SOURCES, IN ORDER OF PREFERENCE
  *   1. Device orientation, if the visitor grants it. iOS requires a call in
  *      response to a user gesture, which is why it is a button and not an
@@ -33,18 +48,15 @@ import * as THREE from "three";
  *   is disorienting on a phone held at arm's length.
  *
  * EVERY EXIT IS THE SAME EXIT
- *   Return, close, Escape, browser Back and the video's own end all call the
- *   one `exit` path. That is deliberate: the caller restores the same state
- *   however the visitor leaves, so there is no route out that behaves
- *   differently from the others.
+ *   Return to Choices, Escape and browser Back all call the one `exit` path.
+ *   The clip ending is deliberately NOT one of them.
  *
  * ACCESSIBILITY AND SAFETY
  *   Motion control is OFF until explicitly enabled, which is also the
  *   no-motion fallback — someone who is motion-sensitive, or whose device has
  *   no gyroscope, drags instead and loses nothing. Under prefers-reduced-motion
- *   the video does not start itself either: an immersive clip that begins
- *   moving the instant it opens is precisely what that setting asks us not to
- *   do, so it opens on the poster frame with Play available.
+ *   the clip does not start itself, the attention pulse becomes a static
+ *   highlight, and the controls appear without staggered movement.
  */
 
 /** Vertical look limit. Past this the horizon inverts and the view is
@@ -54,6 +66,11 @@ const MAX_PITCH = Math.PI / 2 - 0.05;
 /** Radians per pixel of drag. Tuned so a full turn is roughly one screen
  *  width, which matches how people expect a panorama to behave. */
 const DRAG_SENSITIVITY = 0.0042;
+
+/** Timer ring geometry. The circumference is the dash array, so the visible
+ *  arc is simply circumference * fraction-remaining. */
+const RING_RADIUS = 26;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export interface Video360ViewerProps {
   src: string;
@@ -77,6 +94,20 @@ export interface Video360ViewerProps {
 
 type Phase = "loading" | "ready" | "error";
 
+/**
+ * Where the device-orientation offer stands.
+ *
+ * `idle` is the only state that asks for attention. Everything else is a
+ * settled answer, and a control that keeps pulsing after it has been answered
+ * is nagging rather than helping.
+ */
+type MotionState = "idle" | "enabled" | "denied" | "unavailable" | "dismissed";
+
+function formatClock(seconds: number): string {
+  const safe = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
+}
+
 export function Video360Viewer({
   src,
   poster,
@@ -96,23 +127,32 @@ export function Video360Viewer({
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const orientationRef = useRef(false);
 
-  const [motionEnabled, setMotionEnabled] = useState(false);
   const [phase, setPhase] = useState<Phase>("loading");
   const [playing, setPlaying] = useState(false);
+  const [finished, setFinished] = useState(false);
   // Muted at open, always. Autoplay of audible video is refused by every
   // current mobile browser, so starting unmuted would mean starting stopped.
   const [muted, setMuted] = useState(true);
+  // A device fact, decided once at mount like webglSupported above rather than
+  // corrected afterwards in an effect: a device with no orientation API gets no
+  // offer at all, rather than a button that pulses for attention and then does
+  // nothing when tapped.
+  const [motionState, setMotionState] = useState<MotionState>(() =>
+    typeof window !== "undefined" && "DeviceOrientationEvent" in window ? "idle" : "unavailable",
+  );
   /** Bumped by Retry to force a fresh <video> element rather than asking a
    *  failed one to try again, which browsers will not reliably do. */
   const [attempt, setAttempt] = useState(0);
+
+  /** Whole seconds left, for the readout and the screen-reader label. The RING
+   *  is not driven from state — see the countdown effect. */
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [duration, setDuration] = useState(0);
 
   // These are facts about the DEVICE, decided once at mount rather than
   // synchronised in an effect. This component is only ever loaded with
   // ssr: false, so touching window in an initializer is safe — and computing
   // them here avoids a cascading render on every open.
-  const [motionAvailable] = useState(
-    () => typeof window !== "undefined" && "DeviceOrientationEvent" in window,
-  );
   const [webglSupported] = useState(() => {
     try {
       const probe = document.createElement("canvas");
@@ -128,17 +168,23 @@ export function Video360Viewer({
       window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
 
-  // exit is called from a keydown listener, a popstate listener and the video's
-  // ended event as well as from buttons. A ref guard makes it idempotent:
-  // browser Back fires popstate AND unwinds the history entry this component
-  // pushed, and without the guard a close could be counted twice and pop an
-  // entry belonging to the Journey itself.
+  /** Drives the one-per-opening entry animation. Starts false so the first
+   *  paint commits with the controls in their "before" position, then flips on
+   *  a later frame so the transition actually has something to run from. */
+  const [entered, setEntered] = useState(false);
+
+  const ringRef = useRef<SVGCircleElement>(null);
+
+  // exit is called from a keydown listener, a popstate listener and buttons.
+  // A ref guard makes it idempotent: browser Back fires popstate AND unwinds
+  // the history entry this component pushed, and without the guard a close
+  // could be counted twice and pop an entry belonging to the Journey itself.
   const exitedRef = useRef(false);
   // Held in a ref, and refreshed in an effect rather than during render, so
-  // that `exit` keeps a stable identity. The keydown, popstate and ended
-  // listeners below are all keyed on it; a new identity every render would
-  // tear down and re-add all three, and would re-push a history entry each
-  // time the parent re-rendered.
+  // that `exit` keeps a stable identity. The keydown and popstate listeners
+  // below are keyed on it; a new identity every render would tear down and
+  // re-add both, and would re-push a history entry each time the parent
+  // re-rendered.
   const onExitRef = useRef(onExit);
   useEffect(() => {
     onExitRef.current = onExit;
@@ -160,11 +206,25 @@ export function Video360Viewer({
     pitchRef.current = 0;
   }, []);
 
-  const togglePlay = useCallback(() => {
+  const play = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play().catch(() => setPhase("error"));
-    else video.pause();
+    void video.play().catch(() => setPhase("error"));
+  }, []);
+
+  const pause = useCallback(() => {
+    videoRef.current?.pause();
+  }, []);
+
+  const replay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    // Rewind BEFORE clearing `finished`, so no frame is ever rendered in which
+    // the clip claims to be running while currentTime still sits at the end
+    // and the ring is still empty.
+    video.currentTime = 0;
+    setFinished(false);
+    void video.play().catch(() => setPhase("error"));
   }, []);
 
   const toggleMute = useCallback(() => {
@@ -176,6 +236,7 @@ export function Video360Viewer({
 
   const retry = useCallback(() => {
     setPhase("loading");
+    setFinished(false);
     setAttempt((n) => n + 1);
   }, []);
 
@@ -242,10 +303,14 @@ export function Video360Viewer({
       renderer.setSize(mount.clientWidth, mount.clientHeight);
     };
     window.addEventListener("resize", onResize);
+    // Rotating a phone does not fire resize on every browser, and a stale
+    // aspect ratio stretches the whole lounge.
+    window.addEventListener("orientationchange", onResize);
 
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
       geometry.dispose();
       texture.dispose();
       material.dispose();
@@ -284,6 +349,7 @@ export function Video360Viewer({
 
     const onReady = () => {
       setPhase("ready");
+      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       // Seeking before metadata exists is silently ignored, which is how a
       // chapter's 360 cut used to open at zero however far in the visitor was.
       if (startTime > 0 && Number.isFinite(video.duration)) {
@@ -296,11 +362,17 @@ export function Video360Viewer({
       });
     };
     const onError = () => setPhase("error");
-    const onPlay = () => setPlaying(true);
+    const onPlay = () => {
+      setPlaying(true);
+      setFinished(false);
+    };
     const onPause = () => setPlaying(false);
-    // Natural completion is an exit, not a stop. The visitor came from a
-    // decision popup and that is where the end of the clip returns them.
-    const onEnded = () => exit();
+    // The end of the clip is NOT an exit. The overlay stays open on the final
+    // frame, still draggable, with Replay offered - see the component note.
+    const onEnded = () => {
+      setFinished(true);
+      setPlaying(false);
+    };
 
     video.addEventListener("loadedmetadata", onReady);
     video.addEventListener("error", onError);
@@ -324,7 +396,47 @@ export function Video360Viewer({
       video.removeAttribute("src");
       video.load();
     };
-  }, [src, startTime, reducedMotion, exit, attempt]);
+  }, [src, startTime, reducedMotion, attempt]);
+
+  // ---- The countdown -----------------------------------------------------
+  //
+  // The RING is written straight to the DOM from an animation frame, and only
+  // the whole-second readout goes through state. Driving the ring from state
+  // would mean a React render per frame to move a stroke offset; driving the
+  // readout from the frame loop would mean hand-managing a text node for
+  // something that changes once a second. Each half is done the cheap way.
+  //
+  // Pause, seek and replay all need no bookkeeping of their own: the ring is a
+  // pure function of video.currentTime, so it freezes when playback freezes
+  // and snaps the moment the playhead moves.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let frame = 0;
+    let lastWhole = -1;
+
+    const tick = () => {
+      frame = requestAnimationFrame(tick);
+      const total = Number.isFinite(video.duration) ? video.duration : 0;
+      if (total <= 0) return;
+
+      const left = Math.max(0, total - video.currentTime);
+      const ring = ringRef.current;
+      if (ring) {
+        // Visible arc = circumference * fraction remaining, so the ring
+        // shortens as the clip plays and reaches empty exactly at 0:00.
+        ring.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - left / total));
+      }
+      const whole = Math.ceil(left);
+      if (whole !== lastWhole) {
+        lastWhole = whole;
+        setRemaining(whole);
+      }
+    };
+    tick();
+    return () => cancelAnimationFrame(frame);
+  }, [attempt]);
 
   // ---- Drag and touch ----------------------------------------------------
   useEffect(() => {
@@ -394,10 +506,28 @@ export function Video360Viewer({
     return () => window.removeEventListener("popstate", onPop);
   }, [exit]);
 
+  // ---- The entry animation, once per opening ------------------------------
+  useEffect(() => {
+    // Two frames, not one: the first paint has to actually commit with the
+    // controls in their "before" state, or the browser coalesces both styles
+    // and there is no transition left to run. Nothing here gates interaction —
+    // the controls are mounted and clickable from the first frame, they are
+    // only travelling the last few pixels.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setEntered(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, []);
+
   // ---- Device orientation, only after an explicit grant -------------------
   useEffect(() => {
-    orientationRef.current = motionEnabled;
-    if (!motionEnabled) return;
+    const active = motionState === "enabled";
+    orientationRef.current = active;
+    if (!active) return;
 
     const onOrientation = (event: DeviceOrientationEvent) => {
       if (event.alpha === null || event.beta === null) return;
@@ -410,7 +540,7 @@ export function Video360Viewer({
 
     window.addEventListener("deviceorientation", onOrientation);
     return () => window.removeEventListener("deviceorientation", onOrientation);
-  }, [motionEnabled]);
+  }, [motionState]);
 
   const enableMotion = useCallback(async () => {
     // iOS gates this behind a permission call that must happen inside a user
@@ -420,16 +550,64 @@ export function Video360Viewer({
     };
     if (typeof api?.requestPermission === "function") {
       try {
-        if ((await api.requestPermission()) !== "granted") return;
+        if ((await api.requestPermission()) !== "granted") {
+          setMotionState("denied");
+          return;
+        }
       } catch {
+        setMotionState("denied");
         return;
       }
     }
-    setMotionEnabled(true);
+    // Android and desktop have no permission gate: the same control simply
+    // starts listening.
+    setMotionState("enabled");
   }, []);
 
-  const chip =
-    "pointer-events-auto rounded-full bg-white/15 px-4 py-2 text-xs text-white backdrop-blur";
+  // ---- Presentation -------------------------------------------------------
+
+  /** The pulse runs only while the offer is still open, and stops the instant
+   *  it is answered — granted, refused, or waved away. */
+  const wantsAttention = motionState === "idle" && phase === "ready";
+
+  const clock = formatClock(remaining ?? duration);
+  const ringVisible = phase === "ready" && duration > 0;
+
+  /** Shared chrome for every control: dark glass over the panorama, a copper
+   *  hairline, and a copper-light focus ring that stays visible against both
+   *  the bright skyline and the near-black marble. */
+  const chrome =
+    "pointer-events-auto inline-flex items-center justify-center gap-2 rounded-full " +
+    "border border-kameleon-copper/45 bg-black/55 text-kameleon-text backdrop-blur-md " +
+    "transition-colors hover:border-kameleon-copper hover:bg-black/70 " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kameleon-copper-light " +
+    "focus-visible:ring-offset-2 focus-visible:ring-offset-black/60";
+
+  /** 44px minimum on every side, per the brief and per anyone using this on a
+   *  phone with one thumb. */
+  const secondary = `${chrome} min-h-11 min-w-11 px-4 text-xs`;
+
+  /** The two primary controls. The label's own gradient — deep red into teal
+   *  under a copper rim — quotes the bottle's palette; the mark itself is
+   *  never redrawn. */
+  const primary =
+    `${chrome} min-h-14 px-6 text-sm font-semibold uppercase tracking-widest ` +
+    "border-kameleon-copper/80 bg-gradient-to-r from-kameleon-red/45 via-black/70 to-kameleon-teal/45 " +
+    "shadow-[0_2px_20px_-6px_rgba(192,133,82,0.55)] hover:border-kameleon-copper-light";
+
+  /** Entry animation: a short rise and fade, staggered, once per opening.
+   *  Reduced motion gets the same controls with no movement and no delay. */
+  const enterClass = reducedMotion
+    ? ""
+    : cn(
+        "transition-[opacity,transform] duration-500 ease-out",
+        entered ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0",
+      );
+  // Inline, not an arbitrary Tailwind class: a delay built from a template
+  // literal is invisible to the compiler's source scan and would never be
+  // generated.
+  const enterStyle = (delayMs: number) =>
+    reducedMotion ? undefined : { transitionDelay: `${delayMs}ms` };
 
   return (
     <div
@@ -463,7 +641,7 @@ export function Video360Viewer({
           <p className="max-w-xs text-xs text-white/70">
             The standard version of this chapter is still available.
           </p>
-          <button type="button" onClick={exit} className={chip}>
+          <button type="button" onClick={exit} className={secondary}>
             {exitLabel}
           </button>
         </div>
@@ -472,7 +650,7 @@ export function Video360Viewer({
       {webglSupported && phase === "loading" && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
           <span
-            className="h-8 w-8 animate-spin rounded-full border-2 border-white/25 border-t-white/80"
+            className="h-8 w-8 animate-spin rounded-full border-2 border-kameleon-copper/25 border-t-kameleon-copper-light"
             aria-hidden="true"
           />
           <p className="text-xs text-white/70">Loading the 360° lounge…</p>
@@ -483,60 +661,188 @@ export function Video360Viewer({
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 px-6 text-center">
           <p className="text-sm text-white">The 360° view could not be loaded.</p>
           <div className="flex gap-2">
-            <button type="button" onClick={retry} className={chip}>
+            <button type="button" onClick={retry} className={secondary}>
               Retry
             </button>
-            <button type="button" onClick={exit} className={chip}>
+            <button type="button" onClick={exit} className={secondary}>
               {exitLabel}
             </button>
           </div>
         </div>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-4">
+      {/* Top rail. The timer takes the corner and the exit sits directly under
+          it — the brief's stated fallback for when those two would collide.
+          Both stay reachable and neither covers the hero. */}
+      <div
+        className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-4"
+        style={{
+          paddingTop: "max(1rem, env(safe-area-inset-top))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
         {title && (
-          <p className="pointer-events-none max-w-[60%] text-xs text-white/80">{title}</p>
+          <p className="max-w-[45%] text-xs text-white/80 landscape:max-w-[30%]">{title}</p>
         )}
-        <button type="button" onClick={exit} className={`${chip} ml-auto`}>
-          {exitLabel}
-        </button>
+
+        <div className="ml-auto flex flex-col items-end gap-2">
+          {ringVisible && (
+            <div
+              className={cn("pointer-events-none relative h-16 w-16 landscape:h-12 landscape:w-12", enterClass)}
+              style={enterStyle(0)}
+              role="timer"
+              aria-live="off"
+              aria-label={`${Math.max(0, remaining ?? 0)} seconds remaining`}
+              data-testid="countdown"
+            >
+              <svg viewBox="0 0 64 64" className="h-full w-full -rotate-90">
+                <circle
+                  cx="32"
+                  cy="32"
+                  r={RING_RADIUS}
+                  fill="rgba(0,0,0,0.55)"
+                  stroke="rgba(192,133,82,0.22)"
+                  strokeWidth="4"
+                />
+                <circle
+                  ref={ringRef}
+                  cx="32"
+                  cy="32"
+                  r={RING_RADIUS}
+                  fill="none"
+                  // Teal once it is spent, copper while it runs. The colour is
+                  // a second signal, never the only one: the readout says the
+                  // same thing in words.
+                  stroke={finished ? "var(--kameleon-teal-light)" : "var(--kameleon-copper)"}
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                  strokeDasharray={RING_CIRCUMFERENCE}
+                  strokeDashoffset={0}
+                />
+              </svg>
+              <span className="absolute inset-0 flex items-center justify-center text-[13px] font-semibold tabular-nums text-kameleon-text landscape:text-[11px]">
+                {clock}
+              </span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={exit}
+            className={cn(secondary, enterClass)}
+            style={enterStyle(260)}
+          >
+            {exitLabel}
+          </button>
+        </div>
       </div>
 
       {/* The controls sit at the bottom because the bottle is the centre of
           the forward view, and the brief is explicit that nothing may cover
           its label. */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-wrap items-center justify-center gap-2 p-4">
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={playing ? "Pause" : "Play"}
-          className={chip}
+      <div
+        className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-center gap-3 p-4 landscape:gap-2"
+        style={{
+          paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
+        {/* Primary row. Play/Replay and Use Device Motion are the two controls
+            the brief wants found first, so they are the only ones at this
+            size, in this colour, and on their own line. */}
+        <div
+          className={cn("flex flex-wrap items-center justify-center gap-3", enterClass)}
+          style={enterStyle(120)}
         >
-          {playing ? "Pause" : "Play"}
-        </button>
-        <button
-          type="button"
-          onClick={toggleMute}
-          aria-label={muted ? "Unmute" : "Mute"}
-          className={chip}
+          {finished ? (
+            <button type="button" onClick={replay} className={primary} data-testid="primary-replay">
+              <ReplayIcon className="h-5 w-5" />
+              Replay
+            </button>
+          ) : (
+            !playing && (
+              <button type="button" onClick={play} className={primary} data-testid="primary-play">
+                <PlayIcon className="h-5 w-5" />
+                Play
+              </button>
+            )
+          )}
+
+          {motionState !== "unavailable" && motionState !== "enabled" && (
+            <button
+              type="button"
+              onClick={enableMotion}
+              aria-describedby="kameleon-motion-state"
+              className={cn(
+                primary,
+                wantsAttention &&
+                  (reducedMotion ? "kameleon-attention-static" : "kameleon-attention"),
+              )}
+              data-testid="primary-device-motion"
+            >
+              <DeviceMotionIcon className="h-5 w-5" />
+              {motionState === "denied" ? "Try Motion Again" : "Use Device Motion"}
+            </button>
+          )}
+
+          {motionState === "enabled" && (
+            <button
+              type="button"
+              onClick={() => setMotionState("dismissed")}
+              className={primary}
+              data-testid="primary-device-motion"
+            >
+              <DeviceMotionIcon className="h-5 w-5" />
+              Stop Device Motion
+            </button>
+          )}
+        </div>
+
+        {/* Secondary rail: smaller, quieter, and never competing with the two
+            above. Pause lives here rather than in the primary row because the
+            brief ranks it below Play/Replay. */}
+        <div
+          className={cn("flex flex-wrap items-center justify-center gap-2", enterClass)}
+          style={enterStyle(320)}
         >
-          {muted ? "Unmute" : "Mute"}
-        </button>
-        <button type="button" onClick={recenter} className={chip}>
-          Recenter
-        </button>
-        {motionAvailable && !motionEnabled && (
-          <button type="button" onClick={enableMotion} className={chip}>
-            Use device motion
+          {playing && (
+            <button type="button" onClick={pause} aria-label="Pause" className={secondary}>
+              <PauseIcon className="h-4 w-4" />
+              Pause
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={toggleMute}
+            aria-label={muted ? "Unmute" : "Mute"}
+            className={secondary}
+          >
+            {muted ? <MuteIcon className="h-4 w-4" /> : <SoundIcon className="h-4 w-4" />}
+            {muted ? "Unmute" : "Mute"}
           </button>
-        )}
-        {motionEnabled && (
-          <button type="button" onClick={() => setMotionEnabled(false)} className={chip}>
-            Stop device motion
+          <button type="button" onClick={recenter} aria-label="Recenter" className={secondary}>
+            <RecenterIcon className="h-4 w-4" />
+            Recenter
           </button>
-        )}
-        <p className="pointer-events-none w-full text-center text-[11px] text-white/60">
-          Drag to look around. Your choices are waiting when you return.
+        </div>
+
+        {/* Hidden in landscape, where vertical room is the scarce thing and
+            the panorama has to stay dominant. */}
+        <p
+          id="kameleon-motion-state"
+          className="w-full text-center text-[11px] text-white/60 landscape:hidden"
+        >
+          {motionState === "enabled"
+            ? "Device motion on — move your phone to look around."
+            : motionState === "denied"
+              ? "Motion access was declined. Drag to look around instead."
+              : motionState === "unavailable"
+                ? "Drag to look around. Your choices are waiting when you return."
+                : finished
+                  ? "Still here — look around, or replay the lounge."
+                  : "Drag to look around. Your choices are waiting when you return."}
         </p>
       </div>
     </div>

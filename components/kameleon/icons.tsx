@@ -218,3 +218,17 @@ export function Sphere360Icon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+/**
+ * A phone tilting, with motion arcs either side — the gesture the control is
+ * asking for, rather than a gyroscope, which nobody recognises at 20 px.
+ */
+export function DeviceMotionIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="9" y="4" width="7" height="14" rx="1.5" transform="rotate(12 12.5 11)" />
+      <path d="M5.5 8.5a7 7 0 0 0 0 7" />
+      <path d="M19.5 8.5a7 7 0 0 1 0 7" />
+    </Icon>
+  );
+}

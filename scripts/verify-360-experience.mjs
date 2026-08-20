@@ -138,7 +138,6 @@ console.log("\n--- every way out is the same way out ---");
   );
   check(/"Escape"/.test(viewer), "Escape exits");
   check(/addEventListener\("ended", onEnded\)/.test(viewer), "natural completion is handled");
-  check(/const onEnded = \(\) => exit\(\)/.test(viewer), "natural completion exits");
   check(
     /window\.history\.pushState\(\{ kameleon360: true \}/.test(viewer),
     "the overlay pushes a history entry so Back has something to close",
@@ -167,6 +166,227 @@ console.log("\n--- every way out is the same way out ---");
 }
 
 // ---------------------------------------------------------------------------
+console.log("\n--- the end of the clip is not the end of the visit ---");
+// ---------------------------------------------------------------------------
+{
+  // The inversion of the previous behaviour, and the reason this block is
+  // explicit: `ended` used to call exit(), so a visitor who was still looking
+  // around was thrown back to the popup mid-look.
+  const endedHandler = viewer.slice(
+    viewer.indexOf("const onEnded ="),
+    viewer.indexOf('video.addEventListener("loadedmetadata"'),
+  );
+  check(endedHandler.length > 0, "there is an ended handler to inspect");
+  check(!/exit\(\)/.test(endedHandler), "reaching the end does NOT exit the viewer");
+  check(/setFinished\(true\)/.test(endedHandler), "reaching the end marks the clip finished");
+
+  // Nothing unmounts the sphere or drops the look direction on finish, so the
+  // final frame stays explorable. Proved by absence: `finished` must not gate
+  // the renderer or the drag listeners.
+  const sceneEffect = viewer.slice(
+    viewer.indexOf("const renderer = new THREE.WebGLRenderer"),
+    viewer.indexOf("}, [webglSupported, attempt]);"),
+  );
+  check(!/finished/.test(sceneEffect), "the sphere keeps rendering after the clip ends");
+  const dragStart = viewer.indexOf("const down = (event: PointerEvent)");
+  const dragEffect = viewer.slice(dragStart, viewer.indexOf("}, []);", dragStart));
+  check(!/finished/.test(dragEffect), "drag and touch keep working after the clip ends");
+
+  check(/data-testid="primary-replay"/.test(viewer), "a Replay control appears when finished");
+  const replayFn = viewer.slice(
+    viewer.indexOf("const replay = useCallback"),
+    viewer.indexOf("const toggleMute = useCallback"),
+  );
+  check(/video\.currentTime = 0;/.test(replayFn), "Replay rewinds to the start");
+  check(/setFinished\(false\)/.test(replayFn), "Replay clears the finished state");
+  check(/video\.play\(\)/.test(replayFn), "Replay starts playback again");
+  check(!/exit\(/.test(replayFn), "Replay does not close the overlay");
+  // The ring is a pure function of currentTime, so rewinding resynchronises it
+  // without Replay having to touch the timer at all.
+  check(
+    !/ringRef/.test(replayFn) && !/setRemaining/.test(replayFn),
+    "Replay resets the timer implicitly, by moving the playhead it is derived from",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- the countdown ---");
+// ---------------------------------------------------------------------------
+{
+  check(/data-testid="countdown"/.test(viewer), "there is a countdown element");
+  check(/role="timer"/.test(viewer), "it is exposed as a timer");
+  check(/seconds remaining/.test(viewer), "it carries a spoken label, not just a ring");
+  check(/function formatClock/.test(viewer), "the remaining time is rendered as m:ss");
+  check(
+    /Math\.floor\(safe \/ 60\)/.test(viewer) && /padStart\(2, "0"\)/.test(viewer),
+    "60 seconds reads as 1:00 and 9 seconds as 0:09",
+  );
+  const tickStart = viewer.indexOf("const tick = () => {");
+  const timer = viewer.slice(tickStart, viewer.indexOf("}, [attempt]);", tickStart));
+  check(timer.length > 0, "there is a countdown loop to inspect");
+  // Derived from currentTime rather than from a wall clock, which is what
+  // makes pause, seek and replay correct without any bookkeeping: a paused
+  // video stops advancing currentTime, so the ring and the number stop too.
+  check(
+    /total - video\.currentTime/.test(timer),
+    "the countdown is derived from the playhead, so pausing freezes it",
+  );
+  check(
+    !/Date\.now\(\)/.test(timer) && !/setInterval/.test(timer),
+    "the countdown does not run on a wall clock that would drift past a pause",
+  );
+  check(
+    /ring\.style\.strokeDashoffset/.test(timer),
+    "the ring is written straight to the DOM rather than through a render per frame",
+  );
+  check(
+    /if \(whole !== lastWhole\)/.test(timer),
+    "the readout re-renders once a second, not once a frame",
+  );
+  check(
+    /finished \? "var\(--kameleon-teal-light\)" : "var\(--kameleon-copper\)"/.test(viewer),
+    "the ring takes a teal completion accent over copper",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- control priority, attention, and the entry animation ---");
+// ---------------------------------------------------------------------------
+{
+  const secondaryDef = viewer.slice(
+    viewer.indexOf("const secondary ="),
+    viewer.indexOf("const primary ="),
+  );
+  const primaryDef = viewer.slice(
+    viewer.indexOf("const primary ="),
+    viewer.indexOf("const enterClass"),
+  );
+  check(/min-h-14/.test(primaryDef), "the primary controls are the taller ones");
+  check(/min-h-11/.test(secondaryDef), "the secondary controls keep a 44px touch target");
+  check(
+    /text-sm/.test(primaryDef) && /text-xs/.test(secondaryDef),
+    "the primary controls carry the larger type",
+  );
+  check(
+    /kameleon-red/.test(primaryDef) && /kameleon-teal/.test(primaryDef),
+    "the primary controls quote the bottle label's red and teal",
+  );
+  const chromeDef = viewer.slice(viewer.indexOf("const chrome ="), viewer.indexOf("const secondary ="));
+  check(
+    /border-kameleon-copper/.test(chromeDef),
+    "every control is bordered in copper",
+  );
+  check(
+    /bg-black\/55/.test(chromeDef) && /backdrop-blur/.test(chromeDef),
+    "every control sits on dark glass, so it stays readable over any part of the panorama",
+  );
+  check(
+    /focus-visible:ring-kameleon-copper-light/.test(viewer),
+    "focus is visible against both the skyline and the marble",
+  );
+
+  // Anchored on the stagger delays, not on the section comments: the reader
+  // above strips comments, so a comment makes a useless landmark.
+  const primaryRow = viewer.slice(
+    viewer.indexOf("enterStyle(120)"),
+    viewer.indexOf("enterStyle(320)"),
+  );
+  const secondaryRail = viewer.slice(viewer.indexOf("enterStyle(320)"));
+  check(
+    /data-testid="primary-device-motion"/.test(primaryRow),
+    "Use Device Motion sits in the primary row",
+  );
+  check(
+    /data-testid="primary-play"/.test(primaryRow) &&
+      /data-testid="primary-replay"/.test(primaryRow),
+    "Play and Replay share the primary slot",
+  );
+  check(
+    /<DeviceMotionIcon[\s\S]{0,200}Use Device Motion/.test(primaryRow),
+    "Use Device Motion is a labelled button with an icon, not an icon alone",
+  );
+  for (const label of ["Pause", "Mute", "Recenter"]) {
+    check(
+      secondaryRail.includes(label) && !primaryRow.includes(`>${label}`),
+      `${label} is in the secondary rail, below the primary controls`,
+    );
+  }
+
+  check(/kameleon-attention/.test(viewer), "the motion control has an attention state");
+  check(
+    /motionState === "idle" && phase === "ready"/.test(viewer),
+    "it asks for attention only while the offer is still unanswered",
+  );
+  check(
+    /reducedMotion\s*\?\s*"kameleon-attention-static"\s*:\s*"kameleon-attention"/.test(viewer),
+    "reduced motion gets a static highlight instead of a pulse",
+  );
+  check(
+    /setMotionState\("denied"\)/.test(viewer),
+    "a refused permission is recorded, so the pulse stops and the copy changes",
+  );
+  check(/"Try Motion Again"/.test(viewer), "a refused permission still offers a retry");
+  check(
+    /motionState !== "unavailable"/.test(viewer),
+    "a device without the orientation API is offered nothing to tap",
+  );
+  check(
+    /requestPermission/.test(viewer) && /onClick=\{enableMotion\}/.test(viewer),
+    "the iOS permission call happens inside the button's own gesture",
+  );
+
+  check(/const \[entered, setEntered\]/.test(viewer), "the controls animate in on open");
+  check(
+    /transition-\[opacity,transform\]/.test(viewer),
+    "the entry animation moves opacity and transform only",
+  );
+  check(
+    /transitionDelay: `\$\{delayMs\}ms`/.test(viewer),
+    "the stagger is an inline delay, because a templated Tailwind class is never generated",
+  );
+  check(
+    /const enterClass = reducedMotion\s*\?\s*""/.test(viewer),
+    "reduced motion skips the entry animation entirely",
+  );
+  // It runs once per opening: the state that drives it starts false and is
+  // only ever set true.
+  check(
+    /setEntered\(true\)/.test(viewer) && !/setEntered\(false\)/.test(viewer),
+    "the entry animation runs once per opening and never replays",
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- responsive placement ---");
+// ---------------------------------------------------------------------------
+{
+  check(
+    /env\(safe-area-inset-top\)/.test(viewer) && /env\(safe-area-inset-bottom\)/.test(viewer),
+    "the rails respect the notch and the home indicator",
+  );
+  check(
+    /env\(safe-area-inset-left\)/.test(viewer) && /env\(safe-area-inset-right\)/.test(viewer),
+    "landscape safe areas are respected too",
+  );
+  check(/landscape:/.test(viewer), "landscape gets a more compact layout");
+  // The timer and the exit share the top-right corner, stacked, which is the
+  // brief's stated fallback for when they would otherwise collide.
+  const topRail = viewer.slice(
+    viewer.indexOf("absolute inset-x-0 top-0"),
+    viewer.indexOf("absolute inset-x-0 bottom-0"),
+  );
+  check(
+    /flex flex-col items-end/.test(topRail),
+    "the timer and the exit stack in the top corner rather than overlapping",
+  );
+  check(
+    topRail.indexOf('data-testid="countdown"') < topRail.indexOf("{exitLabel}"),
+    "the timer takes the corner and the exit sits immediately below it",
+  );
+  check(/flex-wrap/.test(viewer), "the control rows wrap rather than running off a 320px screen");
+}
+
+// ---------------------------------------------------------------------------
 console.log("\n--- the viewer's required controls and states ---");
 // ---------------------------------------------------------------------------
 {
@@ -185,7 +405,10 @@ console.log("\n--- the viewer's required controls and states ---");
     /"webkit-playsinline": "true"/.test(viewer),
     "the legacy webkit-playsinline attribute is emitted too",
   );
-  check(/const togglePlay =/.test(viewer) && /aria-label=\{playing/.test(viewer), "Play/Pause");
+  check(
+    /const play = useCallback/.test(viewer) && /const pause = useCallback/.test(viewer),
+    "Play/Pause",
+  );
   check(/const toggleMute =/.test(viewer) && /aria-label=\{muted/.test(viewer), "Mute/Unmute");
   check(/useState\(true\)/.test(viewer.slice(viewer.indexOf("const [muted"))), "opens muted");
   check(/const recenter =/.test(viewer), "Recenter");
