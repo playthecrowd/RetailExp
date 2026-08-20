@@ -48,7 +48,24 @@ DEEP_RED = (0.698, 0.227, 0.227, 1.0)    # #b23a3a
 argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 CALIBRATE = "--calibrate" in argv
 STILL = "--still" in argv
-YAW = 0.0
+# MEASURED, and defaulted rather than left to a flag.
+#
+# Blender's equirectangular camera puts world +Y at the image centre, but this
+# panorama's hero pedestal is 270 degrees away from there, so an uncorrected
+# render opens facing the BAR. That was measured with --calibrate and
+# measure_yaw.py, which reported "render is rotated by 270.00 deg".
+#
+# It is a DEFAULT and not a flag because it was a flag, and the flag was
+# forgotten: a 450-frame sequence rendered, encoded, uploaded and attached to
+# 28 nodes before anyone looked at the delivered file and saw the bar. The
+# correct value is a property of this panorama, not of one invocation.
+#
+# The value was fixed by measurement, not by reading it off measure_yaw.py,
+# which had a sign flip and recommended -270. Rendering at 0 and at -270 and
+# correlating each against the source gives rotation = 90 + YAW, so YAW = -90
+# is the value that lands the pedestal dead ahead. Two data points beat one
+# derivation.
+YAW = -1.5707963267948966  # -90 degrees
 if "--yaw" in argv:
     YAW = float(argv[argv.index("--yaw") + 1])
 
@@ -125,10 +142,20 @@ def image_plane(name, path, height_m, location, rotation_z):
     # component is the normal, so the height was applied to thin air and the
     # bottle rendered 1 m tall and 12 cm wide.
     plane.scale = (width_m, height_m, 1.0)
-    # Stand it up, then yaw it to FACE the camera. The extra half turn matters:
-    # without it the plane's normal points along the view direction rather than
-    # back at it, which renders the artwork mirrored.
-    plane.rotation_euler = (math.radians(90), 0.0, rotation_z + math.pi)
+    # Stand it up, then yaw it to FACE the camera.
+    #
+    # The turn is -rotation_z, not rotation_z + pi. Both put the artwork the
+    # right way round at rotation_z = +/-90 degrees, and only one of them does
+    # so anywhere else - which is why the half turn survived: it was tuned at
+    # 270 degrees, where it happens to agree.
+    #
+    # Working it through: after the 90-degree stand-up the plane's normal is
+    # (sin t, -cos t) for a turn t, and the object sits at (sin r, cos r) * d,
+    # so facing the camera at the origin needs (-sin r, -cos r). t = -r gives
+    # exactly that for every r; t = r + pi gives (-sin r, +cos r), which is
+    # correct only where cos r = 0. At r = 0 it points the artwork away and the
+    # render reads NOELEMAK.
+    plane.rotation_euler = (math.radians(90), 0.0, -rotation_z)
 
     mat = bpy.data.materials.new(f"{name}Mat")
     mat.use_nodes = True
@@ -234,8 +261,8 @@ def build_wordmark(location, rotation_z, height_m):
     obj = bpy.data.objects.new("Wordmark", curve)
     bpy.context.collection.objects.link(obj)
     obj.location = location
-    # Same half turn as the bottle: the first render read "NOELEMAK".
-    obj.rotation_euler = (math.radians(90), 0.0, rotation_z + math.pi)
+    # Same facing rule as the bottle, and for the same reason - see image_plane.
+    obj.rotation_euler = (math.radians(90), 0.0, -rotation_z)
 
     mat = bpy.data.materials.new("WordmarkMat")
     mat.use_nodes = True

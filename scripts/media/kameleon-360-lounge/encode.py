@@ -69,6 +69,46 @@ if unreadable:
     )
 print("frames verified: all readable at the target resolution")
 
+# --- Is the hero actually in front of the visitor? -------------------------
+#
+# Every other check here passes on a video pointing the wrong way. One did:
+# a full 450-frame sequence was rendered, encoded, verified 7/7, uploaded and
+# attached to 28 nodes while facing the BAR, with the bottle label and the
+# wordmark mirrored, because a --yaw flag was omitted. Nothing in the file
+# said so. The only thing that would have caught it is asking whether the
+# render still lines up with the panorama it was made from.
+#
+# Correlating frame 1 against the source over the horizon band answers exactly
+# that. A correct render has zero residual roll; the 90/180/270 degree errors
+# this is guarding against are unmissable at this precision.
+import numpy as np  # noqa: E402
+
+CORRELATE_W = 1024
+SOURCE = os.path.join(ROOT, "kameleon-decision-lounge-placeholder-360.png")
+
+
+def _normalised(path):
+    img = Image.open(path).convert("L").resize((CORRELATE_W, CORRELATE_W // 2), Image.LANCZOS)
+    a = np.asarray(img).astype(np.float32)
+    return (a - a.mean()) / (a.std() + 1e-6)
+
+
+source = _normalised(SOURCE)
+first = _normalised(os.path.join(ROOT, "frames", "f_0001.png"))
+horizon = slice(int(CORRELATE_W * 0.5 * 0.35), int(CORRELATE_W * 0.5 * 0.75))
+src_band, ren_band = source[horizon], first[horizon]
+shift = max(
+    range(CORRELATE_W),
+    key=lambda s: float((src_band * np.roll(ren_band, s, axis=1)).sum()),
+)
+residual = (shift / CORRELATE_W * 360.0 + 180.0) % 360.0 - 180.0
+print(f"orientation    : residual roll {residual:+.2f} deg vs the source panorama")
+if abs(residual) > 5.0:
+    sys.exit(
+        f"ABORT: the render is rotated {residual:+.1f} deg from the source, so the hero "
+        "pedestal is not in front of the visitor. Check YAW in build_scene.py."
+    )
+
 cmd = [
     "ffmpeg", "-y",
     "-framerate", str(FPS),

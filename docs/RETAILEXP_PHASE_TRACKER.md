@@ -553,6 +553,29 @@ now superseded by the popup control. Standard playback is untouched.
   directly behind the visitor is softer than the rest. Measured at 0.04× the
   interior column baseline — no tear, but not new pixels either.
 
+### One defect worth recording, because every automated check passed
+
+The first delivered encode faced the **bar**, with the bottle label and the
+wordmark **mirrored**. It passed all seven delivery checks — 3840×1920, exact
+2:1, 30 fps, 15 s, H.264, yuv420p, faststart — was uploaded, and was attached
+to all 28 nodes before anyone looked at a frame of it.
+
+Two independent causes:
+
+1. The camera yaw that puts the hero pedestal ahead was a command-line flag,
+   and the flag was omitted. It is now a measured default in `build_scene.py`.
+2. The plane-facing correction was `rotation_z + π`, which is right only where
+   `cos(rotation_z) = 0`. It had been tuned at 270°, where it happens to agree,
+   so it looked correct. It is now `-rotation_z`, which is right at every yaw.
+
+`measure_yaw.py` also had a sign flip and recommended −270° where −90° was
+needed. Fixed, and it now derives −90° independently.
+
+`encode.py` gained the check that would have caught this: it correlates frame 1
+against the source panorama and refuses to encode if the residual roll exceeds
+5°. Format checks cannot see a video pointing the wrong way; only comparing it
+to what it was made from can.
+
 ## Phase 5 — Real WebXR Ground-Plane AR Prototype
 
 **Goal (as actually directed, 2026-08-03):** Replace the simulated AR screens

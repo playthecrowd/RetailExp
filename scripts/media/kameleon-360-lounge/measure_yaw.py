@@ -52,11 +52,18 @@ print(f"best mirrored score   : {flip_score / pixels:8.4f}  at shift {flip_shift
 if flip_score > best_score * 1.02:
     print("WARNING: the render correlates better MIRRORED - the mapping is flipped.")
 
-degrees = best_shift / W * 360.0
-radians = np.deg2rad(degrees)
-# The render is the source rolled by +shift, so the world must be rotated back.
+# best_shift is the roll that brings the RENDER into line with the SOURCE, so
+# the render is rotated by MINUS that, and the camera yaw that cancels it is
+# +best_shift. The sign was inverted here, which recommended -270 where -90 was
+# needed and put the hero pedestal 180 degrees behind the visitor. Verified by
+# rendering at two known yaws and correlating both: rotation = 90 + YAW.
+roll_to_align = best_shift / W * 360.0
+rotation = -roll_to_align % 360.0
+apply_deg = (roll_to_align + 180.0) % 360.0 - 180.0  # the same angle, nearest zero
+radians = np.deg2rad(apply_deg)
 print()
-print(f"render is rotated by  : {degrees:.2f} deg")
-print(f"apply mapping yaw of  : {-radians:.6f} rad  ({-degrees:.2f} deg)")
+print(f"roll to align render  : {roll_to_align:.2f} deg")
+print(f"render is rotated by  : {rotation:.2f} deg")
+print(f"apply mapping yaw of  : {radians:.6f} rad  ({apply_deg:.2f} deg)")
 print()
-print(f"  --yaw {-radians:.6f}")
+print(f"  --yaw {radians:.6f}")
