@@ -4,33 +4,33 @@ import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import type { MediaRef } from "@/lib/gifting/simulation/types";
-import {
-  ActionDock,
-  Guidance,
-  LiveRegion,
-  RecallDot,
-  Stage,
-  useStage,
-} from "./shell";
+import { ActionDock, Guidance, LiveRegion, RecallDot, Stage, useStage, TOP_GUTTER } from "./shell";
+import { VideoTimer } from "./VideoTimer";
 import { Button } from "./ui";
 
 /**
  * A full-screen video step.
  *
+ * THE ACTION IS ABSENT, NOT DISABLED
+ *   Until the film genuinely finishes there is no Continue button on screen at
+ *   all. A greyed-out one is worse than nothing: it invites tapping, it reads
+ *   as broken, and it tells the visitor the way forward is unavailable rather
+ *   than not yet earned. When it is earned it rises into place and stays —
+ *   replaying does not take it away.
+ *
  * COMPLETION IS EARNED ONCE AND KEPT
- *   `completionEarned` is a one-way latch. Replaying does not revoke it, and
- *   neither does pausing, seeking or rotating the phone: a visitor who replays
- *   to catch a line they missed has not un-finished the video, and making them
- *   sit through it again to get the button back would punish paying attention.
+ *   `completionEarned` is a one-way latch. Pausing does not set it, seeking to
+ *   the end does — because that IS the end — and replaying does not revoke it.
+ *   Making someone sit through a film again to get the button back would
+ *   punish paying attention.
  *
  * WHY `ended` ALONE IS NOT ENOUGH
- *   On a phone the `ended` event is genuinely unreliable — a clip that stalls
- *   on the last frame, a decoder that rounds duration down, a backgrounded tab
- *   that resumes past the end. Any of those leaves a visitor on a finished
- *   video with no way forward. So completion is ALSO inferred from
- *   `timeupdate` once the playhead is within a quarter second of the end, and
- *   a playback error unlocks the action too. Being generous here costs
- *   nothing; being strict traps people.
+ *   On a phone `ended` is genuinely unreliable: a clip that stalls on the last
+ *   frame, a decoder that rounds duration down, a tab that resumes past the
+ *   end. Any of those leaves a visitor on a finished video with no way
+ *   forward, which is a dead end in the middle of a gift. So completion is
+ *   ALSO inferred from `timeupdate` inside the final quarter second, and a
+ *   playback error unlocks it too.
  *
  * THE ACTION IS NOT PART OF THE GUIDANCE
  *   It lives in ActionDock, which has no visibility state. Instructions can
@@ -41,31 +41,30 @@ import { Button } from "./ui";
  *  decoder that reports duration a frame short. */
 const END_EPSILON = 0.25;
 
-export function VideoStage({
-  source,
-  title,
-  instruction,
-  step,
-  total,
-  continueLabel,
-  onContinue,
-  onExit,
-  autoPlay = true,
-  extraActions,
-}: {
+export interface VideoStageProps {
   source: MediaRef;
   title: string;
   instruction: string;
   step?: number;
   total?: number;
-  continueLabel: string;
-  onContinue: () => void;
+  /** The single action revealed on completion. Omit when `finalActions` is
+   *  supplying its own pair. */
+  continueLabel?: string;
+  onContinue?: () => void;
   onExit?: () => void;
+  exitLabel?: string;
   autoPlay?: boolean;
-  /** Optional secondary actions rendered under the primary one, inside the
-   *  same permanent dock. */
-  extraActions?: ReactNode;
-}) {
+  /** Two equal-weight actions revealed together on completion, for a film that
+   *  ends in a choice rather than a next step. */
+  finalActions?: ReactNode;
+  /** Shown under the action once it exists. */
+  note?: string;
+  /** Shown while the visitor is still watching. */
+  watchingNote?: string;
+}
+
+export function VideoStage(props: VideoStageProps) {
+  const { source } = props;
   return (
     <Stage
       media={
@@ -79,18 +78,7 @@ export function VideoStage({
         />
       }
     >
-      <Inner
-        source={source}
-        title={title}
-        instruction={instruction}
-        step={step}
-        total={total}
-        continueLabel={continueLabel}
-        onContinue={onContinue}
-        onExit={onExit}
-        autoPlay={autoPlay}
-        extraActions={extraActions}
-      />
+      <Inner {...props} />
     </Stage>
   );
 }
@@ -104,20 +92,12 @@ function Inner({
   continueLabel,
   onContinue,
   onExit,
-  autoPlay,
-  extraActions,
-}: {
-  source: MediaRef;
-  title: string;
-  instruction: string;
-  step?: number;
-  total?: number;
-  continueLabel: string;
-  onContinue: () => void;
-  onExit?: () => void;
-  autoPlay: boolean;
-  extraActions?: ReactNode;
-}) {
+  exitLabel,
+  autoPlay = true,
+  finalActions,
+  note,
+  watchingNote = "Watch to the end to continue.",
+}: VideoStageProps) {
   const { announce, reducedMotion } = useStage();
   const videoRef = useRef<HTMLVideoElement>(null);
   const continueRef = useRef<HTMLButtonElement>(null);
@@ -133,7 +113,7 @@ function Inner({
       if (already) return already;
       if (!announcedRef.current) {
         announcedRef.current = true;
-        announce(`${continueLabel} is now available.`);
+        announce(continueLabel ? `${continueLabel} is now available.` : "Your gift is ready.");
       }
       return true;
     });
@@ -153,12 +133,14 @@ function Inner({
       setPlaying(false);
       earnCompletion();
     };
-    // The fallback that matters on a phone.
-    const onTimeUpdate = () => {
+    // The fallback that matters on a phone. Note that this only fires while
+    // the playhead is moving, so a paused video can never earn completion.
+    const atEnd = () => {
       const { currentTime, duration } = video;
-      if (Number.isFinite(duration) && duration > 0 && currentTime >= duration - END_EPSILON) {
-        earnCompletion();
-      }
+      return Number.isFinite(duration) && duration > 0 && currentTime >= duration - END_EPSILON;
+    };
+    const onTimeUpdate = () => {
+      if (atEnd()) earnCompletion();
     };
     const onError = () => {
       setFailed(true);
@@ -169,10 +151,7 @@ function Inner({
     };
     // A clip that stalls on the final frame never fires `ended`.
     const onStalled = () => {
-      const { currentTime, duration } = video;
-      if (Number.isFinite(duration) && duration > 0 && currentTime >= duration - END_EPSILON) {
-        earnCompletion();
-      }
+      if (atEnd()) earnCompletion();
     };
 
     video.addEventListener("play", onPlay);
@@ -200,8 +179,8 @@ function Inner({
     };
   }, [autoPlay, earnCompletion, announce]);
 
-  // Focus the action once it is earned — without scrolling, because the
-  // document cannot scroll and the attempt shifts the fixed stage on iOS.
+  // Focus the action once it exists — without scrolling, because the document
+  // cannot scroll and the attempt shifts the fixed stage on iOS.
   const focusedRef = useRef(false);
   useEffect(() => {
     if (!completionEarned || focusedRef.current) return;
@@ -250,15 +229,29 @@ function Inner({
         step={step}
         total={total}
         onExit={onExit}
+        exitLabel={exitLabel}
       />
       <RecallDot />
 
-      {/* Playback controls: above the video, below the dock, and clear of it. */}
+      {/* Opposite corner from the Exit chip, inside the safe inset, and small
+          enough to sit over a corner of the frame rather than over a face. */}
+      {source.video && (
+        <VideoTimer
+          videoRef={videoRef}
+          className="absolute right-4 z-40"
+          style={{ top: `calc(env(safe-area-inset-top) + ${TOP_GUTTER}px)` }}
+        />
+      )}
+
+      {/* Playback controls: above the video, below the dock, clear of both. */}
       <div
         className="pointer-events-none absolute inset-x-0 z-40 flex flex-wrap items-center justify-center gap-2 px-4"
         style={{ bottom: "calc(env(safe-area-inset-bottom) + 7.2rem)" }}
       >
-        <ControlChip onClick={toggle} label={playing ? "Pause" : completionEarned ? "Replay" : "Play"} />
+        <ControlChip
+          onClick={toggle}
+          label={playing ? "Pause" : completionEarned ? "Replay" : "Play"}
+        />
         <ControlChip
           onClick={() => {
             const video = videoRef.current;
@@ -270,24 +263,28 @@ function Inner({
         />
       </div>
 
-      {/* Permanent. Before completion it explains what to do; after, it is the
-          way forward. It never fades, and it is never a child of Guidance. */}
+      {/* Permanent. Before completion it holds only the line explaining what
+          to do; the action itself does not exist yet. It never fades, and it is
+          never a child of Guidance. */}
       <ActionDock
-        note={completionEarned ? undefined : "Watch to the end to continue."}
+        note={completionEarned ? note : watchingNote}
         error={failed ? "This video could not be played." : null}
       >
-        {failed && <Button variant="secondary" onClick={retry}>Try Again</Button>}
-        <Button
-          ref={continueRef}
-          onClick={onContinue}
-          disabled={!completionEarned}
-          className={cn(
-            !reducedMotion && completionEarned && "transition-transform duration-300",
-          )}
-        >
-          {continueLabel}
-        </Button>
-        {extraActions}
+        {failed && (
+          <Button variant="secondary" onClick={retry}>
+            Try Again
+          </Button>
+        )}
+        {completionEarned &&
+          (finalActions ?? (
+            <Button
+              ref={continueRef}
+              onClick={onContinue}
+              className={cn(!reducedMotion && "gift-anim-rise")}
+            >
+              {continueLabel}
+            </Button>
+          ))}
       </ActionDock>
     </>
   );

@@ -81,6 +81,10 @@ export interface GiftProduct {
   /** The code printed beside the QR on this physical package. It travels WITH
    *  the product: regifting the same bottle reuses this code by definition. */
   packageCode: string;
+  /** The Signature Product Experience — the film about this item, shown after
+   *  the visitor has met the person who sent it. Belongs to the product rather
+   *  than to the gift, because it is the same film whoever passes it on. */
+  experience: MediaRef;
 }
 
 /** Where a gift stands. One package can only have one live assignment, so
@@ -138,8 +142,10 @@ export interface ExperienceConfig {
   gateBody: string;
   gateConfirmLabel: string;
   gateDeclineLabel: string;
-  introEnabled: boolean;
-  introPosterId: string;
+  /** Whether Video Phase 2 — the Signature Product Experience — plays after
+   *  the visitor's details are captured. */
+  signatureExperienceEnabled: boolean;
+  signaturePosterId: string;
   standardGiftingEnabled: boolean;
   aiGiftingEnabled: boolean;
   regiftingEnabled: boolean;

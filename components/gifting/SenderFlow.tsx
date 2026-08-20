@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/cn";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { media, useGifting } from "@/lib/gifting/simulation/store";
 import type { GalleryItem } from "@/lib/gifting/simulation/types";
 import { AI_STAGE_LABELS, type AiJobStage } from "@/lib/gifting/simulation/types";
@@ -809,32 +810,110 @@ function PackageCodeEntry({ onExit }: { onExit: () => void }) {
   );
 }
 
+/**
+ * Pairing, as three things that either happened or did not.
+ *
+ * WHERE THE PERCENTAGE COMES FROM
+ *   It is `done.length / 3`, and `done` is the list of bindings that have
+ *   actually been written. There is no progress animation with its own clock,
+ *   because a bar that fills on a timer is a picture of work rather than a
+ *   report of it — and the moment it disagrees with the truth it is worse than
+ *   nothing. Each step flips one flag; the number follows.
+ *
+ * WHY THE STYLE IS NOT LISTED
+ *   The chosen scene is still carried in the draft and still governs what gets
+ *   generated. It is simply not one of the three things being confirmed here:
+ *   this screen is about the package, the message and the person, and a fourth
+ *   row that is not part of the pairing dilutes the check.
+ */
+
+type PairingStep = "package" | "message" | "recipient";
+const PAIRING_STEPS: { id: PairingStep; label: string; describe: (v: string) => string }[] = [
+  { id: "package", label: "Package / Product", describe: (v) => v },
+  { id: "message", label: "New Message", describe: (v) => v },
+  { id: "recipient", label: "Recipient", describe: (v) => v },
+];
+
 function ConfirmProduct({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, activeTemplates, credits, showToast } = useGifting();
+  const { reducedMotion, announce } = useStage();
   const template = activeTemplates.find((t) => t.id === draft.templateId);
   const regifting = draft.isRegift;
   const packageCode = draft.packageCode ?? draft.product.packageCode;
 
+  const [done, setDone] = useState<PairingStep[]>([]);
+  const [pairing, setPairing] = useState(false);
+  const percent = Math.round((done.length / PAIRING_STEPS.length) * 100);
+  const ready = done.length === PAIRING_STEPS.length;
+
   /** The gift as it will appear in My Gifts the moment it is paired. */
-  const newGift = (): GalleryItem => ({
-    id: draft.kind === "ai" ? "job-live" : `gift-${packageCode}-${draft.messageCode ?? "new"}`,
-    kind: draft.kind,
-    direction: "created",
-    title: `For ${draft.recipientName || "your recipient"}`,
-    subtitle: draft.product.name,
-    media: draft.kind === "ai" ? media.aiGift : media.standardGift,
-    stage: draft.kind === "ai" ? "preparing" : undefined,
-    templateTitle: template?.title,
-    createdLabel: "Just now",
-    packageCode,
-    messageCode: draft.messageCode ?? undefined,
-    product: draft.product,
-    senderName: "You",
-    recipientName: draft.recipientName || undefined,
-    message: draft.note || "A gift chosen for you.",
-    // It exists, it is addressed, and it has not been handed over yet.
-    assignment: "ready_to_send",
-  });
+  const newGift = useCallback(
+    (): GalleryItem => ({
+      id: draft.kind === "ai" ? "job-live" : `gift-${packageCode}-${draft.messageCode ?? "new"}`,
+      kind: draft.kind,
+      direction: "created",
+      title: `For ${draft.recipientName || "your recipient"}`,
+      subtitle: draft.product.name,
+      media: draft.kind === "ai" ? media.aiGift : media.standardGift,
+      stage: draft.kind === "ai" ? "preparing" : undefined,
+      templateTitle: template?.title,
+      createdLabel: "Just now",
+      packageCode,
+      messageCode: draft.messageCode ?? undefined,
+      product: draft.product,
+      senderName: "You",
+      recipientName: draft.recipientName || undefined,
+      message: draft.note || "A gift chosen for you.",
+      // It exists, it is addressed, and it has not been handed over yet.
+      assignment: "ready_to_send",
+    }),
+    [draft, packageCode, template?.title],
+  );
+
+  // Each binding is written, then marked. They are sequenced rather than done
+  // at once so the visitor can see which one is which — the delay separates
+  // real steps, it does not stand in for them.
+  const pair = () => {
+    if (pairing || ready) return;
+    setPairing(true);
+
+    const advance = (step: PairingStep, work: () => void, after: number) =>
+      window.setTimeout(() => {
+        work();
+        setDone((current) => (current.includes(step) ? current : [...current, step]));
+      }, after);
+
+    const timers = [
+      advance("package", () => dispatch({ type: "BIND", messageCode: draft.messageCode ?? "", packageCode }), 450),
+      advance("message", () => {}, 1150),
+      advance(
+        "recipient",
+        () => {
+          const item = newGift();
+          if (draft.sourceGiftId) dispatch({ type: "COMPLETE_REGIFT", item });
+          else dispatch({ type: "ADD_GALLERY", item });
+          if (draft.kind === "ai" && template) {
+            // Reserve as the real ledger will: credits leave `available` when
+            // the work is accepted, not when it finishes.
+            dispatch({ type: "RESERVE_CREDITS", amount: template.creditPrice });
+          }
+          showToast("Gift paired with package");
+        },
+        1900,
+      ),
+    ];
+    return () => timers.forEach(window.clearTimeout);
+  };
+
+  useEffect(() => {
+    if (ready) announce("Gift ready. View My Gift is available.");
+  }, [ready, announce]);
+
+  const values: Record<PairingStep, string> = {
+    package: `${draft.product.name} · ${packageCode}`,
+    message: draft.messageCode ?? "—",
+    recipient: draft.recipientName || "—",
+  };
 
   return (
     <Stage media={<Backdrop src={draft.product.image} alt={draft.product.alt} dim={0.62} />}>
@@ -849,70 +928,114 @@ function ConfirmProduct({ onExit }: { onExit: () => void }) {
         onExit={onExit}
       />
       <RecallDot />
+
       <StageContent>
         <div className={`${glass} p-4`}>
-          <Row label="Product" value={draft.product.name} />
-          <Row label="Package" value={packageCode} mono />
-          <Row label="New message code" value={draft.messageCode ?? "—"} mono />
-          <Row label="Recipient" value={draft.recipientName || "—"} />
-          <Row
-            label="Style"
-            value={draft.kind === "ai" ? template?.title ?? "Scene" : "Standard video"}
-          />
+          <div className="mb-3 flex items-baseline justify-between">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-gift-ink-faint">
+              Pairing
+            </span>
+            <span className="font-mono text-[13px] tabular-nums text-gift-ink">{percent}%</span>
+          </div>
+          <div className="h-0.5 w-full overflow-hidden rounded-full bg-gift-border">
+            <div
+              className="h-full rounded-full transition-[width] duration-500 ease-out"
+              style={{ width: `${percent}%`, background: "var(--gift-accent)" }}
+            />
+          </div>
+
+          <ul className="mt-3 grid gap-2">
+            {PAIRING_STEPS.map((step) => {
+              const complete = done.includes(step.id);
+              return (
+                <li key={step.id} className="flex items-start gap-3">
+                  <span
+                    className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] transition-colors duration-300"
+                    style={
+                      complete
+                        ? { background: "var(--gift-success)", color: "white" }
+                        : { border: "1px solid var(--gift-border-strong)", color: "transparent" }
+                    }
+                  >
+                    ✓
+                  </span>
+                  <span className="min-w-0">
+                    <span
+                      className={`block text-[13px] ${complete ? "text-gift-ink" : "text-gift-ink-faint"}`}
+                    >
+                      {step.label}
+                    </span>
+                    <span className="block truncate font-mono text-[11px] text-gift-ink-faint">
+                      {step.describe(values[step.id])}
+                    </span>
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div
+            className={cn(
+              "mt-3 flex items-center justify-center gap-2 rounded-xl border border-gift-border bg-white/50 py-2.5 transition-colors duration-500",
+              ready && "gift-ready-lit",
+              ready && !reducedMotion && "gift-anim-confirm",
+            )}
+          >
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: ready ? "var(--gift-accent)" : "var(--gift-border-strong)" }}
+            />
+            <span
+              className={`text-[11px] uppercase tracking-[0.22em] ${ready ? "text-gift-ink" : "text-gift-ink-faint"}`}
+            >
+              Gift Ready
+            </span>
+          </div>
+
           {regifting && (
-            <p className="mt-2 rounded-xl border border-gift-border bg-white/60 p-3 text-[11px] leading-snug text-gift-ink-soft">
+            <p className="mt-3 rounded-xl border border-gift-border bg-white/60 p-3 text-[11px] leading-snug text-gift-ink-soft">
               This is the same physical package, so it keeps its code. The person you give it to
               gets the new message code above.
             </p>
           )}
         </div>
       </StageContent>
-      <ActionDock note={`Available credits: ${credits.available}`}>
-        <Button
-          onClick={() => {
-            dispatch({ type: "BIND", messageCode: draft.messageCode ?? "", packageCode });
-            // Recorded now, not at the end: a gift that exists in the flow
-            // should exist in My Gifts, whatever happens next.
-            const item = newGift();
-            if (draft.sourceGiftId) dispatch({ type: "COMPLETE_REGIFT", item });
-            else dispatch({ type: "ADD_GALLERY", item });
 
-            if (draft.kind === "ai" && template) {
-              // Reserve before submitting, as the real ledger will: credits
-              // leave `available` when the job is accepted, not when it ends.
-              dispatch({ type: "RESERVE_CREDITS", amount: template.creditPrice });
-              dispatch({ type: "SENDER_STEP", step: "processing" });
-            } else {
-              showToast("Gift paired with package");
-              dispatch({ type: "SENDER_STEP", step: "card" });
-            }
-          }}
-        >
-          Confirm &amp; Pair
-        </Button>
-        {!regifting && (
+      <ActionDock note={ready ? undefined : `Available credits: ${credits.available}`}>
+        {ready ? (
           <Button
-            variant="ghost"
-            onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}
+            // Emphasis either way: it pulses, or it is ringed and still.
+            className={cn(
+              "gift-anim-rise",
+              reducedMotion ? "gift-ready-highlight" : "gift-anim-pulse",
+            )}
+            onClick={() => {
+              if (draft.kind === "ai" && template) {
+                dispatch({ type: "SENDER_STEP", step: "processing" });
+              } else {
+                dispatch({ type: "SENDER_STEP", step: "card" });
+              }
+            }}
           >
-            Choose a different package
+            View My Gift
           </Button>
+        ) : (
+          <>
+            <Button disabled={pairing} onClick={pair}>
+              {pairing ? "Pairing…" : "Confirm & Pair"}
+            </Button>
+            {!regifting && !pairing && (
+              <Button
+                variant="ghost"
+                onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}
+              >
+                Choose a different package
+              </Button>
+            )}
+          </>
         )}
       </ActionDock>
     </Stage>
-  );
-}
-
-function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-[11px] uppercase tracking-[0.14em] text-gift-ink-faint">{label}</span>
-      <span
-        className={`text-right text-[13px] text-gift-ink ${mono ? "font-mono tracking-wider" : ""}`}
-      >
-        {value}
-      </span>
-    </div>
   );
 }
 
@@ -1030,15 +1153,20 @@ function Result({ onExit }: { onExit: () => void }) {
       source={media.aiGift}
       title="Your Gift Is Ready"
       instruction="Here's how it turned out."
-      continueLabel="Keep This Gift"
       onExit={onExit}
-      onContinue={() => {
-        showToast("Saved to My Gifts");
-        dispatch({ type: "SENDER_STEP", step: "card" });
-      }}
       autoPlay={false}
-      extraActions={
+      watchingNote="Watch it through, then keep it."
+      finalActions={
         <>
+          <Button
+            className="gift-anim-rise"
+            onClick={() => {
+              showToast("Saved to My Gifts");
+              dispatch({ type: "SENDER_STEP", step: "card" });
+            }}
+          >
+            Keep This Gift
+          </Button>
           <Button
             variant="ghost"
             onClick={() => dispatch({ type: "SENDER_STEP", step: "choose-template" })}

@@ -193,7 +193,7 @@ type Action =
   | { type: "CAPTURE"; visitor: VisitorProfile }
   | { type: "DRAFT"; patch: Partial<Draft> }
   | { type: "START_CREATE"; isRegift: boolean }
-  | { type: "OPEN_GIFT"; id: string }
+  | { type: "OPEN_GIFT"; id: string; stay?: boolean }
   | { type: "CLOSE_GIFT" }
   | { type: "GALLERY_INDEX"; index: number }
   | { type: "REGIFT_FROM"; item: GalleryItem }
@@ -253,7 +253,13 @@ function reducer(state: State, action: Action): State {
         lastIssued: null,
       };
     case "OPEN_GIFT":
-      return { ...state, openGiftId: action.id, scenario: "reveal" };
+      return {
+        ...state,
+        openGiftId: action.id,
+        // The gallery opens a gift by switching to the reveal; the recipient
+        // journey is already inside its own flow and only needs the identity.
+        scenario: action.stay ? state.scenario : "reveal",
+      };
     case "CLOSE_GIFT":
       return { ...state, openGiftId: null, scenario: "gallery" };
     case "GALLERY_INDEX":
@@ -377,6 +383,9 @@ interface StoreValue extends State {
   /** Fixture-backed implementation of the code service. Both codes must
    *  resolve to the same demo assignment; anything else fails identically. */
   validateCodes: (packageCode: string, messageCode: string) => boolean;
+  /** The gift those two codes belong to. The recipient journey needs the whole
+   *  thing — product, sender, message, film — not just a yes. */
+  resolveGift: (packageCode: string, messageCode: string) => GalleryItem | null;
   issueMessageCode: () => string;
   activeTemplates: SceneTemplate[];
   showToast: (message: string) => void;
@@ -407,6 +416,23 @@ export function GiftingSimulationProvider({ children }: { children: ReactNode })
     return pairs.some(([p, m]) => p === pkg && m === msg);
   }, [state.lastIssued]);
 
+  const resolveGift = useCallback(
+    (packageCode: string, messageCode: string) => {
+      const pkg = norm(packageCode);
+      const msg = norm(messageCode);
+      return (
+        state.gallery.find(
+          (g) =>
+            g.packageCode &&
+            g.messageCode &&
+            norm(g.packageCode) === pkg &&
+            norm(g.messageCode) === msg,
+        ) ?? null
+      );
+    },
+    [state.gallery],
+  );
+
   const issueMessageCode = useCallback(() => {
     // Opaque and non-sequential, using the same read-aloud-safe alphabet the
     // real generator uses. Crypto strength is not the point in a prototype;
@@ -428,11 +454,12 @@ export function GiftingSimulationProvider({ children }: { children: ReactNode })
       ...state,
       dispatch,
       validateCodes,
+      resolveGift,
       issueMessageCode,
       activeTemplates: state.templates.filter((t) => t.active),
       showToast,
     }),
-    [state, validateCodes, issueMessageCode, showToast],
+    [state, validateCodes, resolveGift, issueMessageCode, showToast],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

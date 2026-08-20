@@ -83,7 +83,12 @@ export function Rule({ className }: { className?: string }) {
 type ButtonProps = {
   children: ReactNode;
   onClick?: () => void;
-  variant?: "primary" | "secondary" | "ghost" | "danger";
+  /**
+   * `champagne` and `pearl` are a matched pair for a screen that ends in a
+   * genuine choice rather than a next step. Same height, same type, same
+   * padding — only the surface differs, so neither reads as the lesser option.
+   */
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "champagne" | "pearl";
   disabled?: boolean;
   full?: boolean;
   type?: "button" | "submit";
@@ -120,6 +125,10 @@ export function Button({
           "border border-gift-border-strong bg-gift-surface text-gift-ink hover:border-gift-ink-faint",
         variant === "ghost" && "text-gift-ink-soft hover:text-gift-ink",
         variant === "danger" && "border border-gift-danger/40 text-gift-danger hover:bg-gift-danger/5",
+        variant === "champagne" &&
+          "border border-[rgba(196,168,106,0.55)] bg-[linear-gradient(180deg,rgba(255,250,238,0.98),rgba(240,227,194,0.95))] text-gift-ink shadow-[0_8px_20px_-12px_rgba(150,120,50,0.6)] hover:border-[rgba(196,168,106,0.85)]",
+        variant === "pearl" &&
+          "border border-[rgba(176,180,186,0.55)] bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(233,236,239,0.95))] text-gift-ink shadow-[0_8px_20px_-12px_rgba(70,80,95,0.5)] hover:border-[rgba(140,146,154,0.8)]",
         className,
       )}
     >
@@ -170,6 +179,8 @@ export function Field({
   required,
   autoCapitalize,
   inputMode,
+  autoComplete = "off",
+  error,
 }: {
   label: string;
   value: string;
@@ -180,6 +191,10 @@ export function Field({
   required?: boolean;
   autoCapitalize?: "none" | "characters";
   inputMode?: "text" | "email" | "tel" | "numeric";
+  /** A one-screen form has to say which field it means, so the message lives
+   *  with the field rather than in a summary at the bottom. */
+  autoComplete?: string;
+  error?: string;
 }) {
   return (
     <label className="block">
@@ -192,12 +207,22 @@ export function Field({
         value={value}
         inputMode={inputMode}
         autoCapitalize={autoCapitalize}
-        autoComplete="off"
+        autoComplete={autoComplete}
+        aria-invalid={error ? true : undefined}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="min-h-12 w-full rounded-xl border border-gift-border bg-gift-surface px-4 text-[15px] text-gift-ink placeholder:text-gift-ink-faint/70 focus:border-gift-champagne focus:outline-none focus:ring-1 focus:ring-gift-champagne"
+        className={cn(
+          "min-h-12 w-full rounded-xl border bg-gift-surface px-4 text-[15px] text-gift-ink placeholder:text-gift-ink-faint/70 focus:outline-none focus:ring-1",
+          error
+            ? "border-gift-danger focus:border-gift-danger focus:ring-gift-danger"
+            : "border-gift-border focus:border-gift-champagne focus:ring-gift-champagne",
+        )}
       />
-      {hint && <span className="mt-1 block text-[11px] text-gift-ink-faint">{hint}</span>}
+      {error ? (
+        <span className="mt-1 block text-[11px] text-gift-danger">{error}</span>
+      ) : (
+        hint && <span className="mt-1 block text-[11px] text-gift-ink-faint">{hint}</span>
+      )}
     </label>
   );
 }

@@ -395,7 +395,7 @@ console.log("\n--- no implementation language reaches a visitor ---");
   // visitor reading "simulated" or "no database" is being told about our
   // plumbing, which is never something they asked about.
   const banned =
-    /\b(simulat\w*|mock\w*|fixtures?|database|backend|migration|provider|localStorage|local state|placeholder|dummy|stub|job id|assignment id)\b/i;
+    /\b(simulat\w*|mock\w*|fixtures?|database|backend|migration|provider|localStorage|local state|placeholder(?![:-])|dummy|stub|job id|assignment id)\b/i;
   const visitorFiles = [
     "components/gifting/shell.tsx",
     "components/gifting/VideoStage.tsx",
@@ -415,6 +415,9 @@ console.log("\n--- no implementation language reaches a visitor ---");
       // Utility classes are not copy: `placeholder:text-*` is a Tailwind
       // selector, not something anyone reads on screen.
       .map((line) => line.replace(/className=("[^"]*"|\{[^}]*\})/g, ""))
+      // Class lists also travel as bare strings inside cn(...). A quoted run
+      // of Tailwind tokens is styling, not copy.
+      .map((line) => line.replace(/"[^"]*(?:min-h-|rounded-|border-|bg-|text-\[)[^"]*"/g, ""))
       .filter((line) => {
         // Only what a visitor could actually read: quoted copy and JSX text.
         const quoted = line.match(/"[^"]{4,}"|'[^']{4,}'/g) ?? [];

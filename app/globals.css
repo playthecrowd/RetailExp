@@ -412,3 +412,59 @@ body.gift-locked {
     animation: none !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Earned actions, and the one indicator allowed to draw attention.
+   --------------------------------------------------------------------------- */
+
+/* A button that was not there a moment ago should arrive, not blink into
+   existence — the movement is what tells the eye something changed. */
+.gift-anim-rise { animation: gift-action-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.gift-anim-rise-late { animation: gift-action-rise 520ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both; }
+
+@keyframes gift-action-rise {
+  from { opacity: 0; transform: translateY(22px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Slow enough to read as an invitation rather than an alarm. Two and a half
+   seconds per cycle, scale and glow only, and it stops the moment the button
+   is focused or pressed. */
+.gift-anim-pulse { animation: gift-attention-pulse 2400ms ease-in-out infinite; }
+/* What someone who asked for less motion gets instead: the same emphasis,
+   held still. Defined outside the media query because the decision is made in
+   the component, and a rule that only exists inside the query would leave the
+   button with no highlight at all. */
+.gift-ready-highlight { box-shadow: 0 0 0 3px rgba(196, 168, 106, 0.3); }
+.gift-anim-pulse:hover,
+.gift-anim-pulse:focus-visible,
+.gift-anim-pulse:active { animation: none; }
+
+@keyframes gift-attention-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(196, 168, 106, 0); }
+  50% { transform: scale(1.022); box-shadow: 0 0 0 10px rgba(196, 168, 106, 0.14); }
+}
+
+/* The completion mark, once everything it stands for is actually true. */
+.gift-ready-lit {
+  border-color: rgba(196, 168, 106, 0.6);
+  background: linear-gradient(180deg, rgba(255, 250, 238, 0.96), rgba(246, 238, 220, 0.92));
+  box-shadow: 0 0 24px -6px rgba(196, 168, 106, 0.55);
+}
+.gift-anim-confirm { animation: gift-ready-confirm 900ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes gift-ready-confirm {
+  0% { transform: scale(0.97); box-shadow: 0 0 0 0 rgba(196, 168, 106, 0.4); }
+  55% { transform: scale(1.015); box-shadow: 0 0 0 14px rgba(196, 168, 106, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 24px -6px rgba(196, 168, 106, 0.55); }
+}
+
+/* Reduced motion keeps every one of these states — it only stops them moving.
+   A revealed action still appears; a ready gift is still lit. */
+@media (prefers-reduced-motion: reduce) {
+  .gift-anim-rise,
+  .gift-anim-rise-late,
+  .gift-anim-pulse,
+  .gift-anim-confirm { animation: none !important; }
+  .gift-anim-pulse { box-shadow: 0 0 0 3px rgba(196, 168, 106, 0.3); }
+}

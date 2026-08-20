@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 import {
   DEMO_MESSAGE_CODE,
   DEMO_PACKAGE_CODE,
-  SENDER_NAME,
   media,
   useGifting,
 } from "@/lib/gifting/simulation/store";
+import type { GalleryItem } from "@/lib/gifting/simulation/types";
+import { GiftReveal } from "./GiftReveal";
 import {
   ActionDock,
   Guidance,
@@ -23,20 +24,27 @@ import { VideoStage } from "./VideoStage";
 import { Body, Button, Checkbox, CodeChip, Field } from "./ui";
 
 /**
- * The recipient journey, as full-screen panels.
+ * The recipient journey.
  *
- * THE ORDER IS THE PRODUCT
- *   Codes, then the personalised reveal, THEN the optional eligibility gate,
- *   then the brand film. The reveal comes before the gate because the gift is
- *   why the visitor is here and a compliance question is not a welcome.
+ * TWO NAMED FILMS, IN THIS ORDER
+ *   Personal Gift Message — the person who sent it, speaking. Then the
+ *   Signature Product Experience — the film about the thing they sent. The
+ *   person comes first because that is what the visitor is here for, and the
+ *   product film lands better once they know who it is from.
  *
- * ONE VIEWPORT PER DECISION
- *   Visitor capture is four short steps rather than one tall form, because a
- *   phone shows four fields comfortably and cannot show nine. Going back keeps
- *   everything already typed.
+ * THE GATE COMES AFTER THE MESSAGE
+ *   A compliance question is not a welcome. The message is why the visitor
+ *   opened this, so they see it first and the eligibility check sits between
+ *   the message and the product.
+ *
+ * ONE FORM, NOT FOUR SCREENS
+ *   Capture used to be four sequential questions. Four screens to collect four
+ *   fields is three chances to abandon, and a phone shows all of them at once
+ *   perfectly well. It is one panel now, and the only thing that moves is that
+ *   panel when the keyboard opens.
  */
 
-const TOTAL = 6;
+const TOTAL = 5;
 
 export function RecipientFlow({ onExit }: { onExit: () => void }) {
   const { recipientStep } = useGifting();
@@ -56,21 +64,26 @@ function Step({ onExit }: { onExit: () => void }) {
     case "message-code":
       return <CodeEntry onExit={onExit} />;
     case "reveal":
-      return <Reveal onExit={onExit} />;
+      return <PersonalGiftMessage onExit={onExit} />;
     case "gate":
       return <Gate onExit={onExit} />;
     case "declined":
       return <Declined onExit={onExit} />;
-    case "intro":
-      return <Intro onExit={onExit} />;
     case "capture":
       return <Capture onExit={onExit} />;
     case "experience":
-      return <GiftReady onExit={onExit} />;
+      return <SignatureProductExperience onExit={onExit} />;
     default:
       dispatch({ type: "RECIPIENT_STEP", step: "welcome" });
       return null;
   }
+}
+
+/** The gift the entered codes resolved to, with the sample gift as a fallback
+ *  so no screen can ever be handed nothing. */
+function useOpenGift(): GalleryItem {
+  const { gallery, openGiftId } = useGifting();
+  return gallery.find((g) => g.id === openGiftId) ?? gallery[0];
 }
 
 function Backdrop({ src, alt, dim = 0.55 }: { src: string; alt: string; dim?: number }) {
@@ -149,7 +162,7 @@ function Welcome({ onExit }: { onExit: () => void }) {
 /** Both codes on ONE screen, so a mismatch shows both of the things being
  *  compared. */
 function CodeEntry({ onExit }: { onExit: () => void }) {
-  const { dispatch, validateCodes, codeError, showToast } = useGifting();
+  const { dispatch, validateCodes, resolveGift, codeError, showToast } = useGifting();
   const { setPinned, announce } = useStage();
   const [pkg, setPkg] = useState("");
   const [msg, setMsg] = useState("");
@@ -160,7 +173,11 @@ function CodeEntry({ onExit }: { onExit: () => void }) {
 
   const submit = () => {
     if (validateCodes(pkg, msg)) {
+      const gift = resolveGift(pkg, msg);
       dispatch({ type: "PACKAGE_CODE_OK", code: pkg });
+      // Everything after this point belongs to one specific gift, so it is
+      // named here rather than assumed later.
+      if (gift) dispatch({ type: "OPEN_GIFT", id: gift.id, stay: true });
       dispatch({ type: "RECIPIENT_STEP", step: "reveal" });
     } else {
       dispatch({ type: "CODE_ERROR", message: "no-match" });
@@ -169,7 +186,9 @@ function CodeEntry({ onExit }: { onExit: () => void }) {
   };
 
   return (
-    <Stage media={<Backdrop src={media.gateBackground.poster} alt={media.gateBackground.alt} dim={0.6} />}>
+    <Stage
+      media={<Backdrop src={media.gateBackground.poster} alt={media.gateBackground.alt} dim={0.6} />}
+    >
       <LiveRegion />
       <Guidance
         title="Open your gift"
@@ -258,13 +277,15 @@ function Mini({ children, onClick }: { children: React.ReactNode; onClick: () =>
   );
 }
 
-function Reveal({ onExit }: { onExit: () => void }) {
+/** Video Phase 1 — the Personal Gift Message. */
+function PersonalGiftMessage({ onExit }: { onExit: () => void }) {
   const { dispatch, config } = useGifting();
+  const gift = useOpenGift();
   return (
     <VideoStage
-      source={media.giftReveal}
-      title={`A gift from ${SENDER_NAME}`}
-      instruction="Your personal message is playing."
+      source={gift.media}
+      title={`A message from ${gift.senderName}`}
+      instruction="Recorded for you."
       step={2}
       total={TOTAL}
       continueLabel="Continue to Your Gift"
@@ -272,7 +293,7 @@ function Reveal({ onExit }: { onExit: () => void }) {
       onContinue={() =>
         dispatch({
           type: "RECIPIENT_STEP",
-          step: config.gateKind === "disabled" ? (config.introEnabled ? "intro" : "capture") : "gate",
+          step: config.gateKind === "disabled" ? "capture" : "gate",
         })
       }
     />
@@ -285,7 +306,11 @@ function Gate({ onExit }: { onExit: () => void }) {
   useEffect(() => setPinned(true), [setPinned]);
 
   return (
-    <Stage media={<Backdrop src={media.gateBackground.poster} alt={media.gateBackground.alt} dim={0.68} />}>
+    <Stage
+      media={
+        <Backdrop src={media.gateBackground.poster} alt={media.gateBackground.alt} dim={0.68} />
+      }
+    >
       <LiveRegion />
       <Guidance title={config.gateHeading} step={3} total={TOTAL} onExit={onExit} />
       <RecallDot />
@@ -293,21 +318,12 @@ function Gate({ onExit }: { onExit: () => void }) {
       <StageContent>
         <div className={`${glass} p-5 text-center`}>
           <Body>{config.gateBody}</Body>
-          <p className="mt-3 text-[11px] text-gift-ink-faint">
-            Please enjoy and share responsibly.
-          </p>
+          <p className="mt-3 text-[11px] text-gift-ink-faint">Please enjoy and share responsibly.</p>
         </div>
       </StageContent>
 
       <ActionDock>
-        <Button
-          onClick={() =>
-            dispatch({
-              type: "RECIPIENT_STEP",
-              step: config.introEnabled ? "intro" : "capture",
-            })
-          }
-        >
+        <Button onClick={() => dispatch({ type: "RECIPIENT_STEP", step: "capture" })}>
           {config.gateConfirmLabel}
         </Button>
         <Button
@@ -342,221 +358,166 @@ function Declined({ onExit }: { onExit: () => void }) {
   );
 }
 
-function Intro({ onExit }: { onExit: () => void }) {
-  const { dispatch, config } = useGifting();
-  const posters: Record<string, string> = {
-    retail: "/demo/gifting/stills/poster-brand-intro.png",
-    studio: "/demo/gifting/stills/hero-product.png",
-    gift: "/demo/gifting/stills/poster-gift-reveal.png",
-  };
-  return (
-    <VideoStage
-      source={{ ...media.brandIntro, poster: posters[config.introPosterId] ?? posters.retail }}
-      title="A thoughtful gift deserves a personal story"
-      instruction="A short note from the brand."
-      step={4}
-      total={TOTAL}
-      continueLabel="Continue"
-      onExit={onExit}
-      onContinue={() => dispatch({ type: "RECIPIENT_STEP", step: "capture" })}
-    />
-  );
-}
-
-type CaptureStage = "name" | "contact" | "extras" | "permissions";
-const CAPTURE_ORDER: CaptureStage[] = ["name", "contact", "extras", "permissions"];
-
+/**
+ * One form, one screen.
+ *
+ * The panel is the only thing allowed to move. The document stays locked, so
+ * when the keyboard opens the dock lifts and the panel pans just enough to
+ * keep the focused field and the action reachable — the page itself never
+ * slides out from under the visitor.
+ */
 function Capture({ onExit }: { onExit: () => void }) {
   const { dispatch, config } = useGifting();
   const { setPinned, announce } = useStage();
-  const [stage, setStage] = useState<CaptureStage>("name");
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
     email: "",
     phone: "",
     terms: false,
-    privacy: false,
     marketing: false,
   });
+  const [showErrors, setShowErrors] = useState(false);
 
-  const index = CAPTURE_ORDER.indexOf(stage);
-  useEffect(() => setPinned(stage === "permissions"), [stage, setPinned]);
+  useEffect(() => setPinned(true), [setPinned]);
 
-  const canAdvance =
-    stage === "name"
-      ? form.firstName.trim().length > 0 && form.lastName.trim().length > 0
-      : stage === "contact"
-        ? form.email.includes("@")
-        : stage === "extras"
-          ? !config.phoneRequired || form.phone.trim().length > 5
-          : form.terms && form.privacy;
+  const missing = {
+    firstName: form.firstName.trim().length === 0,
+    lastName: form.lastName.trim().length === 0,
+    email: !form.email.includes("@") || form.email.trim().length < 5,
+    phone: config.phoneRequired && form.phone.trim().length < 6,
+    terms: !form.terms,
+  };
+  const complete = !Object.values(missing).some(Boolean);
 
-  const next = () => {
-    if (stage === "permissions") {
-      dispatch({
-        type: "CAPTURE",
-        visitor: {
-          firstName: form.firstName,
-          lastName: form.lastName,
-          email: form.email,
-          phone: form.phone,
-          marketingConsent: form.marketing,
-        },
-      });
-      dispatch({ type: "RECIPIENT_STEP", step: "experience" });
+  const submit = () => {
+    if (!complete) {
+      // Errors appear on the attempt, not while someone is still typing their
+      // first name.
+      setShowErrors(true);
+      announce("Some details are still needed.");
       return;
     }
-    setStage(CAPTURE_ORDER[index + 1]);
-    announce("Next question");
-  };
-
-  const titles: Record<CaptureStage, [string, string]> = {
-    name: ["What's your name?", "So we can label your gift."],
-    contact: ["Where can we reach you?", "We'll keep your gift at this address."],
-    extras: ["Anything else?", config.phoneRequired ? "A mobile number is required." : "Optional."],
-    permissions: ["Just the essentials", "Terms and Privacy are required."],
+    dispatch({
+      type: "CAPTURE",
+      visitor: {
+        firstName: form.firstName,
+        lastName: form.lastName,
+        email: form.email,
+        phone: form.phone,
+        marketingConsent: form.marketing,
+      },
+    });
+    if (config.signatureExperienceEnabled) {
+      dispatch({ type: "RECIPIENT_STEP", step: "experience" });
+    } else {
+      dispatch({ type: "SCENARIO", scenario: "gallery" });
+    }
   };
 
   return (
-    <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.72} />}>
+    <Stage
+      media={<Backdrop src={media.gateBackground.poster} alt={media.gateBackground.alt} dim={0.7} />}
+    >
       <LiveRegion />
       <Guidance
-        title={titles[stage][0]}
-        instruction={titles[stage][1]}
-        step={5}
+        title="Where should we send it?"
+        instruction="A few details and your gift is yours."
+        step={4}
         total={TOTAL}
         onExit={onExit}
       />
       <RecallDot />
 
-      <StageContent>
-        <div className={`${glass} p-4`}>
-          {stage === "name" && (
-            <div className="grid gap-3">
-              <Field
-                label="First name"
-                value={form.firstName}
-                onChange={(v) => setForm({ ...form, firstName: v })}
-                required
-              />
-              <Field
-                label="Last name"
-                value={form.lastName}
-                onChange={(v) => setForm({ ...form, lastName: v })}
-                required
-              />
-            </div>
-          )}
-          {stage === "contact" && (
+      <StageContent fill>
+        {/* Only this panel pans, and only when a short phone plus an open
+            keyboard leaves it no room. */}
+        <div
+          className={`${glass} max-h-full min-h-0 overflow-y-auto overscroll-contain p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
+        >
+          <div className="grid grid-cols-2 gap-2.5">
+            <Field
+              label="First name"
+              value={form.firstName}
+              onChange={(v) => setForm({ ...form, firstName: v })}
+              required
+              autoComplete="given-name"
+              error={showErrors && missing.firstName ? "Required" : undefined}
+            />
+            <Field
+              label="Last name"
+              value={form.lastName}
+              onChange={(v) => setForm({ ...form, lastName: v })}
+              required
+              autoComplete="family-name"
+              error={showErrors && missing.lastName ? "Required" : undefined}
+            />
+          </div>
+          <div className="mt-2.5 grid gap-2.5">
             <Field
               label="Email"
               type="email"
               inputMode="email"
+              autoComplete="email"
               value={form.email}
               onChange={(v) => setForm({ ...form, email: v })}
               required
+              error={showErrors && missing.email ? "Enter a valid email" : undefined}
             />
-          )}
-          {stage === "extras" && (
             <Field
               label="Mobile"
               type="tel"
               inputMode="tel"
+              autoComplete="tel"
               value={form.phone}
               onChange={(v) => setForm({ ...form, phone: v })}
               required={config.phoneRequired}
               hint={config.phoneRequired ? undefined : "Optional"}
+              error={showErrors && missing.phone ? "Required" : undefined}
             />
-          )}
-          {stage === "permissions" && (
-            <div className="grid gap-1">
-              <Checkbox checked={form.terms} onChange={(v) => setForm({ ...form, terms: v })}>
-                I agree to the <span className="underline">Terms of Use</span>.
-              </Checkbox>
-              <Checkbox checked={form.privacy} onChange={(v) => setForm({ ...form, privacy: v })}>
-                I have read the <span className="underline">Privacy Notice</span>.
-              </Checkbox>
-              {config.marketingConsentEnabled && (
-                <Checkbox
-                  checked={form.marketing}
-                  onChange={(v) => setForm({ ...form, marketing: v })}
-                >
-                  Send me occasional updates.{" "}
-                  <span className="text-gift-ink-faint">(Optional)</span>
-                </Checkbox>
-              )}
-            </div>
-          )}
+          </div>
 
-          <div className="mt-3 flex items-center gap-1.5" aria-hidden="true">
-            {CAPTURE_ORDER.map((s, i) => (
-              <span
-                key={s}
-                className="h-0.5 flex-1 rounded-full"
-                style={{ background: i <= index ? "var(--gift-accent)" : "var(--gift-border)" }}
-              />
-            ))}
+          <div className="mt-3 border-t border-gift-border pt-2">
+            <Checkbox checked={form.terms} onChange={(v) => setForm({ ...form, terms: v })}>
+              I agree to the <span className="underline">Terms of Use</span> and have read the{" "}
+              <span className="underline">Privacy Notice</span>.
+            </Checkbox>
+            {config.marketingConsentEnabled && (
+              <Checkbox
+                checked={form.marketing}
+                onChange={(v) => setForm({ ...form, marketing: v })}
+              >
+                Send me occasional updates. <span className="text-gift-ink-faint">(Optional)</span>
+              </Checkbox>
+            )}
+            {showErrors && missing.terms && (
+              <p className="mt-1 text-[11px] text-gift-danger">
+                Please accept the Terms and Privacy Notice to continue.
+              </p>
+            )}
           </div>
         </div>
       </StageContent>
 
       <ActionDock>
-        <Button disabled={!canAdvance} onClick={next}>
-          {stage === "permissions" ? "View My Gift" : "Continue"}
-        </Button>
-        {index > 0 && (
-          <Button variant="ghost" onClick={() => setStage(CAPTURE_ORDER[index - 1])}>
-            Back
-          </Button>
-        )}
+        <Button onClick={submit}>View My Gift</Button>
       </ActionDock>
     </Stage>
   );
 }
 
-function GiftReady({ onExit }: { onExit: () => void }) {
-  const { dispatch, config, visitor } = useGifting();
+/** Video Phase 2 — the Signature Product Experience, opened as a full-screen
+ *  surprise for the item the visitor was actually sent. */
+function SignatureProductExperience({ onExit }: { onExit: () => void }) {
+  const { dispatch } = useGifting();
+  const gift = useOpenGift();
   return (
-    <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.45} />}>
-      <LiveRegion />
-      <Guidance
-        title={visitor ? `Your gift, ${visitor.firstName}` : "Your gift is ready"}
-        instruction={`${SENDER_NAME} sent you this personally.`}
-        step={6}
-        total={TOTAL}
-        onExit={onExit}
-      />
-      <RecallDot />
-
-      <StageContent>
-        <div className={`${glass} p-4`}>
-          <span className="text-[10px] uppercase tracking-[0.2em] text-gift-ink-faint">
-            In your package
-          </span>
-          <p className="mt-1.5 text-[16px] text-gift-ink">Signature Gift Package</p>
-          <Body className="mt-1 text-[12px]">
-            A plain white luxury bottle in neutral presentation packaging.
-          </Body>
-        </div>
-      </StageContent>
-
-      <ActionDock>
-        <Button onClick={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}>
-          View My Gifts
-        </Button>
-        {config.regiftingEnabled && (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              dispatch({ type: "START_CREATE", isRegift: true });
-              dispatch({ type: "SCENARIO", scenario: "regift" });
-            }}
-          >
-            Regift This Product
-          </Button>
-        )}
-      </ActionDock>
-    </Stage>
+    <GiftReveal
+      giftId={gift.id}
+      mode="signature"
+      onExit={onExit}
+      onRegift={() => dispatch({ type: "REGIFT_FROM", item: gift })}
+      onViewGifts={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}
+    />
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { DASHBOARD_FIXTURES, INTRO_POSTER_OPTIONS } from "@/lib/gifting/simulation/fixtures";
+import { DASHBOARD_FIXTURES, SIGNATURE_POSTER_OPTIONS } from "@/lib/gifting/simulation/fixtures";
 import { useGifting } from "@/lib/gifting/simulation/store";
 import type { GateKind } from "@/lib/gifting/simulation/types";
 import { Body, Card, Eyebrow, Pill, Still, Toggle } from "./ui";
@@ -30,7 +30,7 @@ const SECTIONS = [
   "Entry Codes",
   "Gift Reveal",
   "Eligibility Gates",
-  "Brand Intro",
+  "Product Experience",
   "Visitor Form",
   "Gift Creation",
   "AI Templates",
@@ -227,25 +227,28 @@ function SectionBody({ section }: { section: Section }) {
         </Panel>
       );
 
-    case "Brand Intro":
+    case "Product Experience":
       return (
-        <Panel title="Brand Intro" note="A separate, generic film — never merged with the personal reveal.">
+        <Panel
+          title="Signature Product Experience"
+          note="Video Phase 2 — the film about the product, always separate from the personal message."
+        >
           <Toggle
-            checked={config.introEnabled}
-            onChange={(v) => dispatch({ type: "CONFIG", patch: { introEnabled: v } })}
-            label="Show the brand intro"
-            description="Plays after the eligibility gate."
+            checked={config.signatureExperienceEnabled}
+            onChange={(v) => dispatch({ type: "CONFIG", patch: { signatureExperienceEnabled: v } })}
+            label="Play the Signature Product Experience"
+            description="Opens full screen once the visitor's details are captured."
           />
           <div className="mt-4">
             <Eyebrow>Poster</Eyebrow>
             <div className="mt-2 grid grid-cols-3 gap-2">
-              {INTRO_POSTER_OPTIONS.map((option) => (
+              {SIGNATURE_POSTER_OPTIONS.map((option) => (
                 <button
                   key={option.id}
                   type="button"
-                  onClick={() => dispatch({ type: "CONFIG", patch: { introPosterId: option.id } })}
+                  onClick={() => dispatch({ type: "CONFIG", patch: { signaturePosterId: option.id } })}
                   className={`overflow-hidden rounded-xl border transition-colors ${
-                    config.introPosterId === option.id
+                    config.signaturePosterId === option.id
                       ? "border-gift-champagne ring-1 ring-gift-champagne"
                       : "border-gift-border hover:border-gift-border-strong"
                   }`}

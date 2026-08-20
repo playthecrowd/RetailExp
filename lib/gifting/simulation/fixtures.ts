@@ -55,6 +55,11 @@ export const PRODUCTS = {
     image: `${STILL}/hero-product.png`,
     alt: "A plain white luxury bottle on a brushed metal plinth",
     packageCode: DEMO_PACKAGE_CODE,
+    experience: {
+      poster: `${STILL}/poster-brand-intro.png`,
+      video: `${VIDEO}/brand-intro.mp4`,
+      alt: "The Signature Reserve, presented in the flagship",
+    },
   },
   giftingSet: {
     id: "prod-gifting-set",
@@ -62,6 +67,11 @@ export const PRODUCTS = {
     image: `${STILL}/product-package.png`,
     alt: "A white unbranded bottle with two neutral gift boxes and champagne ribbon",
     packageCode: DEMO_OTHER_PACKAGE_CODE,
+    experience: {
+      poster: `${STILL}/poster-standard-gift.png`,
+      video: `${VIDEO}/standard-gift.mp4`,
+      alt: "The Gifting Set, presented on a neutral table",
+    },
   },
   atelierEdition: {
     id: "prod-atelier-edition",
@@ -69,6 +79,11 @@ export const PRODUCTS = {
     image: `${STILL}/template-luxury-product-reveal.png`,
     alt: "The white bottle lit as a studio product reveal",
     packageCode: "RN5TB-8LZWQ",
+    experience: {
+      poster: `${STILL}/poster-ai-gift.png`,
+      video: `${VIDEO}/ai-gift.mp4`,
+      alt: "The Atelier Edition, lit as a studio reveal",
+    },
   },
   houseSelection: {
     id: "prod-house-selection",
@@ -76,6 +91,11 @@ export const PRODUCTS = {
     image: `${STILL}/poster-standard-gift.png`,
     alt: "The white bottle presented on a neutral gift table",
     packageCode: "JW3KC-7PYDS",
+    experience: {
+      poster: `${STILL}/poster-standard-gift.png`,
+      video: `${VIDEO}/standard-gift.mp4`,
+      alt: "The House Selection, presented on a neutral table",
+    },
   },
 } satisfies Record<string, GiftProduct>;
 
@@ -87,6 +107,11 @@ export const DEFAULT_NEW_PRODUCT: GiftProduct = {
   image: `${STILL}/product-package.png`,
   alt: "A white unbranded bottle with neutral gift packaging",
   packageCode: DEMO_REGIFT_PACKAGE_CODE,
+  experience: {
+    poster: `${STILL}/poster-brand-intro.png`,
+    video: `${VIDEO}/brand-intro.mp4`,
+    alt: "The Signature Gift Package, presented in the flagship",
+  },
 };
 
 export const media = {
@@ -134,7 +159,7 @@ export const media = {
 
 /** The poster the dashboard can swap the brand intro to, so the toggle has
  *  something visible to do. */
-export const INTRO_POSTER_OPTIONS = [
+export const SIGNATURE_POSTER_OPTIONS = [
   { id: "retail", label: "Flagship interior", src: `${STILL}/poster-brand-intro.png` },
   { id: "studio", label: "Product studio", src: `${STILL}/hero-product.png` },
   { id: "gift", label: "Gift table", src: `${STILL}/poster-gift-reveal.png` },
@@ -185,8 +210,8 @@ export const DEFAULT_CONFIG: ExperienceConfig = {
     "You must be 21 or older to continue this demonstration experience. Please enjoy and share responsibly.",
   gateConfirmLabel: "Yes, I'm 21+",
   gateDeclineLabel: "No, Exit",
-  introEnabled: true,
-  introPosterId: "retail",
+  signatureExperienceEnabled: true,
+  signaturePosterId: "retail",
   standardGiftingEnabled: true,
   aiGiftingEnabled: true,
   regiftingEnabled: true,
@@ -401,7 +426,7 @@ export const DASHBOARD_FIXTURES = {
     { name: "Sasha Kim", email: "sasha@giftingdemo.example", role: "Viewer", status: "Invited" },
   ],
   mediaLibrary: [
-    { name: "Brand intro", kind: "Video", src: media.brandIntro.poster },
+    { name: "Signature Product Experience", kind: "Video", src: media.brandIntro.poster },
     { name: "Gift reveal", kind: "Video", src: media.giftReveal.poster },
     { name: "Standard gift", kind: "Video", src: media.standardGift.poster },
     { name: "Scene gift", kind: "Video", src: media.aiGift.poster },

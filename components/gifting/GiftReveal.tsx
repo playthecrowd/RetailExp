@@ -13,8 +13,10 @@ import {
   Stage,
   StageContent,
   StageProvider,
+  TOP_GUTTER,
   useStage,
 } from "./shell";
+import { VideoTimer } from "./VideoTimer";
 import { Button } from "./ui";
 
 /**
@@ -49,7 +51,31 @@ const REDUCED_MS = 2400;
 
 type Phase = "reveal" | "message" | "complete";
 
-export function GiftReveal({ giftId, onExit }: { giftId: string; onExit: () => void }) {
+/**
+ * Which film follows the surprise, and what the visitor is offered afterwards.
+ *
+ *   gallery   — a gift being looked at again. The sender's message plays, and
+ *               it ends on keeping or passing the item on.
+ *   signature — the Signature Product Experience: the film about the product
+ *               itself, shown to a recipient who has already met the person who
+ *               sent it. It ends on a genuine choice between two equal actions.
+ */
+export type RevealMode = "gallery" | "signature";
+
+export function GiftReveal({
+  giftId,
+  onExit,
+  mode = "gallery",
+  onRegift,
+  onViewGifts,
+}: {
+  giftId: string;
+  onExit: () => void;
+  mode?: RevealMode;
+  /** Signature mode only. Falls back to the in-place regift when omitted. */
+  onRegift?: () => void;
+  onViewGifts?: () => void;
+}) {
   const { gallery } = useGifting();
   const gift = gallery.find((g) => g.id === giftId);
   const [phase, setPhase] = useState<Phase>("reveal");
@@ -70,7 +96,15 @@ export function GiftReveal({ giftId, onExit }: { giftId: string; onExit: () => v
 
   return (
     <StageProvider stepKey={`${gift.id}-${phase}`} theme="receive" pinned={phase === "complete"}>
-      <RevealStage gift={gift} phase={phase} setPhase={setPhase} onExit={onExit} />
+      <RevealStage
+        gift={gift}
+        phase={phase}
+        setPhase={setPhase}
+        onExit={onExit}
+        mode={mode}
+        onRegift={onRegift}
+        onViewGifts={onViewGifts}
+      />
     </StageProvider>
   );
 }
@@ -80,16 +114,30 @@ function RevealStage({
   phase,
   setPhase,
   onExit,
+  mode,
+  onRegift,
+  onViewGifts,
 }: {
   gift: GalleryItem;
   phase: Phase;
   setPhase: (p: Phase) => void;
   onExit: () => void;
+  mode: RevealMode;
+  onRegift?: () => void;
+  onViewGifts?: () => void;
 }) {
   const { dispatch, config, showToast } = useGifting();
+  const signature = mode === "signature";
+  // In signature mode the film is about the PRODUCT, not the person — the
+  // recipient has already watched their message by the time they get here.
+  const film = signature ? gift.product.experience : gift.media;
   const { reducedMotion, announce } = useStage();
   const [muted, setMuted] = useState(true);
   const [crossfaded, setCrossfaded] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  // Signature mode only: the two final actions do not exist until the film
+  // about the product has actually finished.
+  const [filmFinished, setFilmFinished] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const fromSomeoneElse = gift.direction === "received";
@@ -112,8 +160,55 @@ function RevealStage({
   }, [reducedMotion, phase]);
 
   useEffect(() => {
-    if (phase === "message") announce(`${gift.product.name}. A message from ${gift.senderName}.`);
-  }, [phase, gift, announce]);
+    if (phase === "message") {
+      announce(
+        signature
+          ? `${gift.product.name}. Your product film is playing.`
+          : `${gift.product.name}. A message from ${gift.senderName}.`,
+      );
+    }
+  }, [phase, gift, announce, signature]);
+
+  // The product film, watched to the end. Same rules as every other film in
+  // this experience: `ended` when it fires, the last quarter second when it
+  // does not, and a broken video unlocks rather than traps.
+  useEffect(() => {
+    if (!signature || phase !== "message") return;
+    const video = videoRef.current;
+    if (!video) return;
+    const atEnd = () => {
+      const { currentTime, duration } = video;
+      return Number.isFinite(duration) && duration > 0 && currentTime >= duration - 0.25;
+    };
+    const finish = () => setFilmFinished(true);
+    const onTimeUpdate = () => {
+      if (atEnd()) finish();
+    };
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    video.addEventListener("ended", finish);
+    video.addEventListener("error", finish);
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("stalled", onTimeUpdate);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    void video.play().catch(() => {
+      // Autoplay refused. The poster is up and Play is offered.
+    });
+    return () => {
+      video.removeEventListener("ended", finish);
+      video.removeEventListener("error", finish);
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("stalled", onTimeUpdate);
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.pause();
+    };
+  }, [signature, phase]);
+
+  useEffect(() => {
+    if (filmFinished) announce("Your gift is ready. Choose what happens next.");
+  }, [filmFinished, announce]);
 
   const toggleSound = useCallback(() => {
     setMuted((wasMuted) => {
@@ -135,18 +230,22 @@ function RevealStage({
               ? "Something was sent to you"
               : "The gift you made"
             : phase === "message"
-              ? fromSomeoneElse
-                ? `From ${gift.senderName}`
-                : `For ${gift.recipientName ?? "your recipient"}`
+              ? signature
+                ? gift.product.name
+                : fromSomeoneElse
+                  ? `From ${gift.senderName}`
+                  : `For ${gift.recipientName ?? "your recipient"}`
               : gift.product.name
         }
         instruction={
           phase === "reveal"
             ? "Sit back — this only takes a moment."
             : phase === "message"
-              ? fromSomeoneElse
-                ? "Their message, in their own voice."
-                : "This is what they'll see."
+              ? signature
+                ? "The story behind what you were sent."
+                : fromSomeoneElse
+                  ? "Their message, in their own voice."
+                  : "This is what they'll see."
               : fromSomeoneElse
                 ? "Yours to keep, or to pass on."
                 : "Ready whenever you are."
@@ -155,6 +254,43 @@ function RevealStage({
         exitLabel="Back"
       />
       <RecallDot />
+
+      {/* Video Phase 2 fills the viewport. It is the product's own film and it
+          deserves the screen, not a card in the middle of one. */}
+      {signature && phase === "message" && film.video && (
+        <>
+          <video
+            ref={videoRef}
+            src={film.video}
+            poster={film.poster}
+            playsInline
+            {...{ "webkit-playsinline": "true" }}
+            muted={muted}
+            preload="auto"
+            className="absolute inset-0 z-0 h-full w-full object-cover"
+          />
+          <VideoTimer
+            videoRef={videoRef}
+            className="absolute right-4 z-40"
+            style={{ top: `calc(env(safe-area-inset-top) + ${TOP_GUTTER}px)` }}
+          />
+          <div
+            className="pointer-events-none absolute inset-x-0 z-40 flex items-center justify-center gap-2 px-4"
+            style={{ bottom: "calc(env(safe-area-inset-bottom) + 7.2rem)" }}
+          >
+            <FilmChip
+              label={playing ? "Pause" : filmFinished ? "Replay" : "Play"}
+              onClick={() => {
+                const video = videoRef.current;
+                if (!video) return;
+                if (video.paused) void video.play().catch(() => setFilmFinished(true));
+                else video.pause();
+              }}
+            />
+            <FilmChip label={muted ? "Unmute" : "Mute"} onClick={toggleSound} />
+          </div>
+        </>
+      )}
 
       <StageContent fill>
         <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center">
@@ -184,8 +320,9 @@ function RevealStage({
           )}
 
           {/* The scene keeps its own frame while opening; afterwards it is a
-              flexible row that yields space to the message below it. */}
-          {phase === "reveal" ? (
+              flexible row that yields space to the message below it. It steps
+              aside entirely for the product film, which is full screen. */}
+          {signature && phase === "message" ? null : phase === "reveal" ? (
             <GiftBoxScene
               gift={gift}
               phase={phase}
@@ -203,7 +340,7 @@ function RevealStage({
             </div>
           )}
 
-          {phase === "message" && (
+          {phase === "message" && !signature && (
             <div className="mt-4 max-h-full w-full max-w-[22rem] shrink-0 overflow-y-auto overscroll-contain rounded-2xl border border-white/70 bg-[rgba(255,253,248,0.92)] shadow-sm backdrop-blur-xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="relative aspect-video w-full bg-black/5">
                 <Image
@@ -239,7 +376,13 @@ function RevealStage({
       </StageContent>
 
       {/* Permanent throughout. The way on and the way back never fade. */}
-      <ActionDock>
+      <ActionDock
+        note={
+          signature && phase === "message" && !filmFinished
+            ? "Watch to the end to continue."
+            : undefined
+        }
+      >
         {phase === "reveal" && (
           <>
             <Button variant="secondary" onClick={() => setPhase("message")}>
@@ -249,11 +392,37 @@ function RevealStage({
           </>
         )}
 
-        {phase === "message" && (
+        {phase === "message" && !signature && (
           <>
             <Button onClick={() => setPhase("complete")}>Continue</Button>
             <SoundChip muted={muted} onToggle={toggleSound} />
           </>
+        )}
+
+        {/* Two equal actions, and neither exists until the film has finished.
+            Same height, same type, same target — only the surface differs, so
+            passing it on and keeping it read as the same size of decision. */}
+        {phase === "message" && signature && filmFinished && (
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="champagne"
+              className="gift-anim-rise"
+              onClick={() =>
+                onRegift ? onRegift() : dispatch({ type: "REGIFT_FROM", item: gift })
+              }
+            >
+              Regift This Product
+            </Button>
+            <Button
+              variant="pearl"
+              className="gift-anim-rise-late"
+              onClick={() =>
+                onViewGifts ? onViewGifts() : dispatch({ type: "SCENARIO", scenario: "gallery" })
+              }
+            >
+              View My Gifts
+            </Button>
+          </div>
         )}
 
         {phase === "complete" && (
@@ -556,4 +725,17 @@ function chime() {
     // Sound is a nicety. A blocked or unavailable audio context is not a
     // reason for anything on screen to behave differently.
   }
+}
+
+function FilmChip({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="pointer-events-auto flex h-12 min-w-[5.5rem] items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.86)] px-5 text-[12px] text-gift-ink backdrop-blur-xl"
+    >
+      {label}
+    </button>
+  );
 }
