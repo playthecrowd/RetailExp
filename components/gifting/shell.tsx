@@ -5,7 +5,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -15,43 +14,47 @@ import {
 import { cn } from "@/lib/cn";
 
 /**
- * The phone-first shell every visitor step lives in.
+ * The phone shell, as THREE INDEPENDENT LAYERS.
+ *
+ * THE MISTAKE THIS REPLACES
+ *   The previous version had one visibility state shared by guidance and
+ *   actions, with a `forceVisible` escape hatch. Any screen that forgot the
+ *   escape hatch — the welcome screen's Begin, the create screen's Record —
+ *   had its ONLY way forward fade out after three seconds. That is not a
+ *   tuning problem, it is a layering problem, so the layers are now separate
+ *   by construction:
+ *
+ *     Guidance     — title, instructions, Exit, progress. May hide.
+ *     ActionDock   — the required next step. Has NO visibility state at all.
+ *     StageContent — the media, form or card, sized to what is left.
+ *
+ *   ActionDock does not read guidance state and cannot be told to hide. There
+ *   is no prop for it. A required action that can be hidden is a bug waiting
+ *   for a slow reader.
+ *
+ * POINTER EVENTS FOLLOW VISIBILITY
+ *   A tray at opacity 0 is invisible, not absent. The old one kept
+ *   `pointer-events: auto` while faded, so it silently swallowed taps aimed at
+ *   whatever was underneath. Hidden layers are now `pointer-events: none`
+ *   throughout, and only the dock is permanently interactive.
  *
  * ONE VIEWPORT, NEVER A PAGE
- *   A step occupies exactly the phone's viewport and the document itself never
- *   scrolls. That is a stronger promise than "it fits": it means an action can
- *   never be below the fold, because there is no fold. Anything that genuinely
- *   needs more room — a template carousel, a gallery — pans HORIZONTALLY
- *   inside the stage, which is a gesture people already expect on a phone and
- *   which cannot hide a Continue button.
- *
- * WHY 100dvh AND NOT 100vh
- *   On iOS Safari 100vh is the height the viewport has with the browser bars
- *   COLLAPSED, so a fixed bottom action sits under the toolbar until the
- *   visitor scrolls — which they cannot, because the page does not scroll.
- *   100dvh tracks the bar state and is the only correct unit here.
- *
- * THE TRAYS FLOAT
- *   Guidance and actions are overlays, not layout. They slide in when a step
- *   begins, fade once the visitor starts interacting, and come back on a tap.
- *   They never take permanent space, so the media underneath is always the
- *   full frame — and they never auto-hide while an error, a required consent
- *   or a required action is on screen, because disappearing guidance is only
- *   acceptable when it is genuinely optional.
+ *   100dvh, not 100vh: on iOS 100vh is the height with the browser bars
+ *   COLLAPSED, so a fixed bottom action hides under the toolbar. The document
+ *   does not scroll; only a gallery deck pans, and only sideways.
  */
 
 // ---------------------------------------------------------------------------
-// Reduced motion
+// Preferences and viewport
 // ---------------------------------------------------------------------------
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 /**
- * useSyncExternalStore rather than an effect, because a media query IS an
- * external store: it has a subscribe, a snapshot, and a server value. Reading
- * it into state from an effect would render once with the wrong answer and
- * then correct itself, which for an animation preference means the animation
- * someone asked not to see plays briefly anyway.
+ * useSyncExternalStore, because a media query IS an external store. Reading it
+ * into state from an effect renders once with the wrong answer, which for an
+ * animation preference means briefly playing the animation someone asked not
+ * to see.
  */
 export function usePrefersReducedMotion(): boolean {
   return useSyncExternalStore(
@@ -63,26 +66,17 @@ export function usePrefersReducedMotion(): boolean {
     },
     () =>
       typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION_QUERY).matches,
-    // On the server nothing is known, and "animate" is the safe default
-    // because the client corrects it before the first paint.
     () => false,
   );
 }
 
-// ---------------------------------------------------------------------------
-// The on-screen keyboard
-// ---------------------------------------------------------------------------
-
 /**
- * How much of the viewport the keyboard is covering, in pixels.
+ * How much of the viewport the on-screen keyboard is covering.
  *
- * A fixed, full-height stage does not reflow when the keyboard opens — the
- * keyboard simply draws over the bottom of it, taking the action tray and
- * often the focused field with it. visualViewport is the only API that
- * reports this honestly; window.innerHeight does not change on iOS.
- *
- * Returns 0 whenever the keyboard is closed, so the layout returns exactly to
- * where it was rather than keeping a gap.
+ * A fixed, full-height stage does not reflow when the keyboard opens; the
+ * keyboard just draws over the bottom of it. visualViewport is the only API
+ * that reports this honestly — window.innerHeight does not change on iOS.
+ * Returns 0 when closed, so the layout lands exactly where it started.
  */
 export function useKeyboardInset(): number {
   const [inset, setInset] = useState(0);
@@ -90,9 +84,7 @@ export function useKeyboardInset(): number {
     const vv = window.visualViewport;
     if (!vv) return;
     const update = () => {
-      // The part of the layout viewport the visual viewport no longer covers.
       const covered = window.innerHeight - vv.height - vv.offsetTop;
-      // Small values are browser-bar noise rather than a keyboard.
       setInset(covered > 120 ? Math.round(covered) : 0);
     };
     update();
@@ -106,17 +98,8 @@ export function useKeyboardInset(): number {
   return inset;
 }
 
-// ---------------------------------------------------------------------------
-// Document scroll lock
-// ---------------------------------------------------------------------------
-
-/**
- * Stops the DOCUMENT scrolling while a visitor step is on screen.
- *
- * Scoped by a class rather than inline styles so it is visible in devtools and
- * trivially reversible, and undone on unmount so leaving the prototype — or
- * opening the dashboard, which scrolls normally — restores the page.
- */
+/** Stops the DOCUMENT scrolling. Removed on unmount, so the dashboard and
+ *  every other route keep scrolling normally. */
 export function useLockedDocument(active: boolean) {
   useEffect(() => {
     if (!active) return;
@@ -131,27 +114,32 @@ export function useLockedDocument(active: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// Tray visibility
+// Stage state — GUIDANCE ONLY
 // ---------------------------------------------------------------------------
 
-interface TrayState {
-  visible: boolean;
-  reveal: () => void;
-  noteInteraction: () => void;
-  /** True while something on screen must not be auto-hidden. */
+export type ScenarioTheme = "receive" | "create" | "regift" | "gallery" | "dashboard";
+
+interface StageState {
+  /** Guidance visibility. The dock deliberately does not consult this. */
+  guidanceVisible: boolean;
+  showGuidance: () => void;
+  hideGuidance: () => void;
+  /** Something required is on screen; guidance stops auto-hiding. */
   pinned: boolean;
   setPinned: (pinned: boolean) => void;
   reducedMotion: boolean;
   announce: (message: string) => void;
   liveMessage: string;
-  /** Measured height of the action tray, so the content well can reserve
-   *  exactly the room it takes rather than a guess. A three-row tray was
-   *  hiding the gallery's page dots behind a fixed 7.5rem estimate. */
-  trayHeight: number;
-  reportTrayHeight: (height: number) => void;
+  /** Measured dock height, so content reserves exactly its footprint. */
+  dockHeight: number;
+  reportDockHeight: (height: number) => void;
+  /** Measured guidance height, for the same reason at the top. */
+  guidanceHeight: number;
+  reportGuidanceHeight: (height: number) => void;
+  theme: ScenarioTheme;
 }
 
-const TrayContext = createContext<TrayState | null>(null);
+const StageContext = createContext<StageState | null>(null);
 
 /** Long enough to read a short instruction without becoming furniture. */
 const AUTO_HIDE_MS = 3600;
@@ -160,97 +148,111 @@ export function StageProvider({
   children,
   stepKey,
   pinned = false,
+  theme = "receive",
 }: {
   children: ReactNode;
-  /** Changing this is what "a new step began" means: trays return. */
   stepKey: string;
-  /** Errors, required consent and required actions pin the trays open. */
   pinned?: boolean;
+  theme?: ScenarioTheme;
 }) {
   const reducedMotion = usePrefersReducedMotion();
-  const [visible, setVisible] = useState(true);
-  const [interacted, setInteracted] = useState(false);
+  const [guidanceVisible, setGuidanceVisible] = useState(true);
   const [localPinned, setLocalPinned] = useState(pinned);
   const [liveMessage, setLiveMessage] = useState("");
-  const [trayHeight, setTrayHeight] = useState(0);
+  const [dockHeight, setDockHeight] = useState(0);
+  const [guidanceHeight, setGuidanceHeight] = useState(0);
 
   const effectivePinned = pinned || localPinned;
 
-  // Adjusting state because a prop changed, done DURING RENDER rather than in
-  // an effect. React documents this pattern for exactly this case, and it
-  // matters here: an effect would paint one frame of the previous step's
-  // hidden tray before restoring it, which reads as a flicker on every step.
+  // Adjusting state because a prop changed, done during render — the pattern
+  // React documents for this. An effect would paint one frame of the previous
+  // step's hidden guidance before restoring it, which reads as a flicker.
   const [lastStep, setLastStep] = useState(stepKey);
   if (lastStep !== stepKey) {
     setLastStep(stepKey);
-    setVisible(true);
-    setInteracted(false);
+    setGuidanceVisible(true);
   }
 
-  // Pinning must re-open immediately: an error appearing while the tray is
-  // mid-fade must not fade away with it.
   const [lastPinned, setLastPinned] = useState(effectivePinned);
   if (lastPinned !== effectivePinned) {
     setLastPinned(effectivePinned);
-    if (effectivePinned) setVisible(true);
+    if (effectivePinned) setGuidanceVisible(true);
   }
 
-  // The only place the tray hides. setState happens inside the timeout, not in
-  // the effect body, so nothing cascades.
+  // The only automatic hide. setState happens inside the timeout, never in the
+  // effect body, so nothing cascades.
   useEffect(() => {
-    if (effectivePinned || !visible) return;
-    const id = setTimeout(() => setVisible(false), interacted ? 500 : AUTO_HIDE_MS);
+    if (effectivePinned || !guidanceVisible) return;
+    const id = setTimeout(() => setGuidanceVisible(false), AUTO_HIDE_MS);
     return () => clearTimeout(id);
-  }, [effectivePinned, visible, interacted, stepKey]);
+  }, [effectivePinned, guidanceVisible, stepKey]);
 
-  const reveal = useCallback(() => {
-    setInteracted(false);
-    setVisible(true);
-  }, []);
-
-  // Interacting means the visitor has read enough, so guidance steps aside
-  // sooner — but only when nothing on screen is required.
-  const noteInteraction = useCallback(() => setInteracted(true), []);
-
+  const showGuidance = useCallback(() => setGuidanceVisible(true), []);
+  const hideGuidance = useCallback(() => setGuidanceVisible(false), []);
   const announce = useCallback((message: string) => setLiveMessage(message), []);
 
-  const value = useMemo<TrayState>(
+  const value = useMemo<StageState>(
     () => ({
-      visible,
-      reveal,
-      noteInteraction,
+      guidanceVisible,
+      showGuidance,
+      hideGuidance,
       pinned: effectivePinned,
       setPinned: setLocalPinned,
       reducedMotion,
       announce,
       liveMessage,
-      trayHeight,
-      reportTrayHeight: setTrayHeight,
+      dockHeight,
+      reportDockHeight: setDockHeight,
+      guidanceHeight,
+      reportGuidanceHeight: setGuidanceHeight,
+      theme,
     }),
     [
-      visible,
-      reveal,
-      noteInteraction,
+      guidanceVisible,
+      showGuidance,
+      hideGuidance,
       effectivePinned,
       reducedMotion,
       announce,
       liveMessage,
-      trayHeight,
+      dockHeight,
+      guidanceHeight,
+      theme,
     ],
   );
 
-  return <TrayContext.Provider value={value}>{children}</TrayContext.Provider>;
+  return <StageContext.Provider value={value}>{children}</StageContext.Provider>;
 }
 
-export function useStage(): TrayState {
-  const ctx = useContext(TrayContext);
+export function useStage(): StageState {
+  const ctx = useContext(StageContext);
   if (!ctx) throw new Error("useStage must be used inside StageProvider");
   return ctx;
 }
 
+/** Measures an element and reports its height, re-measuring when it reflows. */
+function useMeasuredHeight(report: (height: number) => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const measure = () => report(Math.round(el.getBoundingClientRect().height));
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    measure();
+    return () => observer.disconnect();
+  }, [report]);
+  return ref;
+}
+
 // ---------------------------------------------------------------------------
-// The stage
+// Layer 0 — the stage
 // ---------------------------------------------------------------------------
+
+/** Extra breathing room above the safe inset. The notch, the Dynamic Island
+ *  and the browser's own controls all sit right at that boundary, and a
+ *  heading flush against it reads as clipped even when it technically is not. */
+export const TOP_GUTTER = 12;
 
 export function Stage({
   children,
@@ -258,121 +260,90 @@ export function Stage({
   className,
 }: {
   children: ReactNode;
-  /** Full-bleed background, painted first so a step never starts on blank. */
   media?: ReactNode;
   className?: string;
 }) {
-  const { reveal } = useStage();
+  const { theme } = useStage();
   return (
     <div
       className={cn(
-        // Fixed and dvh-sized: the step IS the viewport, and nothing below it
-        // exists to scroll to.
+        `gift-theme-${theme}`,
+        // overflow-hidden on the stage is what guarantees the DOCUMENT never
+        // moves sideways when a deck pans inside it.
         "fixed inset-0 h-[100dvh] w-full overflow-hidden bg-gift-bg text-gift-ink",
         className,
       )}
     >
       {media && <div className="absolute inset-0">{media}</div>}
-      {/* Tap anywhere that is not a control to bring the trays back. */}
-      <button
-        type="button"
-        aria-label="Show instructions"
-        onClick={reveal}
-        className="absolute inset-0 z-0 h-full w-full cursor-default focus:outline-none"
-        tabIndex={-1}
+      {/* The scenario's ambient wash — the quietest way to give each flow its
+          own identity without restyling anything. */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(120% 60% at 50% 0%, var(--gift-ambient-a), transparent 70%), radial-gradient(100% 50% at 50% 100%, var(--gift-ambient-b), transparent 75%)",
+        }}
       />
       {children}
     </div>
   );
 }
 
-/** The centred content well, inside the safe area, that never scrolls. */
-export function StageBody({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  const inset = useKeyboardInset();
-  const { trayHeight } = useStage();
-  return (
-    <div
-      className={cn(
-        "relative z-10 flex h-full w-full flex-col items-center justify-center px-5",
-        className,
-      )}
-      style={{
-        // Room for the trays, plus the keyboard when it is up. The transition
-        // makes the shift feel like the layout moving rather than jumping.
-        paddingTop: "calc(env(safe-area-inset-top) + 5.5rem)",
-        // The tray's real height plus a gap, falling back to a sane estimate
-        // before the first measurement lands.
-        paddingBottom: `calc(env(safe-area-inset-bottom) + ${Math.max(trayHeight + 24, 112)}px + ${inset}px)`,
-        transition: "padding-bottom 200ms ease-out",
-      }}
-    >
-      {/* A safety net, not a scrolling page.
-          On a tall phone nothing here moves. On a short one — a small device,
-          or a tall device with the browser bars expanded — the WELL pans
-          internally rather than clipping, because the stage is
-          overflow-hidden and clipped content is unreachable content.
-          The trays are siblings of this element, so the primary action stays
-          fixed no matter what happens in here, and overscroll-contain stops
-          the gesture leaking to a document that must not move. */}
-      <div className="max-h-full w-full max-w-[26rem] overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {children}
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------
-// Trays
+// Layer 1 — temporary guidance
 // ---------------------------------------------------------------------------
 
-export function GuidanceTray({
+export function Guidance({
   title,
   instruction,
   step,
   total,
-  onHelp,
+  onExit,
+  exitLabel = "Exit",
 }: {
   title: string;
   instruction?: string;
   step?: number;
   total?: number;
-  onHelp?: () => void;
+  onExit?: () => void;
+  exitLabel?: string;
 }) {
-  const { visible, reducedMotion } = useStage();
+  const { guidanceVisible, hideGuidance, reducedMotion, reportGuidanceHeight } = useStage();
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const boxRef = useMeasuredHeight(reportGuidanceHeight);
 
-  // Focus moves to the new step's heading so a screen reader and a keyboard
-  // both land in the right place. preventScroll matters: without it the
-  // browser tries to scroll a document that cannot scroll, and on iOS that
-  // shifts the fixed stage.
+  // Focus lands on the new step's heading so a screen reader and a keyboard
+  // both start in the right place. preventScroll matters: the document cannot
+  // scroll, and on iOS the attempt shifts the fixed stage.
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
   }, [title]);
 
   return (
     <div
+      // The whole layer stops receiving taps when hidden. An invisible tray
+      // that still captures input is worse than a visible one.
       className={cn(
-        "pointer-events-none absolute inset-x-0 top-0 z-30 px-4",
+        "absolute inset-x-0 top-0 z-30 px-4",
+        guidanceVisible ? "pointer-events-auto" : "pointer-events-none",
         reducedMotion
           ? "transition-opacity duration-150"
           : "transition-[opacity,transform] duration-300 ease-out",
-        visible
+        guidanceVisible
           ? "translate-y-0 opacity-100"
           : reducedMotion
             ? "opacity-0"
             : "-translate-y-3 opacity-0",
       )}
-      style={{ paddingTop: "calc(env(safe-area-inset-top) + 0.75rem)" }}
+      style={{ paddingTop: `calc(env(safe-area-inset-top) + ${TOP_GUTTER}px)` }}
+      aria-hidden={!guidanceVisible}
     >
-      <div className="pointer-events-auto mx-auto max-w-[26rem] rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.93)] px-4 py-3 shadow-[0_8px_28px_-14px_rgba(46,48,51,0.35)] backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+      <div
+        ref={boxRef}
+        className="mx-auto max-w-[26rem] rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.94)] px-4 py-3 shadow-[0_8px_28px_-14px_rgba(46,48,51,0.35)] backdrop-blur-xl"
+      >
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
             <h1
               ref={headingRef}
               tabIndex={-1}
@@ -384,26 +355,36 @@ export function GuidanceTray({
               <p className="mt-1 text-[12px] leading-snug text-gift-ink-soft">{instruction}</p>
             )}
           </div>
-          {onHelp && (
+
+          {onExit && (
             <button
               type="button"
-              onClick={onHelp}
-              aria-label="Help"
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-gift-border text-[13px] text-gift-ink-soft"
+              onClick={onExit}
+              className="flex h-11 shrink-0 items-center rounded-full border border-gift-border px-3 text-[11px] text-gift-ink-soft transition-colors hover:text-gift-ink"
             >
-              ?
+              {exitLabel}
             </button>
           )}
+
+          {/* Immediate dismissal. Nobody should have to wait out a timer for
+              instructions to move off their screen. */}
+          <button
+            type="button"
+            onClick={hideGuidance}
+            aria-label="Hide instructions"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[15px] text-gift-ink-faint transition-colors hover:text-gift-ink"
+          >
+            ×
+          </button>
         </div>
+
         {typeof step === "number" && typeof total === "number" && (
           <div className="mt-2.5 flex items-center gap-1.5" aria-label={`Step ${step} of ${total}`}>
             {Array.from({ length: total }, (_, i) => (
               <span
                 key={i}
-                className={cn(
-                  "h-0.5 flex-1 rounded-full",
-                  i < step ? "bg-gift-champagne" : "bg-gift-border",
-                )}
+                className="h-0.5 flex-1 rounded-full"
+                style={{ background: i < step ? "var(--gift-accent)" : "var(--gift-border)" }}
               />
             ))}
           </div>
@@ -413,59 +394,62 @@ export function GuidanceTray({
   );
 }
 
-export function ActionTray({
+/** The small circular control that brings guidance back. Sits in the top-left
+ *  safe corner, away from the primary action and from anything the visitor is
+ *  meant to be looking at. */
+export function RecallDot() {
+  const { guidanceVisible, showGuidance } = useStage();
+  return (
+    <button
+      type="button"
+      onClick={showGuidance}
+      aria-label="Show instructions"
+      className={cn(
+        "absolute left-4 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.85)] text-[13px] text-gift-ink shadow-sm backdrop-blur-xl transition-opacity duration-300",
+        guidanceVisible ? "pointer-events-none opacity-0" : "pointer-events-auto opacity-100",
+      )}
+      style={{ top: `calc(env(safe-area-inset-top) + ${TOP_GUTTER}px)` }}
+    >
+      ⓘ
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2 — permanent actions
+// ---------------------------------------------------------------------------
+
+/**
+ * The required next step.
+ *
+ * There is deliberately no `visible` prop and no access to guidance state.
+ * Whatever is placed here stays on screen until the visitor acts on it.
+ */
+export function ActionDock({
   children,
+  note,
   error,
-  /** A spring only on the first reveal — replaying a video must not make the
-   *  Continue button bounce again every time. */
-  spring = false,
-  forceVisible = false,
 }: {
   children: ReactNode;
+  /** A short line above the action — never the action itself. */
+  note?: string;
   error?: string | null;
-  spring?: boolean;
-  forceVisible?: boolean;
 }) {
-  const { visible, reducedMotion, reportTrayHeight } = useStage();
+  const { reportDockHeight, reducedMotion } = useStage();
   const inset = useKeyboardInset();
-  const shown = forceVisible || visible || Boolean(error);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  // ResizeObserver rather than a one-off measurement: the tray changes height
-  // when an error appears, when a confirmation replaces the actions, and when
-  // the copy wraps at a narrow width.
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(([entry]) =>
-      reportTrayHeight(Math.round(entry.contentRect.height)),
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [reportTrayHeight]);
-  // No "has it sprung yet" latch: a tray that is forceVisible never hides, so
-  // it never gets a second entrance to animate. Replaying a video therefore
-  // cannot make Continue bounce again, because Continue never left.
+  const boxRef = useMeasuredHeight(reportDockHeight);
 
   return (
     <div
-      className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-40 px-4",
-        reducedMotion
-          ? "transition-opacity duration-150"
-          : "transition-[opacity,transform] duration-[320ms]",
-        !reducedMotion && spring
-          ? "[transition-timing-function:cubic-bezier(0.22,1.4,0.36,1)]"
-          : "ease-out",
-        shown ? "translate-y-0 opacity-100" : reducedMotion ? "opacity-0" : "translate-y-6 opacity-0",
-      )}
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-50 px-4"
       style={{
         paddingBottom: `calc(env(safe-area-inset-bottom) + 0.9rem + ${inset}px)`,
+        transition: reducedMotion ? undefined : "padding-bottom 200ms ease-out",
       }}
     >
       <div
         ref={boxRef}
-        className="pointer-events-auto mx-auto max-w-[26rem] rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.94)] p-3 shadow-[0_-10px_30px_-16px_rgba(46,48,51,0.4)] backdrop-blur-xl"
+        className="pointer-events-auto mx-auto max-w-[26rem] rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.95)] p-3 shadow-[0_-10px_30px_-16px_rgba(46,48,51,0.4)] backdrop-blur-xl"
       >
         {error && (
           <p
@@ -475,32 +459,59 @@ export function ActionTray({
             {error}
           </p>
         )}
+        {note && !error && (
+          <p className="mb-2 px-1 text-center text-[11px] leading-snug text-gift-ink-soft">{note}</p>
+        )}
         <div className="grid gap-2">{children}</div>
       </div>
     </div>
   );
 }
 
-/** The small persistent affordance that recalls hidden trays. */
-export function HelpDot({ onClick }: { onClick: () => void }) {
-  const { visible } = useStage();
+// ---------------------------------------------------------------------------
+// Layer 3 — content
+// ---------------------------------------------------------------------------
+
+/**
+ * The content well.
+ *
+ * Its height is what remains after the safe insets, the guidance layer and the
+ * dock — measured, not estimated, so a tall dock cannot sit on top of a page
+ * indicator. Content taller than the well pans inside it rather than being
+ * clipped, because the stage is overflow-hidden and clipped content is
+ * unreachable content.
+ */
+export function StageContent({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const inset = useKeyboardInset();
+  const { dockHeight, guidanceHeight, guidanceVisible } = useStage();
+
+  // Guidance only reserves room while it is showing; once it fades the media
+  // gets the space back.
+  const top = `calc(env(safe-area-inset-top) + ${TOP_GUTTER + 8}px + ${guidanceVisible ? guidanceHeight : 0}px)`;
+  const bottom = `calc(env(safe-area-inset-bottom) + ${Math.max(dockHeight + 28, 96)}px + ${inset}px)`;
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="Show instructions and controls"
+    <div
       className={cn(
-        "absolute right-4 z-40 flex h-11 w-11 items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.8)] text-[13px] text-gift-ink shadow-sm backdrop-blur-xl transition-opacity duration-300",
-        visible ? "opacity-0" : "opacity-100",
+        "relative z-10 flex h-full w-full flex-col items-center justify-center px-5",
+        className,
       )}
-      style={{ top: "calc(env(safe-area-inset-top) + 0.9rem)" }}
+      style={{ paddingTop: top, paddingBottom: bottom, transition: "padding 220ms ease-out" }}
     >
-      ⌃
-    </button>
+      <div className="max-h-full w-full max-w-[26rem] overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {children}
+      </div>
+    </div>
   );
 }
 
-/** One polite live region per stage, for newly available actions and status. */
+/** One polite live region per stage. */
 export function LiveRegion() {
   const { liveMessage } = useStage();
   return (
@@ -511,17 +522,16 @@ export function LiveRegion() {
 }
 
 // ---------------------------------------------------------------------------
-// Horizontal card pager
+// Horizontal deck
 // ---------------------------------------------------------------------------
 
 /**
  * A swipeable row of full-width cards.
  *
- * Scroll-snap rather than a JS carousel: it is one line of CSS, it gives real
- * momentum and rubber-banding on both platforms for free, and it stays
- * keyboard- and screen-reader-navigable because the cards are simply in the
- * document. Horizontal panning is the one kind of scrolling this shell allows,
- * because it cannot hide a fixed action.
+ * Scroll-snap rather than a JS carousel: real momentum on both platforms for
+ * free, and the cards stay in the document so keyboard and screen-reader
+ * navigation still work. This is the only scrolling in the visitor flow, it is
+ * horizontal, and it is contained by the stage's overflow-hidden.
  */
 export function Pager({
   children,
@@ -538,27 +548,24 @@ export function Pager({
     const el = ref.current;
     if (!el || !onIndexChange) return;
     let frame = 0;
-    const onScroll = () => {
+    const sync = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const index = Math.round(el.scrollLeft / Math.max(1, el.clientWidth));
-        onIndexChange(index);
-      });
+      frame = requestAnimationFrame(() =>
+        onIndexChange(Math.round(el.scrollLeft / Math.max(1, el.clientWidth))),
+      );
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    // Belt and braces for the end of a momentum swipe. iOS can settle a
-    // snap-scroll without delivering a final scroll event, which would leave
-    // the dots and the Select label naming the previous card. These are real
-    // input events, so they arrive regardless.
-    el.addEventListener("pointerup", onScroll, { passive: true });
-    el.addEventListener("touchend", onScroll, { passive: true });
-    el.addEventListener("scrollend", onScroll, { passive: true });
+    el.addEventListener("scroll", sync, { passive: true });
+    // iOS can settle a snap without a final scroll event, which would leave the
+    // indicator naming the previous card. These are real input events.
+    el.addEventListener("pointerup", sync, { passive: true });
+    el.addEventListener("touchend", sync, { passive: true });
+    el.addEventListener("scrollend", sync, { passive: true });
     return () => {
       cancelAnimationFrame(frame);
-      el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("pointerup", onScroll);
-      el.removeEventListener("touchend", onScroll);
-      el.removeEventListener("scrollend", onScroll);
+      el.removeEventListener("scroll", sync);
+      el.removeEventListener("pointerup", sync);
+      el.removeEventListener("touchend", sync);
+      el.removeEventListener("scrollend", sync);
     };
   }, [onIndexChange]);
 
@@ -566,12 +573,16 @@ export function Pager({
     <div
       ref={ref}
       className={cn(
-        "flex w-full snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        "flex w-full min-h-0 snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
     >
       {children.map((child, i) => (
-        <div key={i} className="w-full shrink-0 snap-center">
+        // Exactly one well wide, with any gap INSIDE the card, so scrollLeft
+        // divides cleanly by clientWidth and the index maths cannot drift.
+        // h-full lets a card fill a flexed pager; it collapses to auto in an
+        // unsized one, so the carousel usage is unaffected.
+        <div key={i} className="h-full w-full shrink-0 snap-center">
           {child}
         </div>
       ))}
@@ -579,31 +590,68 @@ export function Pager({
   );
 }
 
-export function PagerDots({ count, index }: { count: number; index: number }) {
+export function PagerIndicator({ index, count }: { index: number; count: number }) {
   return (
-    <div className="flex items-center justify-center gap-2" aria-hidden="true">
-      {Array.from({ length: count }, (_, i) => (
-        <span
-          key={i}
-          className={cn(
-            "h-1.5 rounded-full transition-all duration-200",
-            i === index ? "w-5 bg-gift-ink" : "w-1.5 bg-gift-border-strong",
-          )}
-        />
-      ))}
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="flex items-center gap-2" aria-hidden="true">
+        {Array.from({ length: count }, (_, i) => (
+          <span
+            key={i}
+            className="h-1.5 rounded-full transition-all duration-200"
+            style={{
+              width: i === index ? 20 : 6,
+              background: i === index ? "var(--gift-accent)" : "var(--gift-border-strong)",
+            }}
+          />
+        ))}
+      </div>
+      <p className="text-[11px] tabular-nums text-gift-ink-faint">
+        {Math.min(index + 1, count)} of {count}
+      </p>
     </div>
   );
 }
 
-/** "2 of 4", for anyone who cannot see the dots. */
-export function PagerCount({ index, count }: { index: number; count: number }) {
-  return (
-    <p className="text-center text-[11px] tabular-nums text-gift-ink-faint">
-      {Math.min(index + 1, count)} of {count}
-    </p>
-  );
-}
+// ---------------------------------------------------------------------------
+// Bottom sheet
+// ---------------------------------------------------------------------------
 
-export function useAnnouncedId() {
-  return useId();
+/** Appears only when asked for, dismissible by the scrim or the handle. Keeps
+ *  secondary and destructive actions off the main control row. */
+export function BottomSheet({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  if (!open) return null;
+  return (
+    <div className="absolute inset-0 z-[60]">
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/25 backdrop-blur-[2px]"
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="absolute inset-x-0 bottom-0 mx-auto max-w-[26rem] rounded-t-3xl border border-white/70 bg-[rgba(250,249,246,0.98)] p-4 shadow-2xl"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
+      >
+        <div
+          className="mx-auto mb-3 h-1 w-10 rounded-full bg-gift-border-strong"
+          aria-hidden="true"
+        />
+        <p className="mb-3 text-center text-[13px] font-medium text-gift-ink">{title}</p>
+        <div className="grid gap-2">{children}</div>
+      </div>
+    </div>
+  );
 }

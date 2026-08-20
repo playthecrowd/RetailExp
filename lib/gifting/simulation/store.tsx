@@ -81,6 +81,9 @@ export type SenderStep =
   | "package-code"
   | "confirm-product"
   | "processing"
+  // The finished scene, shown before anything else — dropping the visitor
+  // straight into a gallery card meant they never watched what they made.
+  | "result"
   | "card"
   | "gallery";
 

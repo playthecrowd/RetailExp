@@ -215,3 +215,42 @@ body.gift-locked {
   position: relative;
   touch-action: pan-x;
 }
+
+/* ---------------------------------------------------------------------------
+   Gifting Demo — scenario accents.
+
+   One neutral luxury system, five moods. Each scenario shifts an ACCENT and a
+   pair of ambient wash colours; the surfaces, ink and borders never change, so
+   the five screens read as one platform rather than five products. Nothing
+   here is saturated enough to compete with the product photography.
+   --------------------------------------------------------------------------- */
+.gift-theme-receive {
+  --gift-accent: #c4a86a;          /* champagne */
+  --gift-accent-soft: #e6d8bd;
+  --gift-ambient-a: rgba(230, 216, 189, 0.55);
+  --gift-ambient-b: rgba(246, 240, 228, 0.35);
+}
+.gift-theme-create {
+  --gift-accent: #6f8ca6;          /* cool blue */
+  --gift-accent-soft: #adbfcf;
+  --gift-ambient-a: rgba(173, 191, 207, 0.5);
+  --gift-ambient-b: rgba(238, 242, 245, 0.4);
+}
+.gift-theme-regift {
+  --gift-accent: #5f8f8a;          /* soft teal */
+  --gift-accent-soft: #a9c9c4;
+  --gift-ambient-a: rgba(169, 201, 196, 0.5);
+  --gift-ambient-b: rgba(240, 245, 243, 0.4);
+}
+.gift-theme-gallery {
+  --gift-accent: #7d6f96;          /* muted violet */
+  --gift-accent-soft: #c3b8d4;
+  --gift-ambient-a: rgba(195, 184, 212, 0.45);
+  --gift-ambient-b: rgba(243, 240, 247, 0.4);
+}
+.gift-theme-dashboard {
+  --gift-accent: #3f5470;          /* navy */
+  --gift-accent-soft: #a6b4c6;
+  --gift-ambient-a: rgba(166, 180, 198, 0.45);
+  --gift-ambient-b: rgba(240, 243, 247, 0.4);
+}

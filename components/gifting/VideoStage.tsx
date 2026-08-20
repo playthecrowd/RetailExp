@@ -1,32 +1,46 @@
 "use client";
 
 import Image from "next/image";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import type { MediaRef } from "@/lib/gifting/simulation/types";
-import { ActionTray, GuidanceTray, HelpDot, LiveRegion, Stage, useStage } from "./shell";
+import {
+  ActionDock,
+  Guidance,
+  LiveRegion,
+  RecallDot,
+  Stage,
+  useStage,
+} from "./shell";
 import { Button } from "./ui";
 
 /**
  * A full-screen video step.
  *
- * THE CONTINUE BUTTON IS STICKY ONCE EARNED
- *   It stays hidden while the clip is playing and appears when playback
- *   reaches the end — and then it STAYS. Replaying does not take it away and
- *   does not make it animate again, because a control that has already been
- *   offered should not be withdrawn: a visitor who replays to catch something
- *   they missed has not un-finished the video, and making them watch to the
- *   end a second time to get the button back would be a punishment for paying
- *   attention.
+ * COMPLETION IS EARNED ONCE AND KEPT
+ *   `completionEarned` is a one-way latch. Replaying does not revoke it, and
+ *   neither does pausing, seeking or rotating the phone: a visitor who replays
+ *   to catch a line they missed has not un-finished the video, and making them
+ *   sit through it again to get the button back would punish paying attention.
  *
- *   `completedOnce` is therefore a one-way latch, and the spring runs only on
- *   the first reveal.
+ * WHY `ended` ALONE IS NOT ENOUGH
+ *   On a phone the `ended` event is genuinely unreliable — a clip that stalls
+ *   on the last frame, a decoder that rounds duration down, a backgrounded tab
+ *   that resumes past the end. Any of those leaves a visitor on a finished
+ *   video with no way forward. So completion is ALSO inferred from
+ *   `timeupdate` once the playhead is within a quarter second of the end, and
+ *   a playback error unlocks the action too. Being generous here costs
+ *   nothing; being strict traps people.
  *
- * GUIDANCE GETS OUT OF THE WAY
- *   Instructions show briefly, hide during playback, and come back on a tap,
- *   on pause, and on failure. The tap target deliberately excludes the video's
- *   own controls, so recalling the trays never fights the play button.
+ * THE ACTION IS NOT PART OF THE GUIDANCE
+ *   It lives in ActionDock, which has no visibility state. Instructions can
+ *   fade or be dismissed and the way forward stays exactly where it was.
  */
+
+/** Close enough to the end to call it finished. Wide enough to survive a
+ *  decoder that reports duration a frame short. */
+const END_EPSILON = 0.25;
+
 export function VideoStage({
   source,
   title,
@@ -35,7 +49,9 @@ export function VideoStage({
   total,
   continueLabel,
   onContinue,
+  onExit,
   autoPlay = true,
+  extraActions,
 }: {
   source: MediaRef;
   title: string;
@@ -44,21 +60,23 @@ export function VideoStage({
   total?: number;
   continueLabel: string;
   onContinue: () => void;
+  onExit?: () => void;
   autoPlay?: boolean;
+  /** Optional secondary actions rendered under the primary one, inside the
+   *  same permanent dock. */
+  extraActions?: ReactNode;
 }) {
   return (
     <Stage
       media={
-        <div className="absolute inset-0">
-          <Image
-            src={source.poster}
-            alt={source.alt}
-            fill
-            sizes="100vw"
-            className="object-cover"
-            priority
-          />
-        </div>
+        <Image
+          src={source.poster}
+          alt={source.alt}
+          fill
+          sizes="100vw"
+          className="object-cover"
+          priority
+        />
       }
     >
       <Inner
@@ -69,7 +87,9 @@ export function VideoStage({
         total={total}
         continueLabel={continueLabel}
         onContinue={onContinue}
+        onExit={onExit}
         autoPlay={autoPlay}
+        extraActions={extraActions}
       />
     </Stage>
   );
@@ -83,7 +103,9 @@ function Inner({
   total,
   continueLabel,
   onContinue,
+  onExit,
   autoPlay,
+  extraActions,
 }: {
   source: MediaRef;
   title: string;
@@ -92,24 +114,30 @@ function Inner({
   total?: number;
   continueLabel: string;
   onContinue: () => void;
+  onExit?: () => void;
   autoPlay: boolean;
+  extraActions?: ReactNode;
 }) {
-  const { reveal, noteInteraction, announce, reducedMotion, setPinned } = useStage();
+  const { announce, reducedMotion } = useStage();
   const videoRef = useRef<HTMLVideoElement>(null);
   const continueRef = useRef<HTMLButtonElement>(null);
 
   const [playing, setPlaying] = useState(false);
   const [failed, setFailed] = useState(false);
   const [muted, setMuted] = useState(true);
-  /** One-way. Once the clip has been finished, Continue is permanent. */
-  const [completedOnce, setCompletedOnce] = useState(false);
-  const focusedOnce = useRef(false);
+  const [completionEarned, setCompletionEarned] = useState(false);
+  const announcedRef = useRef(false);
 
-  // A finished video means a required action is on screen, so the tray must
-  // stop auto-hiding from that moment on.
-  useEffect(() => {
-    setPinned(completedOnce || failed);
-  }, [completedOnce, failed, setPinned]);
+  const earnCompletion = useCallback(() => {
+    setCompletionEarned((already) => {
+      if (already) return already;
+      if (!announcedRef.current) {
+        announcedRef.current = true;
+        announce(`${continueLabel} is now available.`);
+      }
+      return true;
+    });
+  }, [announce, continueLabel]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -119,50 +147,67 @@ function Inner({
     const onPlay = () => {
       setPlaying(true);
       setFailed(false);
-      noteInteraction();
     };
-    const onPause = () => {
-      setPlaying(false);
-      reveal();
-    };
+    const onPause = () => setPlaying(false);
     const onEnded = () => {
       setPlaying(false);
-      setCompletedOnce(true);
-      reveal();
-      announce(`${continueLabel} is now available.`);
+      earnCompletion();
+    };
+    // The fallback that matters on a phone.
+    const onTimeUpdate = () => {
+      const { currentTime, duration } = video;
+      if (Number.isFinite(duration) && duration > 0 && currentTime >= duration - END_EPSILON) {
+        earnCompletion();
+      }
     };
     const onError = () => {
       setFailed(true);
       setPlaying(false);
-      reveal();
+      // A broken video must not become a dead end.
+      earnCompletion();
+      announce("This video could not be played. You can continue.");
+    };
+    // A clip that stalls on the final frame never fires `ended`.
+    const onStalled = () => {
+      const { currentTime, duration } = video;
+      if (Number.isFinite(duration) && duration > 0 && currentTime >= duration - END_EPSILON) {
+        earnCompletion();
+      }
     };
 
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("ended", onEnded);
+    video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("error", onError);
+    video.addEventListener("stalled", onStalled);
+    video.addEventListener("suspend", onStalled);
 
     if (autoPlay) {
       void video.play().catch(() => {
-        // Refusal is not failure: the poster is up and Play is offered.
+        // A refusal is not a failure: the poster is up and Play is offered.
       });
     }
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("ended", onEnded);
+      video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("error", onError);
+      video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("suspend", onStalled);
       video.pause();
     };
-  }, [autoPlay, announce, continueLabel, noteInteraction, reveal]);
+  }, [autoPlay, earnCompletion, announce]);
 
-  // Focus the action the moment it is earned — without scrolling, because the
-  // document cannot scroll and the attempt would shift the fixed stage on iOS.
+  // Focus the action once it is earned — without scrolling, because the
+  // document cannot scroll and the attempt shifts the fixed stage on iOS.
+  const focusedRef = useRef(false);
   useEffect(() => {
-    if (!completedOnce || focusedOnce.current) return;
-    focusedOnce.current = true;
+    if (!completionEarned || focusedRef.current) return;
+    focusedRef.current = true;
     continueRef.current?.focus({ preventScroll: true });
-  }, [completedOnce]);
+  }, [completionEarned]);
 
   const toggle = useCallback(() => {
     const video = videoRef.current;
@@ -171,9 +216,11 @@ function Inner({
     else video.pause();
   }, []);
 
-  const replay = useCallback(() => {
+  const retry = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    setFailed(false);
+    video.load();
     video.currentTime = 0;
     void video.play().catch(() => setFailed(true));
   }, []);
@@ -182,7 +229,6 @@ function Inner({
     <>
       <LiveRegion />
 
-      {/* The video itself, full bleed over the poster. */}
       {source.video && (
         <video
           ref={videoRef}
@@ -193,74 +239,69 @@ function Inner({
           preload="auto"
           className={cn(
             "absolute inset-0 z-0 h-full w-full object-cover transition-opacity duration-500",
-            playing || completedOnce ? "opacity-100" : "opacity-0",
+            playing || completionEarned ? "opacity-100" : "opacity-0",
           )}
         />
       )}
 
-      {/* Tap-to-recall covers the frame but stops short of the controls below,
-          so recalling guidance never steals a tap from Play or Mute. */}
-      <button
-        type="button"
-        aria-label="Show instructions"
-        onClick={reveal}
-        tabIndex={-1}
-        className="absolute inset-x-0 top-0 z-10 h-full cursor-default focus:outline-none"
-        style={{ bottom: "calc(env(safe-area-inset-bottom) + 9rem)" }}
+      <Guidance
+        title={title}
+        instruction={instruction}
+        step={step}
+        total={total}
+        onExit={onExit}
       />
+      <RecallDot />
 
-      <GuidanceTray title={title} instruction={instruction} step={step} total={total} onHelp={reveal} />
-      <HelpDot onClick={reveal} />
-
-      {/* Playback controls sit above the tap layer and below the action tray. */}
+      {/* Playback controls: above the video, below the dock, and clear of it. */}
       <div
-        className="pointer-events-none absolute inset-x-0 z-30 flex items-center justify-center gap-2 px-4"
-        style={{ bottom: "calc(env(safe-area-inset-bottom) + 6.4rem)" }}
+        className="pointer-events-none absolute inset-x-0 z-40 flex flex-wrap items-center justify-center gap-2 px-4"
+        style={{ bottom: "calc(env(safe-area-inset-bottom) + 7.2rem)" }}
       >
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={playing ? "Pause" : "Play"}
-          className="pointer-events-auto flex h-12 min-w-12 items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.82)] px-5 text-[12px] text-gift-ink backdrop-blur-xl"
-        >
-          {playing ? "Pause" : completedOnce ? "Replay" : "Play"}
-        </button>
-        <button
-          type="button"
+        <ControlChip onClick={toggle} label={playing ? "Pause" : completionEarned ? "Replay" : "Play"} />
+        <ControlChip
           onClick={() => {
             const video = videoRef.current;
             if (!video) return;
             video.muted = !video.muted;
             setMuted(video.muted);
           }}
-          aria-label={muted ? "Unmute" : "Mute"}
-          className="pointer-events-auto flex h-12 min-w-12 items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.82)] px-5 text-[12px] text-gift-ink backdrop-blur-xl"
-        >
-          {muted ? "Unmute" : "Mute"}
-        </button>
-        {completedOnce && (
-          <button
-            type="button"
-            onClick={replay}
-            className="pointer-events-auto flex h-12 items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.82)] px-5 text-[12px] text-gift-ink backdrop-blur-xl"
-          >
-            Watch again
-          </button>
-        )}
+          label={muted ? "Unmute" : "Mute"}
+        />
       </div>
 
-      {/* The action. Hidden until the clip finishes, then permanent. */}
-      {(completedOnce || failed) && (
-        <ActionTray
-          forceVisible
-          spring={!reducedMotion}
-          error={failed ? "That video could not be played. You can still continue." : null}
+      {/* Permanent. Before completion it explains what to do; after, it is the
+          way forward. It never fades, and it is never a child of Guidance. */}
+      <ActionDock
+        note={completionEarned ? undefined : "Watch to the end to continue."}
+        error={failed ? "This video could not be played." : null}
+      >
+        {failed && <Button variant="secondary" onClick={retry}>Try Again</Button>}
+        <Button
+          ref={continueRef}
+          onClick={onContinue}
+          disabled={!completionEarned}
+          className={cn(
+            !reducedMotion && completionEarned && "transition-transform duration-300",
+          )}
         >
-          <Button onClick={onContinue} className="min-h-14" ref={continueRef}>
-            {continueLabel}
-          </Button>
-        </ActionTray>
-      )}
+          {continueLabel}
+        </Button>
+        {extraActions}
+      </ActionDock>
     </>
+  );
+}
+
+function ControlChip({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="pointer-events-auto flex h-12 min-w-[5.5rem] items-center justify-center rounded-full border border-white/70 bg-[rgba(250,249,246,0.86)] px-5 text-[12px] text-gift-ink backdrop-blur-xl"
+    >
+      {label}
+    </button>
   );
 }

@@ -60,7 +60,7 @@ export function GiftingDashboard({ onExit }: { onExit?: () => void }) {
           <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
             <h1 className="text-[20px] font-light tracking-tight">Gifting Demo</h1>
             <div className="flex items-center gap-2">
-              <Pill tone="warn">Simulation</Pill>
+              <Pill tone="warn">Preview</Pill>
               <Pill tone="neutral">retail_gifting</Pill>
               {onExit && (
                 <button
@@ -287,7 +287,7 @@ function SectionBody({ section }: { section: Section }) {
               checked={config.standardGiftingEnabled}
               onChange={(v) => dispatch({ type: "CONFIG", patch: { standardGiftingEnabled: v } })}
               label="Standard video gifting"
-              description="Works with no AI provider and no credits."
+              description="Works without scene generation or credits."
             />
             <Toggle
               checked={config.aiGiftingEnabled}

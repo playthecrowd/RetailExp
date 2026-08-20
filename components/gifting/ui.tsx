@@ -133,15 +133,20 @@ export function Card({
   className,
   onClick,
   selected,
+  style,
 }: {
   children: ReactNode;
   className?: string;
   onClick?: () => void;
   selected?: boolean;
+  /** Lets a caller paint the scenario accent onto the selected state without
+   *  every scenario needing its own class. */
+  style?: React.CSSProperties;
 }) {
   const Tag = onClick ? "button" : "div";
   return (
     <Tag
+      style={style}
       {...(onClick ? { type: "button" as const, onClick } : {})}
       className={cn(
         "w-full rounded-2xl border bg-gift-surface text-left transition-colors",

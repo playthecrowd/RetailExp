@@ -5,74 +5,69 @@ import { useEffect, useRef, useState } from "react";
 import { DEMO_REGIFT_PACKAGE_CODE, media, useGifting } from "@/lib/gifting/simulation/store";
 import { AI_STAGE_LABELS, type AiJobStage } from "@/lib/gifting/simulation/types";
 import {
-  ActionTray,
-  GuidanceTray,
-  HelpDot,
+  ActionDock,
+  Guidance,
   LiveRegion,
   Pager,
-  PagerCount,
-  PagerDots,
+  PagerIndicator,
+  RecallDot,
   Stage,
-  StageBody,
+  StageContent,
   StageProvider,
   useStage,
 } from "./shell";
-import { Body, Button, Card, Checkbox, CodeChip, Field, Pill } from "./ui";
+import { VideoStage } from "./VideoStage";
+import { Body, Button, Card, Checkbox, CodeChip, Field } from "./ui";
 
 /**
  * Creating or regifting, as full-screen panels.
  *
- * WHAT IS SIMULATED AND WHAT IS NOT
- *   The camera permission, the recording clock, the upload and the generation
- *   are simulated; the STATES are real. Every screen a visitor would meet is
- *   here in the order they would meet it.
- *
- * THE GENERATION IS LABELLED A SIMULATION ON THE SCREEN THAT SHOWS IT, its
- * stages are the genuine stages the real pipeline will report, and there is no
- * percentage — a progress bar nothing can substantiate is the one thing that
- * would make this dishonest.
+ * Every required action lives in ActionDock, which has no visibility state, so
+ * no step can lose its way forward to an instruction timer.
  */
 
 const STEPS = 8;
 
-export function SenderFlow() {
-  const { senderStep } = useGifting();
+export function SenderFlow({ onExit }: { onExit: () => void }) {
+  const { senderStep, draft } = useGifting();
   return (
-    <StageProvider stepKey={senderStep}>
-      <Step />
+    <StageProvider stepKey={senderStep} theme={draft.isRegift ? "regift" : "create"}>
+      <Step onExit={onExit} />
     </StageProvider>
   );
 }
 
-function Step() {
+function Step({ onExit }: { onExit: () => void }) {
   const { senderStep } = useGifting();
   switch (senderStep) {
     case "record":
-      return <Record />;
+      return <Record onExit={onExit} />;
     case "uploading":
-      return <Uploading />;
+      return <Uploading onExit={onExit} />;
     case "preview":
-      return <Preview />;
+      return <Preview onExit={onExit} />;
     case "choose-kind":
-      return <ChooseKind />;
+      return <ChooseKind onExit={onExit} />;
     case "choose-template":
-      return <ChooseTemplate />;
+      return <ChooseTemplate onExit={onExit} />;
     case "consent":
-      return <Consent />;
+      return <Consent onExit={onExit} />;
     case "recipient":
-      return <Recipient />;
+      return <Recipient onExit={onExit} />;
     case "message-code":
-      return <MessageCodeIssued />;
+      return <MessageCodeIssued onExit={onExit} />;
     case "package-code":
-      return <PackageCodeEntry />;
+      return <PackageCodeEntry onExit={onExit} />;
     case "confirm-product":
-      return <ConfirmProduct />;
+      return <ConfirmProduct onExit={onExit} />;
     case "processing":
-      return <Processing />;
+      return <Processing onExit={onExit} />;
+    case "result":
+      return <Result onExit={onExit} />;
     case "card":
-      return <AccessCard />;
+      return <AccessCard onExit={onExit} />;
     default:
-      return <Intro />;
+      return <Intro onExit={onExit} />;
   }
 }
 
@@ -90,49 +85,44 @@ function Backdrop({ src, alt, dim = 0.6 }: { src: string; alt: string; dim?: num
   );
 }
 
-const glass = "rounded-2xl border border-white/60 bg-[rgba(250,249,246,0.88)] backdrop-blur-xl";
+const glass = "rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.9)] backdrop-blur-xl";
 
-function Intro() {
+function Intro({ onExit }: { onExit: () => void }) {
   const { dispatch, draft } = useGifting();
-  const { reveal } = useStage();
   return (
     <Stage media={<Backdrop src={media.heroProduct.poster} alt={media.heroProduct.alt} dim={0.5} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title={draft.isRegift ? "Pass it on, personally" : "Make it personal"}
         instruction="Record a short message. We'll pair it with a package."
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <StageBody>
+      <RecallDot />
+      <StageContent>
         <div className={`${glass} p-5 text-center`}>
           <Body>
             You&apos;ll record a message, choose how it looks, add a recipient, and get a card to
             hand over.
           </Body>
         </div>
-      </StageBody>
-      <ActionTray>
+      </StageContent>
+      <ActionDock>
         <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "record" })}>
           Record a message
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-/** A guided camera: the frame is the screen, controls are pinned to the base. */
-function Record() {
+function Record({ onExit }: { onExit: () => void }) {
   const { dispatch } = useGifting();
-  const { reveal, setPinned, announce } = useStage();
+  const { setPinned, announce } = useStage();
   const [permission, setPermission] = useState<"idle" | "asking" | "granted" | "denied">("idle");
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
 
-  useEffect(
-    () => setPinned(permission !== "granted" || recording),
-    [permission, recording, setPinned],
-  );
+  useEffect(() => setPinned(permission === "denied"), [permission, setPinned]);
 
   useEffect(() => {
     if (!recording) return;
@@ -152,31 +142,24 @@ function Record() {
             className="object-cover"
             priority
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/25 via-transparent to-black/35" />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/35" />
         </>
       }
     >
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Record your message"
         instruction="Keep it short — sixty seconds is plenty."
         step={1}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-
-      <span
-        className="absolute left-4 z-30"
-        style={{ top: "calc(env(safe-area-inset-top) + 6.2rem)" }}
-      >
-        <Pill tone="accent">Simulated camera</Pill>
-      </span>
+      <RecallDot />
 
       {recording && (
         <div
-          className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-4 py-2 backdrop-blur-sm"
-          style={{ top: "calc(env(safe-area-inset-top) + 9.6rem)" }}
+          className="absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-4 py-2 backdrop-blur-sm"
+          style={{ top: "calc(env(safe-area-inset-top) + 5.2rem)" }}
         >
           <span className="h-2 w-2 animate-pulse rounded-full bg-[#e0736a]" />
           <span className="font-mono text-[13px] text-white">
@@ -185,7 +168,10 @@ function Record() {
         </div>
       )}
 
-      <ActionTray forceVisible>
+      <ActionDock
+        error={permission === "denied" ? "Camera access is off for this site." : null}
+        note={permission === "idle" ? "We'll ask for camera and microphone access." : undefined}
+      >
         {permission === "idle" && (
           <>
             <Button
@@ -198,7 +184,7 @@ function Record() {
                 }, 900);
               }}
             >
-              Allow camera &amp; microphone
+              Allow Camera &amp; Microphone
             </Button>
             <Button variant="ghost" onClick={() => setPermission("denied")}>
               Not now
@@ -215,17 +201,11 @@ function Record() {
 
         {permission === "denied" && (
           <>
-            <p className="px-1 pb-1 text-[12px] leading-snug text-gift-ink-soft">
-              Camera access is off. You can allow it, or continue with a prepared demo message.
-            </p>
             <Button variant="secondary" onClick={() => setPermission("idle")}>
-              Try again
+              Try Again
             </Button>
-            <Button
-              variant="ghost"
-              onClick={() => dispatch({ type: "SENDER_STEP", step: "uploading" })}
-            >
-              Use the demo message
+            <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "uploading" })}>
+              Use a Prepared Message
             </Button>
           </>
         )}
@@ -233,7 +213,7 @@ function Record() {
         {permission === "granted" &&
           (!recording ? (
             <>
-              <Button onClick={() => setRecording(true)}>Start recording</Button>
+              <Button onClick={() => setRecording(true)}>Start Recording</Button>
               <Button
                 variant="ghost"
                 onClick={() => dispatch({ type: "SENDER_STEP", step: "uploading" })}
@@ -248,10 +228,10 @@ function Record() {
                 dispatch({ type: "SENDER_STEP", step: "uploading" });
               }}
             >
-              Stop &amp; use this take
+              Stop &amp; Use This Take
             </Button>
           ))}
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
@@ -259,16 +239,16 @@ function Record() {
 /** The bottle fills as the upload progresses — the product is the indicator. */
 function BottleProgress({ percent }: { percent: number }) {
   return (
-    <div className="mx-auto w-48">
-      {/* Two copies of the SAME image in the SAME box: the ghost at low opacity,
-          the solid one clipped from the top so the fill rises from the base and
-          registers exactly at every height. */}
+    <div className="mx-auto w-44">
+      {/* Two copies of the SAME image in the SAME box: a ghost, and a solid one
+          clipped from the top, so the fill rises from the base and registers
+          exactly at every height. */}
       <div className="relative aspect-[3/4] w-full">
         <Image
           src={media.heroProduct.poster}
           alt=""
           fill
-          sizes="192px"
+          sizes="176px"
           className="object-contain opacity-20"
         />
         <div
@@ -279,7 +259,7 @@ function BottleProgress({ percent }: { percent: number }) {
             src={media.heroProduct.poster}
             alt=""
             fill
-            sizes="192px"
+            sizes="176px"
             className="object-contain"
           />
         </div>
@@ -287,8 +267,8 @@ function BottleProgress({ percent }: { percent: number }) {
       <div className="mt-4 flex items-center justify-center gap-3">
         <div className="h-0.5 w-28 overflow-hidden rounded-full bg-gift-border">
           <div
-            className="h-full rounded-full bg-gift-champagne transition-[width] duration-300 ease-out"
-            style={{ width: `${percent}%` }}
+            className="h-full rounded-full transition-[width] duration-300 ease-out"
+            style={{ width: `${percent}%`, background: "var(--gift-accent)" }}
           />
         </div>
         <span className="font-mono text-[12px] tabular-nums text-gift-ink-soft">{percent}%</span>
@@ -297,9 +277,9 @@ function BottleProgress({ percent }: { percent: number }) {
   );
 }
 
-function Uploading() {
+function Uploading({ onExit }: { onExit: () => void }) {
   const { dispatch, uploadPercent } = useGifting();
-  const { reveal, announce } = useStage();
+  const { announce } = useStage();
 
   useEffect(() => {
     if (uploadPercent >= 100) {
@@ -317,24 +297,23 @@ function Uploading() {
   return (
     <Stage media={<Backdrop src={media.gateBackground.poster} alt="" dim={0.72} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Saving your message"
-        instruction="Keep this screen open until the upload finishes."
+        instruction="Keep this screen open until it finishes."
         step={1}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <StageBody>
+      <RecallDot />
+      <StageContent>
         <BottleProgress percent={uploadPercent} />
-      </StageBody>
+      </StageContent>
     </Stage>
   );
 }
 
-function Preview() {
+function Preview({ onExit }: { onExit: () => void }) {
   const { dispatch } = useGifting();
-  const { reveal } = useStage();
   return (
     <Stage
       media={
@@ -347,25 +326,25 @@ function Preview() {
             className="object-cover"
             priority
           />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/40" />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/15 via-transparent to-black/35" />
         </>
       }
     >
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Happy with this?"
         instruction="Use it, or record another take."
         step={2}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <ActionTray forceVisible spring>
+      <RecallDot />
+      <ActionDock>
         <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "choose-kind" })}>
           Use This
         </Button>
         <Button
-          variant="secondary"
+          variant="ghost"
           onClick={() => {
             dispatch({ type: "UPLOAD", percent: 0 });
             dispatch({ type: "SENDER_STEP", step: "record" });
@@ -373,14 +352,14 @@ function Preview() {
         >
           Retake
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function ChooseKind() {
+function ChooseKind({ onExit }: { onExit: () => void }) {
   const { dispatch, config, credits, activeTemplates } = useGifting();
-  const { reveal } = useStage();
+  const [choice, setChoice] = useState<"standard" | "ai" | null>(null);
   const cheapest = activeTemplates.reduce((min, t) => Math.min(min, t.creditPrice), Infinity);
   const aiAvailable =
     config.aiGiftingEnabled && activeTemplates.length > 0 && credits.available >= cheapest;
@@ -388,70 +367,96 @@ function ChooseKind() {
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.66} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="How should it look?"
-        instruction="Standard always works. Scenes need credits."
+        instruction="Pick a style, then continue."
         step={3}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
+      <StageContent>
         <div className="grid gap-3">
           {config.standardGiftingEnabled && (
-            <Card
-              onClick={() => {
-                dispatch({ type: "DRAFT", patch: { kind: "standard" } });
-                dispatch({ type: "SENDER_STEP", step: "recipient" });
-              }}
-              className={`${glass} min-h-14 p-4`}
-            >
-              <p className="text-[15px] text-gift-ink">Standard Video Gift</p>
-              <Body className="mt-1 text-[12px]">Your message exactly as you recorded it.</Body>
-            </Card>
+            <SelectableCard
+              selected={choice === "standard"}
+              onClick={() => setChoice("standard")}
+              title="Standard Video Gift"
+              body="Your message exactly as you recorded it."
+            />
           )}
           {config.aiGiftingEnabled && (
-            <Card
-              onClick={
+            <SelectableCard
+              selected={choice === "ai"}
+              onClick={aiAvailable ? () => setChoice("ai") : undefined}
+              title="Styled Scene Gift"
+              body="Your message placed into a curated scene. Your original voice is kept."
+              disabledNote={
                 aiAvailable
-                  ? () => {
-                      dispatch({ type: "DRAFT", patch: { kind: "ai" } });
-                      dispatch({ type: "SENDER_STEP", step: "choose-template" });
-                    }
-                  : undefined
+                  ? undefined
+                  : activeTemplates.length === 0
+                    ? "No scenes are available right now."
+                    : "Not enough credits for a scene right now."
               }
-              className={`${glass} min-h-14 p-4 ${aiAvailable ? "" : "opacity-55"}`}
-            >
-              <div className="flex items-center gap-2">
-                <p className="text-[15px] text-gift-ink">AI-Generated Video Gift</p>
-                <Pill tone="accent">Simulation</Pill>
-              </div>
-              <Body className="mt-1 text-[12px]">
-                Your message placed into a styled scene. Your original audio is kept.
-              </Body>
-              {!aiAvailable && (
-                <p className="mt-2 text-[11px] text-gift-danger">
-                  {activeTemplates.length === 0
-                    ? "No scene templates are active."
-                    : "Not enough credits for a scene right now."}
-                </p>
-              )}
-            </Card>
+            />
           )}
-          <p className="text-center text-[11px] text-gift-ink-faint">
-            Available credits: {credits.available}
-          </p>
         </div>
-      </StageBody>
+      </StageContent>
+
+      <ActionDock note={`Available credits: ${credits.available}`}>
+        <Button
+          disabled={!choice}
+          onClick={() => {
+            if (choice === "standard") {
+              dispatch({ type: "DRAFT", patch: { kind: "standard" } });
+              dispatch({ type: "SENDER_STEP", step: "recipient" });
+            } else {
+              dispatch({ type: "DRAFT", patch: { kind: "ai" } });
+              dispatch({ type: "SENDER_STEP", step: "choose-template" });
+            }
+          }}
+        >
+          Continue
+        </Button>
+      </ActionDock>
     </Stage>
   );
 }
 
-/** Templates as a swipeable carousel rather than a vertical list. */
-function ChooseTemplate() {
+function SelectableCard({
+  selected,
+  onClick,
+  title,
+  body,
+  disabledNote,
+}: {
+  selected: boolean;
+  onClick?: () => void;
+  title: string;
+  body: string;
+  disabledNote?: string;
+}) {
+  return (
+    <Card
+      onClick={onClick}
+      className={`${glass} min-h-14 p-4 ${onClick ? "" : "opacity-55"}`}
+      style={
+        selected
+          ? { borderColor: "var(--gift-accent)", boxShadow: "0 0 0 1px var(--gift-accent)" }
+          : undefined
+      }
+    >
+      <p className="text-[15px] text-gift-ink">{title}</p>
+      <Body className="mt-1 text-[12px]">{body}</Body>
+      {disabledNote && <p className="mt-2 text-[11px] text-gift-danger">{disabledNote}</p>}
+    </Card>
+  );
+}
+
+function ChooseTemplate({ onExit }: { onExit: () => void }) {
   const { dispatch, activeTemplates } = useGifting();
-  const { reveal, announce } = useStage();
+  const { announce } = useStage();
   const [index, setIndex] = useState(0);
   const active = activeTemplates[index];
 
@@ -462,16 +467,16 @@ function ChooseTemplate() {
   return (
     <Stage media={<Backdrop src={media.gateBackground.poster} alt="" dim={0.7} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Choose a setting"
-        instruction="Swipe to compare. Every scene is curated."
+        instruction="Swipe to compare."
         step={4}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
+      <StageContent>
         <Pager onIndexChange={setIndex}>
           {activeTemplates.map((t, i) => (
             <div
@@ -479,6 +484,7 @@ function ChooseTemplate() {
               className={`${glass} overflow-hidden transition-transform duration-300 ${
                 i === index ? "scale-100" : "scale-[0.965]"
               }`}
+              style={i === index ? { borderColor: "var(--gift-accent)" } : undefined}
             >
               <div className="relative aspect-[3/2] w-full">
                 <Image
@@ -501,13 +507,12 @@ function ChooseTemplate() {
             </div>
           ))}
         </Pager>
-        <div className="mt-4 grid gap-2">
-          <PagerDots count={activeTemplates.length} index={index} />
-          <PagerCount index={index} count={activeTemplates.length} />
+        <div className="mt-4">
+          <PagerIndicator index={index} count={activeTemplates.length} />
         </div>
-      </StageBody>
+      </StageContent>
 
-      <ActionTray forceVisible>
+      <ActionDock>
         <Button
           disabled={!active}
           onClick={() => {
@@ -515,32 +520,32 @@ function ChooseTemplate() {
             dispatch({ type: "SENDER_STEP", step: "consent" });
           }}
         >
-          Select {active ? active.title : "a scene"}
+          Select
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function Consent() {
+function Consent({ onExit }: { onExit: () => void }) {
   const { dispatch, draft } = useGifting();
-  const { reveal, setPinned } = useStage();
+  const { setPinned } = useStage();
   useEffect(() => setPinned(true), [setPinned]);
   const ready = draft.likenessConsent && draft.audioConsent;
 
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.74} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Before we build your scene"
         instruction="Both permissions are required."
         step={5}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
+      <StageContent>
         <div className={`${glass} p-4`}>
           <Checkbox
             checked={draft.likenessConsent}
@@ -560,27 +565,25 @@ function Consent() {
             experience never clones or replaces your recorded audio.
           </p>
         </div>
-      </StageBody>
+      </StageContent>
 
-      <ActionTray forceVisible>
+      <ActionDock>
         <Button
           disabled={!ready}
           onClick={() => dispatch({ type: "SENDER_STEP", step: "recipient" })}
         >
           Continue
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-/** Recipient details, split the same way visitor capture is. */
 type RecipStage = "who" | "contact" | "note";
 const RECIP_ORDER: RecipStage[] = ["who", "contact", "note"];
 
-function Recipient() {
+function Recipient({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, issueMessageCode } = useGifting();
-  const { reveal } = useStage();
   const [stage, setStage] = useState<RecipStage>("who");
   const index = RECIP_ORDER.indexOf(stage);
 
@@ -600,16 +603,16 @@ function Recipient() {
   return (
     <Stage media={<Backdrop src={media.gateBackground.poster} alt="" dim={0.72} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title={titles[stage][0]}
         instruction={titles[stage][1]}
         step={6}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
+      <StageContent>
         <div className={`${glass} p-4`}>
           {stage === "who" && (
             <Field
@@ -639,14 +642,15 @@ function Recipient() {
             {RECIP_ORDER.map((s, i) => (
               <span
                 key={s}
-                className={`h-0.5 flex-1 rounded-full ${i <= index ? "bg-gift-champagne" : "bg-gift-border"}`}
+                className="h-0.5 flex-1 rounded-full"
+                style={{ background: i <= index ? "var(--gift-accent)" : "var(--gift-border)" }}
               />
             ))}
           </div>
         </div>
-      </StageBody>
+      </StageContent>
 
-      <ActionTray forceVisible>
+      <ActionDock>
         <Button
           disabled={!canAdvance}
           onClick={() => {
@@ -658,33 +662,32 @@ function Recipient() {
             }
           }}
         >
-          {stage === "note" ? "Create gift message code" : "Continue"}
+          Continue
         </Button>
         {index > 0 && (
           <Button variant="ghost" onClick={() => setStage(RECIP_ORDER[index - 1])}>
             Back
           </Button>
         )}
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function MessageCodeIssued() {
+function MessageCodeIssued({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, showToast } = useGifting();
-  const { reveal } = useStage();
   return (
     <Stage media={<Backdrop src={media.heroProduct.poster} alt={media.heroProduct.alt} dim={0.68} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Your message has a code"
-        instruction="On its own it opens nothing — it must be paired with a package."
+        instruction="It has to be paired with a package to open."
         step={7}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <StageBody>
+      <RecallDot />
+      <StageContent>
         <div className={`${glass} p-4`}>
           <CodeChip
             label="Gift Message Code"
@@ -695,32 +698,31 @@ function MessageCodeIssued() {
             }}
           />
         </div>
-      </StageBody>
-      <ActionTray forceVisible>
+      </StageContent>
+      <ActionDock>
         <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}>
-          Scan the package
+          Continue
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function PackageCodeEntry() {
+function PackageCodeEntry({ onExit }: { onExit: () => void }) {
   const { dispatch, showToast } = useGifting();
-  const { reveal } = useStage();
   const [value, setValue] = useState("");
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.7} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Which package is this for?"
         instruction="Scan the QR code, or type the code beside it."
         step={8}
         total={STEPS}
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <StageBody>
+      <RecallDot />
+      <StageContent>
         <div className={`${glass} p-4`}>
           <Field
             label="Package Code"
@@ -734,23 +736,23 @@ function PackageCodeEntry() {
               type="button"
               onClick={() => {
                 setValue(DEMO_REGIFT_PACKAGE_CODE);
-                showToast("Demo package code filled");
+                showToast("Sample package code filled");
               }}
               className="min-h-11 flex-1 rounded-full border border-gift-border bg-white/70 px-3 text-[11px] text-gift-ink-soft"
             >
-              Use demo package
+              Use sample
             </button>
             <button
               type="button"
-              onClick={() => showToast("Scanner simulated")}
+              onClick={() => showToast("Camera scanning is not part of this preview")}
               className="min-h-11 flex-1 rounded-full border border-gift-border bg-white/70 px-3 text-[11px] text-gift-ink-soft"
             >
               Scan QR
             </button>
           </div>
         </div>
-      </StageBody>
-      <ActionTray forceVisible>
+      </StageContent>
+      <ActionDock>
         <Button
           disabled={value.trim().length < 4}
           onClick={() => {
@@ -760,41 +762,37 @@ function PackageCodeEntry() {
         >
           Continue
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function ConfirmProduct() {
+function ConfirmProduct({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, activeTemplates, credits, showToast } = useGifting();
-  const { reveal } = useStage();
   const template = activeTemplates.find((t) => t.id === draft.templateId);
 
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.6} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Is this the right product?"
-        instruction="Check the pairing before binding."
-        onHelp={reveal}
+        instruction="Check the pairing before you confirm."
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
-      <StageBody>
+      <RecallDot />
+      <StageContent>
         <div className={`${glass} p-4`}>
           <Row label="Product" value="Signature Gift Package" />
           <Row label="Package" value={draft.packageCode ?? "—"} mono />
           <Row label="Message" value={draft.messageCode ?? "—"} mono />
           <Row label="Recipient" value={draft.recipientName || "—"} />
           <Row
-            label="Type"
-            value={draft.kind === "ai" ? `Scene · ${template?.title ?? ""}` : "Standard video"}
+            label="Style"
+            value={draft.kind === "ai" ? template?.title ?? "Scene" : "Standard video"}
           />
-          <p className="mt-2 text-center text-[11px] text-gift-ink-faint">
-            Available credits: {credits.available}
-          </p>
         </div>
-      </StageBody>
-      <ActionTray forceVisible>
+      </StageContent>
+      <ActionDock note={`Available credits: ${credits.available}`}>
         <Button
           onClick={() => {
             dispatch({
@@ -808,12 +806,12 @@ function ConfirmProduct() {
               dispatch({ type: "RESERVE_CREDITS", amount: template.creditPrice });
               dispatch({ type: "SENDER_STEP", step: "processing" });
             } else {
-              showToast("Gift bound to package");
+              showToast("Gift paired with package");
               dispatch({ type: "SENDER_STEP", step: "card" });
             }
           }}
         >
-          Bind this gift to the package
+          Confirm &amp; Pair
         </Button>
         <Button
           variant="ghost"
@@ -821,7 +819,7 @@ function ConfirmProduct() {
         >
           Choose a different package
         </Button>
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
@@ -847,9 +845,9 @@ const STAGE_ORDER: AiJobStage[] = [
   "ready",
 ];
 
-function Processing() {
-  const { dispatch, aiStage, draft, activeTemplates, showToast } = useGifting();
-  const { reveal, setPinned, announce } = useStage();
+function Processing({ onExit }: { onExit: () => void }) {
+  const { dispatch, aiStage, draft, activeTemplates } = useGifting();
+  const { setPinned, announce } = useStage();
   const template = activeTemplates.find((t) => t.id === draft.templateId);
   const stage = aiStage ?? "preparing";
   const index = STAGE_ORDER.indexOf(stage);
@@ -861,9 +859,8 @@ function Processing() {
     if (startedRef.current) return;
     startedRef.current = true;
     dispatch({ type: "AI_STAGE", stage: "preparing" });
-    // Added to the gallery immediately and in a processing state, so leaving
-    // is safe: the visitor can walk away and find it finished, which is how
-    // the real durable job will behave.
+    // Recorded straight away and in progress, so leaving is safe: the visitor
+    // can walk away and find it finished.
     dispatch({
       type: "ADD_GALLERY",
       item: {
@@ -871,7 +868,7 @@ function Processing() {
         kind: "ai",
         direction: "created",
         title: `For ${draft.recipientName || "your recipient"}`,
-        subtitle: "Scene generation in progress",
+        subtitle: "Scene in progress",
         media: media.aiGift,
         stage: "preparing",
         templateTitle: template?.title,
@@ -890,25 +887,22 @@ function Processing() {
         dispatch({ type: "PROMOTE_AI_ITEM", id: "job-live" });
         if (template) dispatch({ type: "CHARGE_CREDITS", amount: template.creditPrice });
       }
-    }, 2200);
+    }, 2000);
     return () => clearTimeout(id);
   }, [stage, index, dispatch, template, announce]);
 
   return (
     <Stage media={<Backdrop src={media.aiGift.poster} alt={media.aiGift.alt} dim={0.72} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title={stage === "ready" ? "Your gift is ready" : "Building your gift"}
         instruction="You can leave — we'll finish in the background."
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
+      <StageContent>
         <div className={`${glass} p-4`}>
-          <div className="mb-3 flex justify-end">
-            <Pill tone="accent">Simulation</Pill>
-          </div>
           <ol className="grid gap-1.5">
             {STAGE_ORDER.map((s, i) => {
               const done = i < index;
@@ -916,13 +910,14 @@ function Processing() {
               return (
                 <li key={s} className="flex items-center gap-3 py-1">
                   <span
-                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] ${
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px]"
+                    style={
                       done
-                        ? "bg-gift-success text-white"
+                        ? { background: "var(--gift-success)", color: "white" }
                         : active
-                          ? "border border-gift-champagne text-gift-champagne"
-                          : "border border-gift-border text-gift-ink-faint"
-                    }`}
+                          ? { border: "1px solid var(--gift-accent)", color: "var(--gift-accent)" }
+                          : { border: "1px solid var(--gift-border)", color: "var(--gift-ink-faint)" }
+                    }
                   >
                     {done ? "✓" : i + 1}
                   </span>
@@ -938,76 +933,107 @@ function Processing() {
               );
             })}
           </ol>
-          <p className="mt-3 text-center text-[11px] leading-snug text-gift-ink-faint">
-            Simulated generation. No provider is contacted and no real credits are spent.
-          </p>
         </div>
-      </StageBody>
+      </StageContent>
 
-      <ActionTray forceVisible spring={stage === "ready"}>
+      <ActionDock>
         {stage === "ready" ? (
-          <Button
-            onClick={() => {
-              showToast("Gift bound to package");
-              dispatch({ type: "SENDER_STEP", step: "card" });
-            }}
-          >
-            See your gift card
+          <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "result" })}>
+            View My Gift
           </Button>
         ) : (
-          <Button
-            variant="secondary"
-            onClick={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}
-          >
+          <Button variant="ghost" onClick={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}>
             Leave and check later
           </Button>
         )}
-      </ActionTray>
+      </ActionDock>
     </Stage>
   );
 }
 
-function AccessCard() {
+/**
+ * The finished scene, shown properly before anything else.
+ *
+ * Dropping the visitor straight into a gallery card meant they never actually
+ * watched the thing they just made. This screen exists so the result is seen.
+ */
+function Result({ onExit }: { onExit: () => void }) {
+  const { dispatch, showToast } = useGifting();
+  return (
+    <VideoStage
+      source={media.aiGift}
+      title="Your Gift Is Ready"
+      instruction="Here's how it turned out."
+      continueLabel="Keep This Gift"
+      onExit={onExit}
+      onContinue={() => {
+        showToast("Saved to My Gifts");
+        dispatch({ type: "SENDER_STEP", step: "card" });
+      }}
+      autoPlay={false}
+      extraActions={
+        <>
+          <Button
+            variant="ghost"
+            onClick={() => dispatch({ type: "SENDER_STEP", step: "choose-template" })}
+          >
+            Try Another Style
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              dispatch({ type: "START_CREATE", isRegift: false });
+              dispatch({ type: "SENDER_STEP", step: "record" });
+            }}
+          >
+            Create Another
+          </Button>
+        </>
+      }
+    />
+  );
+}
+
+function AccessCard({ onExit }: { onExit: () => void }) {
   const { dispatch, lastIssued, draft, showToast } = useGifting();
-  const { reveal } = useStage();
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.68} />}>
       <LiveRegion />
-      <GuidanceTray
+      <Guidance
         title="Your gift access card"
         instruction="Print it or send it. Both codes are needed."
-        onHelp={reveal}
+        onExit={onExit}
       />
-      <HelpDot onClick={reveal} />
+      <RecallDot />
 
-      <StageBody>
-        <div className={`${glass} overflow-hidden`}>
-          <div className="p-5">
-            <p className="text-center text-[10px] uppercase tracking-[0.24em] text-gift-ink-faint">
-              A gift for
+      <StageContent>
+        <div className={`${glass} overflow-hidden p-5`}>
+          <p className="text-center text-[10px] uppercase tracking-[0.24em] text-gift-ink-faint">
+            A gift for
+          </p>
+          <p className="mt-1 text-center text-[22px] font-light text-gift-ink">
+            {lastIssued?.recipientName ?? draft.recipientName ?? "—"}
+          </p>
+          {draft.note && (
+            <p className="mt-2 text-center text-[12px] italic leading-snug text-gift-ink-soft">
+              “{draft.note}”
             </p>
-            <p className="mt-1 text-center text-[22px] font-light text-gift-ink">
-              {lastIssued?.recipientName ?? draft.recipientName ?? "—"}
-            </p>
-            {draft.note && (
-              <p className="mt-2 text-center text-[12px] italic leading-snug text-gift-ink-soft">
-                “{draft.note}”
-              </p>
-            )}
-            <div className="mt-4 grid gap-2">
-              <CodeChip label="Package Code" code={lastIssued?.packageCode ?? "—"} />
-              <CodeChip label="Gift Message Code" code={lastIssued?.messageCode ?? "—"} />
-            </div>
+          )}
+          <div className="mt-4 grid gap-2">
+            <CodeChip label="Package Code" code={lastIssued?.packageCode ?? "—"} />
+            <CodeChip label="Gift Message Code" code={lastIssued?.messageCode ?? "—"} />
           </div>
         </div>
-      </StageBody>
+      </StageContent>
 
-      <ActionTray forceVisible>
-        <Button onClick={() => showToast("Share sheet simulated")}>Share</Button>
-        <Button variant="ghost" onClick={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}>
-          Go to my gallery
+      <ActionDock>
+        <Button onClick={() => dispatch({ type: "SCENARIO", scenario: "gallery" })}>
+          View My Gifts
         </Button>
-      </ActionTray>
+        <Button variant="ghost" onClick={() => showToast("Sharing is not part of this preview")}>
+          Share
+        </Button>
+      </ActionDock>
     </Stage>
   );
 }

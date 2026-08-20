@@ -289,7 +289,7 @@ export const DASHBOARD_FIXTURES = {
     {
       id: "job-8841",
       template: "Modern Retail Welcome",
-      provider: "mock",
+      provider: "Preview",
       status: "generating",
       attempts: 1,
       expense: "$0.00",
@@ -298,7 +298,7 @@ export const DASHBOARD_FIXTURES = {
     {
       id: "job-8836",
       template: "Luxury Product Reveal",
-      provider: "mock",
+      provider: "Preview",
       status: "ready",
       attempts: 1,
       expense: "$0.00",
@@ -307,7 +307,7 @@ export const DASHBOARD_FIXTURES = {
     {
       id: "job-8829",
       template: "Gift Presentation",
-      provider: "mock",
+      provider: "Preview",
       status: "failed",
       attempts: 2,
       expense: "$0.00",

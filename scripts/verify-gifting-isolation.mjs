@@ -257,7 +257,7 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
   // and gift-prefixed.
   const addedProps = addedLines
     .map((l) => l.trim())
-    .filter((l) => l.startsWith("--"))
+    .filter((l) => l.startsWith("--") && l.includes(":"))
     .map((l) => l.split(":")[0].trim());
   const foreignProps = addedProps.filter((name) => !name.startsWith("--gift-") && !name.startsWith("--color-gift-"));
   check(
@@ -318,6 +318,82 @@ console.log("\n--- fixtures stay inside the prototype ---");
     nonGiftingUsers.length === 0,
     `no non-gifting file reads the fixtures${nonGiftingUsers.length ? ` (${nonGiftingUsers.join(", ")})` : ""}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- the three layers stay separate ---");
+// ---------------------------------------------------------------------------
+{
+  // The defect this pass exists to kill: a required action sharing its
+  // visibility with the instruction overlay. ActionDock must not be able to
+  // read guidance visibility at all, so no later edit can reintroduce it.
+  const shell = read("components/gifting/shell.tsx");
+  const fromDock = shell.slice(shell.indexOf("export function ActionDock"));
+  const dockBody = fromDock.slice(0, fromDock.indexOf("\nexport function"));
+  check(
+    !/guidanceVisible/.test(dockBody),
+    "ActionDock never reads guidance visibility",
+  );
+  // Prose about the old design is fine; a live prop is not.
+  const shellCode = shell
+    .split("\n")
+    .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join("\n");
+  check(
+    !/forceVisible/.test(shellCode),
+    "no forceVisible escape hatch remains — permanence is the default, not an opt-in",
+  );
+
+  // And no flow may nest its action inside the guidance element.
+  for (const file of walk("components/gifting")) {
+    if (!file.endsWith(".tsx")) continue;
+    check(
+      !/<Guidance[^>]*>[\s\S]*?<\/Guidance>/.test(read(file)),
+      `Guidance has no children in ${file.split("/").pop()} — it cannot hide an action`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- no implementation language reaches a visitor ---");
+// ---------------------------------------------------------------------------
+{
+  // Words that describe how the thing is built rather than what it does. A
+  // visitor reading "simulated" or "no database" is being told about our
+  // plumbing, which is never something they asked about.
+  const banned =
+    /\b(simulat\w*|mock\w*|fixtures?|database|backend|migration|localStorage|local state|placeholder|dummy|stub)\b/i;
+  const visitorFiles = [
+    "components/gifting/shell.tsx",
+    "components/gifting/VideoStage.tsx",
+    "components/gifting/RecipientFlow.tsx",
+    "components/gifting/SenderFlow.tsx",
+    "components/gifting/Gallery.tsx",
+    "components/gifting/GiftingApp.tsx",
+    "components/gifting/ui.tsx",
+  ];
+  for (const file of visitorFiles) {
+    const offenders = read(file)
+      .split("\n")
+      // Comments explain the code to us and imports name modules. Neither is
+      // rendered, so neither is what this check is about.
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line) && !/^\s*import\b|from "/.test(line))
+      // Utility classes are not copy: `placeholder:text-*` is a Tailwind
+      // selector, not something anyone reads on screen.
+      .map((line) => line.replace(/className=("[^"]*"|\{[^}]*\})/g, ""))
+      .filter((line) => {
+        // Only what a visitor could actually read: quoted copy and JSX text.
+        const quoted = line.match(/"[^"]{4,}"|'[^']{4,}'/g) ?? [];
+        const jsxText = line.match(/>[^<>{}\n]{4,}</g) ?? [];
+        return [...quoted, ...jsxText].some((t) => banned.test(t));
+      });
+    check(
+      offenders.length === 0,
+      `no implementation language in ${file.split("/").pop()}${
+        offenders.length ? ` (${offenders[0].trim().slice(0, 70)})` : ""
+      }`,
+    );
+  }
 }
 
 console.log(
