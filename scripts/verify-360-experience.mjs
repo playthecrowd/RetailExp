@@ -21,11 +21,25 @@
  */
 
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { register } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+
+// Registered BEFORE the dynamic import below, because the module's own
+// relative imports carry no extension. See ts-extension-resolver.mjs.
+register("./ts-extension-resolver.mjs", import.meta.url);
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative) => readFileSync(join(root, relative), "utf8");
+const mod = (relative) => pathToFileURL(join(root, relative)).href;
+
+// The countdown's arithmetic is DRIVEN below, not pattern-matched out of the
+// source, which is why it lives in a .ts module rather than in the component:
+// Node cannot import JSX, and "the timer cannot advance on its own" is a claim
+// that has to be executed to mean anything.
+const { computeTimerState, formatClock, RING_CIRCUMFERENCE } = await import(
+  mod("lib/kameleon/video-timer.ts")
+);
 
 /** Comments describe intent; only code can be evidence of behaviour. */
 const stripComments = (text) =>
@@ -210,42 +224,159 @@ console.log("\n--- the end of the clip is not the end of the visit ---");
 }
 
 // ---------------------------------------------------------------------------
-console.log("\n--- the countdown ---");
+console.log("\n--- the countdown is the video's clock, and nothing else ---");
+// ---------------------------------------------------------------------------
+{
+  // ---- THE REGRESSION -----------------------------------------------------
+  //
+  // What shipped drifted because the arithmetic, though correct, was only
+  // evaluated inside requestAnimationFrame. A throttled tab stopped evaluating
+  // it while the clip played on. This proves the replacement cannot drift by
+  // construction: the display is a pure function of the two numbers the video
+  // reports, so a still playhead produces a still readout no matter how much
+  // real time goes by.
+  const held = [];
+  const startedAt = Date.now();
+  for (let i = 0; i < 5000; i += 1) held.push(computeTimerState(17.42, 60));
+  // Burn real wall-clock time between samples. Anything reading a clock of its
+  // own - Date.now(), an interval, an elapsed-time accumulator - would move.
+  while (Date.now() - startedAt < 60) { /* spin */ }
+  held.push(computeTimerState(17.42, 60));
+  const first = JSON.stringify(held[0]);
+  check(
+    held.every((state) => JSON.stringify(state) === first),
+    `the timer cannot advance while currentTime is unchanged (${held.length} reads over ${Date.now() - startedAt}ms, all identical)`,
+  );
+  check(held[0].clock === "0:43", `a held playhead of 17.42s reads 0:43 every time (got ${held[0].clock})`);
+
+  // ...and it DOES advance when, and only when, the playhead does.
+  const walked = [0, 15, 30, 45, 59.5, 60].map((t) => computeTimerState(t, 60).clock);
+  check(
+    JSON.stringify(walked) === JSON.stringify(["1:00", "0:45", "0:30", "0:15", "0:01", "0:00"]),
+    `the readout tracks the playhead exactly (${walked.join(" ")})`,
+  );
+
+  // ---- the six scenarios the brief names ----------------------------------
+  check(computeTimerState(0, 60).clock === "1:00", "a 60s file at rest reads 1:00");
+  check(computeTimerState(30, 60).clock === "0:30", "seeking to 30s reads 0:30");
+  check(computeTimerState(60, 60).clock === "0:00", "completion reads 0:00");
+  // Replay is a seek to zero; the timer is never told, it just reads again.
+  check(computeTimerState(0, 60).clock === "1:00", "replay returns to 1:00 by rewinding the playhead");
+
+  // Pause and buffering are the SAME input twice, which is the same output.
+  const paused = computeTimerState(23.8, 60);
+  check(
+    JSON.stringify(computeTimerState(23.8, 60)) === JSON.stringify(paused),
+    "pausing and buffering freeze the readout and the ring together",
+  );
+
+  // ---- before metadata: a loading state, not a countdown ------------------
+  for (const [label, value] of [["NaN", NaN], ["zero", 0], ["Infinity", Infinity]]) {
+    check(
+      computeTimerState(0, value) === null,
+      `a duration of ${label} yields no timer, so the viewer shows loading instead`,
+    );
+  }
+
+  // ---- the ring is the same reading, drawn ---------------------------------
+  check(computeTimerState(0, 60).progress === 0, "the ring starts full");
+  check(computeTimerState(60, 60).progress === 1, "the ring empties exactly at the end");
+  check(Math.abs(computeTimerState(30, 60).progress - 0.5) < 1e-9, "the ring is halfway at halfway");
+  // A browser can report a hair past duration on the last frame, and a seek can
+  // momentarily report below zero. Neither may produce a negative countdown or
+  // a ring past full.
+  check(computeTimerState(60.3, 60).progress === 1, "a playhead past duration clamps the ring");
+  check(computeTimerState(60.3, 60).clock === "0:00", "a playhead past duration still reads 0:00");
+  check(computeTimerState(-0.2, 60).clock === "1:00", "a negative playhead clamps to the start");
+  check(Math.abs(RING_CIRCUMFERENCE - 2 * Math.PI * 26) < 1e-9, "the dash array is the ring's circumference");
+
+  check(formatClock(60) === "1:00" && formatClock(9) === "0:09", "M:SS, zero padded");
+  check(formatClock(0.2) === "0:01", "a fraction of a second left still reads 0:01, not 0:00");
+
+  // ---- and the module owns no clock at all --------------------------------
+  // Comment-stripped: the module's prose explains what it must not do, and
+  // grepping the prose would fail the very file that documents the rule.
+  const timerSource = stripComments(read("lib/kameleon/video-timer.ts"));
+  for (const forbidden of ["Date.now", "performance.now", "setInterval", "setTimeout", "requestAnimationFrame", "new Date"]) {
+    check(!timerSource.includes(forbidden), `the timer module contains no ${forbidden}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- the countdown's wiring in the viewer ---");
 // ---------------------------------------------------------------------------
 {
   check(/data-testid="countdown"/.test(viewer), "there is a countdown element");
   check(/role="timer"/.test(viewer), "it is exposed as a timer");
   check(/seconds remaining/.test(viewer), "it carries a spoken label, not just a ring");
-  check(/function formatClock/.test(viewer), "the remaining time is rendered as m:ss");
   check(
-    /Math\.floor\(safe \/ 60\)/.test(viewer) && /padStart\(2, "0"\)/.test(viewer),
-    "60 seconds reads as 1:00 and 9 seconds as 0:09",
+    /computeTimerState\(video\.currentTime, video\.duration\)/.test(viewer),
+    "the display is computed from the video element's own clock",
   );
-  const tickStart = viewer.indexOf("const tick = () => {");
-  const timer = viewer.slice(tickStart, viewer.indexOf("}, [attempt]);", tickStart));
-  check(timer.length > 0, "there is a countdown loop to inspect");
-  // Derived from currentTime rather than from a wall clock, which is what
-  // makes pause, seek and replay correct without any bookkeeping: a paused
-  // video stops advancing currentTime, so the ring and the number stop too.
+  // The whole point: the arithmetic must run on media events, not only frames.
+  for (const event of [
+    "loadedmetadata", "durationchange", "timeupdate", "seeking", "seeked",
+    "play", "playing", "pause", "waiting", "ended", "emptied",
+  ]) {
+    check(
+      new RegExp(`\\["${event}",`).test(viewer),
+      `the timer resynchronises on ${event}`,
+    );
+  }
+  const sync = viewer.slice(
+    viewer.indexOf("const syncTimer = useCallback"),
+    viewer.indexOf("useEffect(() => {", viewer.indexOf("const syncTimer = useCallback")),
+  );
+  for (const forbidden of ["Date.now", "performance.now", "setInterval"]) {
+    check(!sync.includes(forbidden), `the sync reads no ${forbidden}`);
+  }
+  // The frame loop is a smoothness bonus, so it must stop whenever the
+  // playhead is not moving - otherwise it burns battery holding a still
+  // number still.
+  const timerEffect = viewer.slice(
+    viewer.indexOf("const stopLoop = () => {"),
+    viewer.indexOf("}, [syncTimer, attempt]);"),
+  );
+  check(/cancelAnimationFrame\(rafRef\.current\)/.test(timerEffect), "the frame loop is cancellable");
   check(
-    /total - video\.currentTime/.test(timer),
-    "the countdown is derived from the playhead, so pausing freezes it",
+    /const onHalt = \(\) => \{[\s\S]{0,120}stopLoop\(\);/.test(timerEffect),
+    "pause, waiting and ended all stop the frame loop",
   );
   check(
-    !/Date\.now\(\)/.test(timer) && !/setInterval/.test(timer),
-    "the countdown does not run on a wall clock that would drift past a pause",
+    /\["pause", onHalt\]/.test(viewer) && /\["waiting", onHalt\]/.test(viewer) && /\["ended", onHalt\]/.test(viewer),
+    "pause, waiting and ended share the one halt path",
   );
   check(
-    /ring\.style\.strokeDashoffset/.test(timer),
-    "the ring is written straight to the DOM rather than through a render per frame",
+    /return \(\) => \{\s*stopLoop\(\);/.test(timerEffect),
+    "unmount and cleanup stop the frame loop",
   );
   check(
-    /if \(whole !== lastWhole\)/.test(timer),
-    "the readout re-renders once a second, not once a frame",
+    /syncTimer\(\);\s*\n\s*if \(!video\.paused && !video\.ended\) startLoop\(\);/.test(timerEffect),
+    "a source that was already loaded is caught up without waiting for an event",
+  );
+  check(
+    /const ringVisible = clock !== null;/.test(viewer),
+    "no duration means no countdown, and the loading state stands in its place",
   );
   check(
     /finished \? "var\(--kameleon-teal-light\)" : "var\(--kameleon-copper\)"/.test(viewer),
     "the ring takes a teal completion accent over copper",
+  );
+  // Looking around and device motion write to yaw/pitch refs, never to the
+  // timer. Proved by absence.
+  const orientation = viewer.slice(
+    viewer.indexOf("const onOrientation = (event: DeviceOrientationEvent)"),
+    viewer.indexOf("window.addEventListener(\"deviceorientation\", onOrientation)"),
+  );
+  check(
+    !/setRemaining|setClock|syncTimer/.test(orientation),
+    "device motion cannot touch the timer",
+  );
+  const dragStart2 = viewer.indexOf("const move = (event: PointerEvent)");
+  const drag = viewer.slice(dragStart2, viewer.indexOf("const up = () =>", dragStart2));
+  check(
+    !/setRemaining|setClock|syncTimer/.test(drag),
+    "looking around cannot touch the timer",
   );
 }
 

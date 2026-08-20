@@ -12,6 +12,11 @@ import {
   SoundIcon,
 } from "./icons";
 import { cn } from "@/lib/cn";
+import {
+  RING_CIRCUMFERENCE,
+  RING_RADIUS,
+  computeTimerState,
+} from "@/lib/kameleon/video-timer";
 
 /**
  * A 2:1 equirectangular video viewer.
@@ -67,11 +72,6 @@ const MAX_PITCH = Math.PI / 2 - 0.05;
  *  width, which matches how people expect a panorama to behave. */
 const DRAG_SENSITIVITY = 0.0042;
 
-/** Timer ring geometry. The circumference is the dash array, so the visible
- *  arc is simply circumference * fraction-remaining. */
-const RING_RADIUS = 26;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
-
 export interface Video360ViewerProps {
   src: string;
   poster?: string;
@@ -102,11 +102,6 @@ type Phase = "loading" | "ready" | "error";
  * is nagging rather than helping.
  */
 type MotionState = "idle" | "enabled" | "denied" | "unavailable" | "dismissed";
-
-function formatClock(seconds: number): string {
-  const safe = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`;
-}
 
 export function Video360Viewer({
   src,
@@ -144,10 +139,19 @@ export function Video360Viewer({
    *  failed one to try again, which browsers will not reliably do. */
   const [attempt, setAttempt] = useState(0);
 
-  /** Whole seconds left, for the readout and the screen-reader label. The RING
-   *  is not driven from state — see the countdown effect. */
+  /**
+   * The countdown, as last read FROM THE VIDEO.
+   *
+   * `null` means the element has not told us its duration yet, and the timer
+   * shows a loading state instead of counting down from a number it does not
+   * have. Both fields only ever change in `syncTimer`, which reads
+   * video.currentTime and video.duration and nothing else.
+   */
+  const [clock, setClock] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
-  const [duration, setDuration] = useState(0);
+  /** The last whole second painted, so a 60fps sync loop re-renders once a
+   *  second instead of sixty times. */
+  const paintedSecondRef = useRef<number | null>(null);
 
   // These are facts about the DEVICE, decided once at mount rather than
   // synchronised in an effect. This component is only ever loaded with
@@ -174,6 +178,9 @@ export function Video360Viewer({
   const [entered, setEntered] = useState(false);
 
   const ringRef = useRef<SVGCircleElement>(null);
+  /** Handle for the smoothness loop, so pause/waiting/ended/unmount can all
+   *  stop it. Zero means not running. */
+  const rafRef = useRef(0);
 
   // exit is called from a keydown listener, a popstate listener and buttons.
   // A ref guard makes it idempotent: browser Back fires popstate AND unwinds
@@ -233,6 +240,10 @@ export function Video360Viewer({
     // and the ring is still empty.
     video.currentTime = 0;
     setFinished(false);
+    // The timer is not told anything. Moving the playhead IS the reset: the
+    // seek fires `seeking`/`seeked`, both of which re-read the video, so the
+    // readout returns to 1:00 because the video says 0, not because replay
+    // asked it to.
     // Same reasoning as `play`: a refusal is not a failure. The clip is
     // rewound either way, so the visitor gets a Play control on frame one
     // rather than an error over a working video.
@@ -361,7 +372,6 @@ export function Video360Viewer({
 
     const onReady = () => {
       setPhase("ready");
-      setDuration(Number.isFinite(video.duration) ? video.duration : 0);
       // Seeking before metadata exists is silently ignored, which is how a
       // chapter's 360 cut used to open at zero however far in the visitor was.
       if (startTime > 0 && Number.isFinite(video.duration)) {
@@ -410,45 +420,129 @@ export function Video360Viewer({
     };
   }, [src, startTime, reducedMotion, attempt]);
 
-  // ---- The countdown -----------------------------------------------------
+  // ---- The countdown ------------------------------------------------------
   //
-  // The RING is written straight to the DOM from an animation frame, and only
-  // the whole-second readout goes through state. Driving the ring from state
-  // would mean a React render per frame to move a stroke offset; driving the
-  // readout from the frame loop would mean hand-managing a text node for
-  // something that changes once a second. Each half is done the cheap way.
+  // THE VIDEO ELEMENT IS THE ONLY CLOCK.
   //
-  // Pause, seek and replay all need no bookkeeping of their own: the ring is a
-  // pure function of video.currentTime, so it freezes when playback freezes
-  // and snaps the moment the playhead moves.
+  // Every value below comes from computeTimerState(video.currentTime,
+  // video.duration). There is no interval, no Date.now(), no elapsed-time
+  // accumulator and no CSS animation carrying a number. Hand it the same
+  // currentTime twice and it paints the same thing twice, however much real
+  // time passed — which is exactly what "the timer cannot advance unless the
+  // video advances" means, and it is enforced by there being nothing else to
+  // advance from.
+  //
+  // WHY MEDIA EVENTS AND NOT JUST A FRAME LOOP
+  //   The previous version evaluated the same correct arithmetic, but only
+  //   inside requestAnimationFrame. Browsers throttle animation frames for a
+  //   backgrounded tab, a locked phone, or a busy page, and the media pipeline
+  //   does not stop when they do — so the readout froze mid-count while the
+  //   clip played on. Measured on production: zero frames in 1.5 seconds, the
+  //   readout showing 0:46 against a playhead at 57s.
+  //
+  //   So the events the element fires anyway are the primary source, and
+  //   `timeupdate` alone (roughly 4Hz, and not animation-frame gated) keeps
+  //   the display honest with no frames at all. The frame loop is a
+  //   smoothness bonus for the ring while playing, nothing more, and it is
+  //   cancelled the moment playback is not advancing.
+  const syncTimer = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const state = computeTimerState(video.currentTime, video.duration);
+    if (!state) {
+      // No duration yet, or the element was emptied. Fall back to the loading
+      // state rather than showing a stale or invented number.
+      paintedSecondRef.current = null;
+      setClock(null);
+      setRemaining(null);
+      return;
+    }
+
+    // The ring goes straight to the DOM: it moves every frame while playing
+    // and a React render per frame to shift a stroke offset would be absurd.
+    const ring = ringRef.current;
+    if (ring) {
+      ring.style.strokeDashoffset = String(RING_CIRCUMFERENCE * state.progress);
+    }
+
+    // The readout changes once a second, so it goes through state — guarded,
+    // so a 60fps loop still only re-renders when the displayed second turns.
+    if (state.remainingSeconds !== paintedSecondRef.current) {
+      paintedSecondRef.current = state.remainingSeconds;
+      setRemaining(state.remainingSeconds);
+      setClock(state.clock);
+    }
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    let frame = 0;
-    let lastWhole = -1;
-
-    const tick = () => {
-      frame = requestAnimationFrame(tick);
-      const total = Number.isFinite(video.duration) ? video.duration : 0;
-      if (total <= 0) return;
-
-      const left = Math.max(0, total - video.currentTime);
-      const ring = ringRef.current;
-      if (ring) {
-        // Visible arc = circumference * fraction remaining, so the ring
-        // shortens as the clip plays and reaches empty exactly at 0:00.
-        ring.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - left / total));
-      }
-      const whole = Math.ceil(left);
-      if (whole !== lastWhole) {
-        lastWhole = whole;
-        setRemaining(whole);
-      }
+    const stopLoop = () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
     };
-    tick();
-    return () => cancelAnimationFrame(frame);
-  }, [attempt]);
+    const startLoop = () => {
+      stopLoop();
+      const frame = () => {
+        syncTimer();
+        rafRef.current = requestAnimationFrame(frame);
+      };
+      rafRef.current = requestAnimationFrame(frame);
+    };
+
+    // Advancing: smooth it out. Not advancing: one final read, then stop —
+    // there is nothing to interpolate towards and a loop would only burn
+    // battery holding a still number still.
+    const onPlaying = () => {
+      syncTimer();
+      startLoop();
+    };
+    const onHalt = () => {
+      stopLoop();
+      syncTimer();
+    };
+    // The element was torn down (Retry, or the source being dropped on close).
+    // Duration is gone, so the timer must go back to its loading state rather
+    // than keep showing the last number it saw.
+    const onEmptied = () => {
+      stopLoop();
+      paintedSecondRef.current = null;
+      setClock(null);
+      setRemaining(null);
+    };
+
+    const EVENTS: Array<[string, () => void]> = [
+      // Duration becomes known, or changes.
+      ["loadedmetadata", syncTimer],
+      ["durationchange", syncTimer],
+      // The playhead moved. `timeupdate` is the throttle-proof backstop: it
+      // comes from the media pipeline, not from an animation frame.
+      ["timeupdate", syncTimer],
+      ["seeking", syncTimer],
+      ["seeked", syncTimer],
+      ["play", syncTimer],
+      // Playback state.
+      ["playing", onPlaying],
+      ["pause", onHalt],
+      ["waiting", onHalt],
+      ["ended", onHalt],
+      ["emptied", onEmptied],
+    ];
+    for (const [name, handler] of EVENTS) video.addEventListener(name, handler);
+
+    // Catch up on whatever the element already knows: if the source was
+    // cached, metadata may have arrived before this effect ran and no further
+    // event is coming.
+    syncTimer();
+    if (!video.paused && !video.ended) startLoop();
+
+    return () => {
+      stopLoop();
+      for (const [name, handler] of EVENTS) video.removeEventListener(name, handler);
+    };
+  }, [syncTimer, attempt]);
 
   // ---- Drag and touch ----------------------------------------------------
   useEffect(() => {
@@ -582,8 +676,10 @@ export function Video360Viewer({
    *  it is answered — granted, refused, or waved away. */
   const wantsAttention = motionState === "idle" && phase === "ready";
 
-  const clock = formatClock(remaining ?? duration);
-  const ringVisible = phase === "ready" && duration > 0;
+  // Null clock means the element has not reported a duration yet, so the
+  // countdown is not shown at all and the loading state above stands in its
+  // place. Better nothing than a number that is not the video's.
+  const ringVisible = clock !== null;
 
   /** Shared chrome for every control: dark glass over the panorama, a copper
    *  hairline, and a copper-light focus ring that stays visible against both
