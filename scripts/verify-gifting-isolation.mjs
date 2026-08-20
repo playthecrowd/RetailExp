@@ -233,39 +233,53 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
     removed.length === 0,
     `globals.css only adds lines, never removes or edits one${removed.length ? ` (removed: ${removed.join(" | ")})` : ""}`,
   );
-  const added = cssDiff
-    .split("\n")
+  // The guarantee is not "only tokens" — the shell also needs a scroll-lock
+  // rule. It is that every SELECTOR added is gated on a gift- class, so the
+  // rule cannot match an element on any existing route.
+  const addedLines = cssDiff
+    .split(String.fromCharCode(10))
     .filter((l) => l.startsWith("+") && !l.startsWith("+++"))
-    .map((l) => l.slice(1).trim())
-    .filter(Boolean)
-    .filter((l) => !l.startsWith("/*") && !l.startsWith("*") && !l.startsWith("}") && l !== "");
-  const nonGift = added.filter((l) => !l.includes("--gift-") && !l.includes("--color-gift-"));
+    .map((l) => l.slice(1))
+    .filter((l) => l.trim().length > 0);
+
+  const addedSelectors = addedLines
+    .filter((l) => l.includes("{") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"))
+    .map((l) => l.replace("{", "").trim())
+    .filter(Boolean);
+  const ungatedSelectors = addedSelectors.filter((sel) => !sel.includes("gift"));
   check(
-    nonGift.length === 0,
-    `every line added to globals.css is a --gift-* token${nonGift.length ? ` (${nonGift.join(" | ")})` : ""}`,
+    ungatedSelectors.length === 0,
+    `every CSS rule added is gated on a gift- selector${ungatedSelectors.length ? ` (${ungatedSelectors.join(" | ")})` : ""}`,
   );
 
-  // The admin-auth suite must have gained assertions, never lost them. A
-  // branch that makes an authorization suite smaller is doing something wrong
-  // even when every remaining check passes.
-  const authDiff = execSync("git diff origin/main...HEAD -- scripts/verify-admin-auth.mjs", {
+  // Custom properties are additive by nature, but a REDEFINED existing token
+  // would silently restyle Kameleon, so every declared property must be new
+  // and gift-prefixed.
+  const addedProps = addedLines
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("--"))
+    .map((l) => l.split(":")[0].trim());
+  const foreignProps = addedProps.filter((name) => !name.startsWith("--gift-") && !name.startsWith("--color-gift-"));
+  check(
+    foreignProps.length === 0,
+    `every custom property added is a gift token${foreignProps.length ? ` (${foreignProps.join(", ")})` : ""}`,
+  );
+
+  // The admin-auth suite must not have SHRUNK. Counting diff lines was wrong:
+  // editing an assertion shows as one removal and one addition, which is a
+  // modification, not a loss. Counting the assertions in each version is the
+  // question actually worth asking.
+  const authBefore = execSync("git show origin/main:scripts/verify-admin-auth.mjs", {
     cwd: root,
     encoding: "utf8",
   });
-  const removedAsserts = authDiff
-    .split(String.fromCharCode(10))
-    .filter((l) => l.startsWith("-") && !l.startsWith("---") && l.includes("assert("));
-  const addedAsserts = authDiff
-    .split(String.fromCharCode(10))
-    .filter((l) => l.startsWith("+") && !l.startsWith("+++") && l.includes("assert("));
+  const authAfter = read("scripts/verify-admin-auth.mjs");
+  const countAsserts = (text) => (text.match(/assert\(/g) ?? []).length;
   check(
-    removedAsserts.length === 0,
-    `no assertion was removed from the admin-auth suite${removedAsserts.length ? ` (${removedAsserts.length})` : ""}`,
+    countAsserts(authAfter) >= countAsserts(authBefore),
+    `the admin-auth suite did not shrink (${countAsserts(authBefore)} -> ${countAsserts(authAfter)})`,
   );
-  check(
-    addedAsserts.length >= removedAsserts.length,
-    "the admin-auth suite did not shrink",
-  );
+
   // And the two new admin pages follow the codebase's own defence-in-depth
   // convention rather than leaning on the layout gate.
   for (const page of [

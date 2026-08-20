@@ -1,115 +1,200 @@
 "use client";
 
-import { useState } from "react";
+import Image from "next/image";
+import { useEffect, useState } from "react";
 import { useGifting } from "@/lib/gifting/simulation/store";
 import { AI_STAGE_LABELS } from "@/lib/gifting/simulation/types";
 import type { GalleryItem } from "@/lib/gifting/simulation/types";
-import { Body, Button, Card, Eyebrow, Frame, Pill, Rule, Still, Title } from "./ui";
+import {
+  ActionTray,
+  GuidanceTray,
+  HelpDot,
+  LiveRegion,
+  Pager,
+  PagerCount,
+  PagerDots,
+  Stage,
+  StageBody,
+  StageProvider,
+  useStage,
+} from "./shell";
+import { Body, Button, Pill } from "./ui";
 
 /**
- * The visitor's private gallery.
+ * The visitor's private gallery, as a swipeable deck.
+ *
+ * WHY A DECK RATHER THAN A FEED
+ *   A vertical list of four large cards is four screens of scrolling on a
+ *   phone, and it buries the return action at the bottom. One gift per screen
+ *   with a swipe between them keeps every action fixed and reachable, and it
+ *   is the interaction people already use for photos.
  *
  * OWNER-SCOPED BY CONSTRUCTION
- *   Everything shown comes from this session's own state. There is no query,
- *   no id in a URL and nothing to change to see somebody else's gifts — which
- *   is the same guarantee the real gallery will make with signed delivery,
- *   expressed the only way a prototype can express it.
- *
- * A PROCESSING GIFT IS A REAL CARD
- *   Not a spinner in a corner. It carries its stage name and its actions are
- *   reduced to what is actually possible, so a visitor who walked away from
- *   the generation screen finds it exactly where they expect it.
+ *   Everything shown comes from this session's own state. There is no query
+ *   and no id in a URL to change — the same guarantee the real gallery will
+ *   make with signed delivery, expressed the only way a prototype can.
  */
-
 export function Gallery() {
-  const { gallery, dispatch, config } = useGifting();
-  const received = gallery.filter((g) => g.direction === "received");
-  const created = gallery.filter((g) => g.direction === "created");
-
   return (
-    <Frame className="pt-8">
-      <Rule className="mb-8" />
-      <Eyebrow>Private gallery</Eyebrow>
-      <Title className="mt-2">Your gifts</Title>
-      <Body className="mt-3">
-        Only you can see these. Links you share are private and can be revoked.
-      </Body>
-
-      {received.length > 0 && (
-        <>
-          <SectionHeading>Received</SectionHeading>
-          <div className="grid gap-4">
-            {received.map((item) => (
-              <GiftCard key={item.id} item={item} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {created.length > 0 && (
-        <>
-          <SectionHeading>Created by you</SectionHeading>
-          <div className="grid gap-4">
-            {created.map((item) => (
-              <GiftCard key={item.id} item={item} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {gallery.length === 0 && (
-        <Card className="mt-8 p-8 text-center">
-          <Body>Nothing here yet.</Body>
-        </Card>
-      )}
-
-      <div className="mt-8 grid gap-2">
-        {config.standardGiftingEnabled && (
-          <Button
-            onClick={() => {
-              dispatch({ type: "START_CREATE", isRegift: false });
-              dispatch({ type: "SCENARIO", scenario: "create" });
-            }}
-          >
-            Create another gift
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          onClick={() => {
-            dispatch({ type: "RESET_FLOW" });
-            dispatch({ type: "SCENARIO", scenario: "launcher" });
-          }}
-        >
-          Back to demo launcher
-        </Button>
-      </div>
-    </Frame>
+    <StageProvider stepKey="gallery">
+      <GalleryStage />
+    </StageProvider>
   );
 }
 
-function SectionHeading({ children }: { children: React.ReactNode }) {
+function GalleryStage() {
+  const { gallery, dispatch, config, showToast } = useGifting();
+  const { reveal, announce, setPinned } = useStage();
+  const [index, setIndex] = useState(0);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const item: GalleryItem | undefined = gallery[Math.min(index, gallery.length - 1)];
+  const processing =
+    item?.kind === "ai" && item.stage && item.stage !== "ready" && item.stage !== "failed";
+
+  // A destructive confirmation must not fade away mid-decision.
+  useEffect(() => setPinned(Boolean(confirming)), [confirming, setPinned]);
+
+  useEffect(() => {
+    if (item) announce(`${item.title}. ${item.subtitle}.`);
+  }, [item, announce]);
+
+  const backToLauncher = () => {
+    dispatch({ type: "RESET_FLOW" });
+    dispatch({ type: "SCENARIO", scenario: "launcher" });
+  };
+
+  if (!item) {
+    return (
+      <Stage media={<Backdrop />}>
+        <GuidanceTray title="Your gallery is empty" onHelp={reveal} />
+        <ActionTray forceVisible>
+          <Button onClick={backToLauncher}>Back to demo launcher</Button>
+        </ActionTray>
+      </Stage>
+    );
+  }
+
   return (
-    <div className="mb-3 mt-8 flex items-center gap-3">
-      <span className="text-[11px] font-medium uppercase tracking-[0.2em] text-gift-ink-faint">
-        {children}
-      </span>
-      <span className="h-px flex-1 bg-gift-border" />
-    </div>
+    <Stage media={<Backdrop />}>
+      <LiveRegion />
+      <GuidanceTray
+        title="Your gifts"
+        instruction="Swipe to move between them. Only you can see these."
+        onHelp={reveal}
+      />
+      <HelpDot onClick={reveal} />
+
+      <StageBody>
+        <Pager onIndexChange={setIndex}>
+          {gallery.map((g) => (
+            <GiftCard key={g.id} item={g} />
+          ))}
+        </Pager>
+        <div className="mt-4 grid gap-2">
+          <PagerDots count={gallery.length} index={index} />
+          <PagerCount index={index} count={gallery.length} />
+        </div>
+      </StageBody>
+
+      <ActionTray forceVisible>
+        {confirming === item.id ? (
+          <>
+            <p className="px-1 pb-1 text-center text-[12px] text-gift-ink">
+              Delete this gift permanently?
+            </p>
+            <Button
+              variant="danger"
+              onClick={() => {
+                dispatch({ type: "DELETE_ITEM", id: item.id });
+                setConfirming(null);
+                showToast("Gift deleted");
+                setIndex(0);
+              }}
+            >
+              Yes, delete
+            </Button>
+            <Button variant="ghost" onClick={() => setConfirming(null)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <Chip disabled={Boolean(processing)} onClick={() => showToast("Playing gift")}>
+                Play
+              </Chip>
+              <Chip disabled={Boolean(processing)} onClick={() => showToast("Download simulated")}>
+                Download
+              </Chip>
+              <Chip
+                disabled={Boolean(processing)}
+                onClick={() => showToast("Share sheet simulated")}
+              >
+                Share
+              </Chip>
+              <Chip
+                disabled={Boolean(processing)}
+                onClick={() => {
+                  void navigator.clipboard?.writeText(`https://example.com/g/${item.id}`);
+                  showToast("Private link copied");
+                }}
+              >
+                Copy link
+              </Chip>
+              {item.direction === "received" && config.regiftingEnabled && (
+                <Chip
+                  onClick={() => {
+                    dispatch({ type: "START_CREATE", isRegift: true });
+                    dispatch({ type: "SCENARIO", scenario: "regift" });
+                  }}
+                >
+                  Regift
+                </Chip>
+              )}
+              <Chip tone="danger" onClick={() => setConfirming(item.id)}>
+                Delete
+              </Chip>
+            </div>
+            <Button variant="ghost" onClick={backToLauncher}>
+              Back to demo launcher
+            </Button>
+          </>
+        )}
+      </ActionTray>
+    </Stage>
+  );
+}
+
+function Backdrop() {
+  return (
+    <>
+      <Image
+        src="/demo/gifting/stills/gate-background.png"
+        alt=""
+        fill
+        sizes="100vw"
+        className="object-cover"
+        priority
+      />
+      <div className="absolute inset-0 bg-[rgba(250,249,246,0.78)]" />
+    </>
   );
 }
 
 function GiftCard({ item }: { item: GalleryItem }) {
-  const { dispatch, config, showToast } = useGifting();
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  const processing = item.kind === "ai" && item.stage && item.stage !== "ready" && item.stage !== "failed";
-  const failed = item.stage === "failed";
-
+  const processing =
+    item.kind === "ai" && item.stage && item.stage !== "ready" && item.stage !== "failed";
   return (
-    <Card className="overflow-hidden">
-      <div className="relative">
-        <Still src={item.media.thumb ?? item.media.poster} alt={item.media.alt} ratio="aspect-[16/10]" className="rounded-none" />
+    <div className="overflow-hidden rounded-2xl border border-white/60 bg-[rgba(250,249,246,0.9)] backdrop-blur-xl">
+      <div className="relative aspect-[16/10] w-full">
+        <Image
+          src={item.media.thumb ?? item.media.poster}
+          alt={item.media.alt}
+          fill
+          sizes="(max-width:480px) 100vw, 420px"
+          className="object-cover"
+        />
         <div className="absolute left-3 top-3 flex gap-1.5">
           <Pill tone={item.direction === "received" ? "accent" : "neutral"}>
             {item.direction === "received" ? "Received" : "Created"}
@@ -125,90 +210,42 @@ function GiftCard({ item }: { item: GalleryItem }) {
           </div>
         )}
       </div>
-
       <div className="p-4">
         <div className="flex items-baseline justify-between gap-3">
           <p className="text-[15px] text-gift-ink">{item.title}</p>
           <span className="shrink-0 text-[11px] text-gift-ink-faint">{item.createdLabel}</span>
         </div>
         <Body className="mt-1 text-[12px]">{item.subtitle}</Body>
-
-        {failed && (
+        {item.stage === "failed" && (
           <p className="mt-2 text-[12px] text-gift-danger">
             Generation didn&apos;t complete. Credits were refunded.
           </p>
         )}
-
-        {!confirmingDelete ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {!processing && <Action onClick={() => showToast("Playing gift")}>Play</Action>}
-            {!processing && <Action onClick={() => showToast("Download simulated")}>Download</Action>}
-            {!processing && <Action onClick={() => showToast("Share sheet simulated")}>Share</Action>}
-            {!processing && (
-              <Action
-                onClick={() => {
-                  void navigator.clipboard?.writeText(
-                    `https://example.com/g/${item.id}`,
-                  );
-                  showToast("Private link copied");
-                }}
-              >
-                Copy link
-              </Action>
-            )}
-            {item.direction === "received" && config.regiftingEnabled && (
-              <Action
-                onClick={() => {
-                  dispatch({ type: "START_CREATE", isRegift: true });
-                  dispatch({ type: "SCENARIO", scenario: "regift" });
-                }}
-              >
-                Regift
-              </Action>
-            )}
-            <Action tone="danger" onClick={() => setConfirmingDelete(true)}>
-              Delete
-            </Action>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-xl border border-gift-danger/30 bg-gift-danger/5 p-3">
-            <p className="text-[12px] text-gift-ink">Delete this gift permanently?</p>
-            <div className="mt-2 flex gap-2">
-              <Action
-                tone="danger"
-                onClick={() => {
-                  dispatch({ type: "DELETE_ITEM", id: item.id });
-                  showToast("Gift deleted");
-                }}
-              >
-                Yes, delete
-              </Action>
-              <Action onClick={() => setConfirmingDelete(false)}>Cancel</Action>
-            </div>
-          </div>
-        )}
       </div>
-    </Card>
+    </div>
   );
 }
 
-function Action({
+function Chip({
   children,
   onClick,
   tone = "neutral",
+  disabled,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   tone?: "neutral" | "danger";
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`min-h-11 rounded-full border px-4 text-[12px] transition-colors ${
+      disabled={disabled}
+      className={`min-h-12 rounded-full border px-4 text-[12px] transition-colors disabled:opacity-35 ${
         tone === "danger"
-          ? "border-gift-danger/40 text-gift-danger hover:bg-gift-danger/5"
-          : "border-gift-border bg-gift-surface text-gift-ink-soft hover:border-gift-border-strong hover:text-gift-ink"
+          ? "border-gift-danger/40 text-gift-danger"
+          : "border-gift-border bg-white/70 text-gift-ink-soft hover:border-gift-border-strong hover:text-gift-ink"
       }`}
     >
       {children}

@@ -88,6 +88,8 @@ type ButtonProps = {
   full?: boolean;
   type?: "button" | "submit";
   className?: string;
+  /** Needed so a newly revealed action can take focus the moment it appears. */
+  ref?: React.Ref<HTMLButtonElement>;
 };
 
 export function Button({
@@ -98,16 +100,18 @@ export function Button({
   full = true,
   type = "button",
   className,
+  ref,
 }: ButtonProps) {
   return (
     <button
+      ref={ref}
       type={type}
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        // 48px tall: comfortably past the 44px floor, because every one of
-        // these is tapped with a thumb.
-        "inline-flex min-h-12 items-center justify-center gap-2 rounded-full px-6 text-[13px] font-medium tracking-wide transition-colors",
+        // 56px tall. Every one of these is the primary action on a phone
+        // screen and is hit with a thumb, often one-handed.
+        "inline-flex min-h-14 items-center justify-center gap-2 rounded-full px-6 text-[13px] font-medium tracking-wide transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gift-champagne focus-visible:ring-offset-2 focus-visible:ring-offset-gift-bg",
         "disabled:cursor-not-allowed disabled:opacity-40",
         full && "w-full",

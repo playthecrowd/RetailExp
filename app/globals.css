@@ -196,3 +196,22 @@ body {
     0 0 0 2px color-mix(in srgb, var(--kameleon-copper-light) 85%, transparent),
     0 0 22px 0 color-mix(in srgb, var(--kameleon-teal-light) 40%, transparent);
 }
+
+/* ---------------------------------------------------------------------------
+   Gifting Demo — document scroll lock.
+
+   Applied by the visitor shell only, and removed on unmount, so the dashboard
+   and every other route keep scrolling exactly as they did. `overscroll-behavior`
+   is the part that matters on iOS: without it the page still rubber-bands
+   behind a fixed layer, which makes a full-screen step feel loose.
+   --------------------------------------------------------------------------- */
+html.gift-locked,
+body.gift-locked {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* The stage is fixed; letting the body pan would only move it away from the
+     safe area it was positioned against. */
+  position: relative;
+  touch-action: pan-x;
+}

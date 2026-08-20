@@ -12,7 +12,15 @@ import { GiftingDashboard } from "./Dashboard";
 import { Gallery } from "./Gallery";
 import { RecipientFlow } from "./RecipientFlow";
 import { SenderFlow } from "./SenderFlow";
-import { Body, Card, CodeChip, Eyebrow, Frame, Rule, Screen, Title, Toast } from "./ui";
+import {
+  ActionTray,
+  GuidanceTray,
+  Stage,
+  StageBody,
+  StageProvider,
+  useLockedDocument,
+} from "./shell";
+import { Button, CodeChip, Screen, Toast } from "./ui";
 
 /**
  * The prototype shell.
@@ -22,39 +30,52 @@ import { Body, Card, CodeChip, Eyebrow, Frame, Rule, Screen, Title, Toast } from
  *   has to change the recipient flow, and a gift created in the sender flow has
  *   to appear in the gallery. All of that lives in React state, so moving
  *   between scenarios is a state change, not a navigation. The three public
- *   routes are genuine entry points that set the opening scenario; after that
- *   the prototype stays put and keeps everything.
+ *   routes are genuine entry points that set the opening scenario.
+ *
+ * THE LOCK IS SCOPED TO THE VISITOR
+ *   Visitor steps are fixed, full-viewport panels and the document must not
+ *   scroll behind them. The DASHBOARD is a dense admin surface with sixteen
+ *   sections and scrolls normally, so the lock is applied per scenario rather
+ *   than to the whole prototype.
  */
 export function GiftingApp({ initial }: { initial: Scenario }) {
   const { scenario, dispatch, toast } = useGifting();
   const applied = useRef(false);
 
   useEffect(() => {
-    // Once. Re-applying on every render would trap the visitor on the entry
+    // Once. Re-applying every render would trap the visitor on the entry
     // scenario the moment they tried to leave it.
     if (applied.current) return;
     applied.current = true;
     if (initial !== "launcher") dispatch({ type: "SCENARIO", scenario: initial });
   }, [initial, dispatch]);
 
+  const isVisitorStep = scenario !== "dashboard";
+  useLockedDocument(isVisitorStep);
+
+  if (scenario === "dashboard") {
+    return (
+      <Screen>
+        <GiftingDashboard onExit={() => dispatch({ type: "SCENARIO", scenario: "launcher" })} />
+        <Toast message={toast} />
+      </Screen>
+    );
+  }
+
   return (
-    <Screen>
+    <>
       {scenario === "launcher" && <Launcher />}
       {scenario === "receive" && <RecipientFlow />}
       {(scenario === "create" || scenario === "regift") && <SenderFlow />}
       {scenario === "gallery" && <Gallery />}
-      {scenario === "dashboard" && (
-        <GiftingDashboard onExit={() => dispatch({ type: "SCENARIO", scenario: "launcher" })} />
-      )}
       <Toast message={toast} />
-      {scenario !== "launcher" && scenario !== "dashboard" && <LauncherTab />}
-    </Screen>
+      {scenario !== "launcher" && <LauncherTab />}
+    </>
   );
 }
 
-/** A discreet way back to the scenario list from anywhere in a flow. Small and
- *  low-contrast on purpose: it is a prototype affordance, not part of the
- *  product being reviewed. */
+/** A discreet way back to the scenario list from inside a flow. Positioned
+ *  clear of the guidance tray so it never overlaps the step title. */
 function LauncherTab() {
   const { dispatch } = useGifting();
   return (
@@ -64,10 +85,10 @@ function LauncherTab() {
         dispatch({ type: "RESET_FLOW" });
         dispatch({ type: "SCENARIO", scenario: "launcher" });
       }}
-      className="fixed left-1/2 top-2 z-40 -translate-x-1/2 rounded-full border border-gift-border bg-gift-surface/90 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-gift-ink-faint backdrop-blur transition-colors hover:text-gift-ink"
-      style={{ marginTop: "env(safe-area-inset-top)" }}
+      className="fixed left-4 z-50 min-h-11 rounded-full border border-white/70 bg-[rgba(250,249,246,0.8)] px-3 text-[10px] uppercase tracking-[0.16em] text-gift-ink-faint backdrop-blur-xl transition-colors hover:text-gift-ink"
+      style={{ top: "calc(env(safe-area-inset-top) + 0.9rem)" }}
     >
-      Demo scenarios
+      Scenarios
     </button>
   );
 }
@@ -84,107 +105,88 @@ function Launcher() {
   };
 
   return (
-    <Frame className="pt-8">
-      <Rule className="mb-8" />
-      <Eyebrow>Gifting Demo Client 1 · Prototype</Eyebrow>
-      <Title className="mt-2">Simulation</Title>
-      <Body className="mt-3">
-        A clickable walkthrough of the gifting experience. Local fixtures only — no database, no
-        provider, no credits spent.
-      </Body>
+    <StageProvider stepKey="launcher" pinned>
+      <Stage>
+        <GuidanceTray
+          title="Gifting Demo Client 1"
+          instruction="A clickable walkthrough. Local fixtures only — no database, no provider."
+        />
 
-      <div className="mt-6 grid gap-2">
-        <ScenarioButton
-          title="Receive a Gift"
-          body="Codes, reveal, gate, intro, sign-up, gift, gallery."
-          onClick={() => go("receive")}
-        />
-        <ScenarioButton
-          title="Create a Gift"
-          body="Record, upload, choose type, recipient, bind, card."
-          onClick={() => go("create", false)}
-        />
-        <ScenarioButton
-          title="Regift a Product"
-          body="The same creation flow, starting from a gift you received."
-          onClick={() => go("regift", true)}
-        />
-        <ScenarioButton
-          title="View Personal Gallery"
-          body="Received, created, processing and completed gifts."
-          onClick={() => go("gallery")}
-        />
-        <ScenarioButton
-          title="Preview Client Dashboard"
-          body="Sixteen sections, with working configuration controls."
-          onClick={() => go("dashboard")}
-        />
-      </div>
+        <StageBody>
+          <div className="grid gap-2">
+            <ScenarioButton title="Receive a Gift" body="Codes, reveal, gate, intro, sign-up, gallery." onClick={() => go("receive")} />
+            <ScenarioButton title="Create a Gift" body="Record, upload, type, recipient, bind, card." onClick={() => go("create", false)} />
+            <ScenarioButton title="Regift a Product" body="The same flow, from a gift you received." onClick={() => go("regift", true)} />
+            <ScenarioButton title="View Personal Gallery" body="Received, created, processing, complete." onClick={() => go("gallery")} />
+            <ScenarioButton title="Preview Client Dashboard" body="Sixteen sections, working controls." onClick={() => go("dashboard")} />
 
-      {/* The gate control, so a reviewer can switch variants without opening
-          the dashboard. It writes to the same configuration the dashboard
-          writes to — there is only one setting. */}
-      <Card className="mt-6 p-4">
-        <Eyebrow>Eligibility gate</Eyebrow>
-        <Body className="mt-1 text-[12px]">
-          Shown after the personalised reveal. Simulates future dashboard configuration.
-        </Body>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          {(
-            [
-              ["disabled", "No gate"],
-              ["age_18", "18+"],
-              ["age_21", "21+"],
-              ["acknowledgement", "Custom"],
-            ] as [GateKind, string][]
-          ).map(([kind, label]) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => dispatch({ type: "GATE_KIND", kind })}
-              className={`min-h-11 rounded-xl border px-3 text-[12px] transition-colors ${
-                config.gateKind === kind
-                  ? "border-gift-champagne bg-gift-champagne/10 text-gift-ink"
-                  : "border-gift-border bg-gift-surface text-gift-ink-soft hover:border-gift-border-strong"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </Card>
+            <div className="mt-1 rounded-2xl border border-white/60 bg-[rgba(250,249,246,0.86)] p-3 backdrop-blur-xl">
+              <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-gift-ink-faint">
+                Eligibility gate
+              </p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(
+                  [
+                    ["disabled", "None"],
+                    ["age_18", "18+"],
+                    ["age_21", "21+"],
+                    ["acknowledgement", "Custom"],
+                  ] as [GateKind, string][]
+                ).map(([kind, label]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => dispatch({ type: "GATE_KIND", kind })}
+                    className={`min-h-11 rounded-xl border text-[11px] transition-colors ${
+                      config.gateKind === kind
+                        ? "border-gift-champagne bg-gift-champagne/10 text-gift-ink"
+                        : "border-gift-border bg-white/60 text-gift-ink-soft"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-      <Card className="mt-4 border-dashed p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <Eyebrow>Demo Access</Eyebrow>
-          <span className="text-[10px] uppercase tracking-[0.14em] text-gift-champagne">
-            Preview only
-          </span>
-        </div>
-        <div className="grid gap-2">
-          <CodeChip
-            label="Package Code"
-            code={DEMO_PACKAGE_CODE}
-            onCopy={() => {
-              void navigator.clipboard?.writeText(DEMO_PACKAGE_CODE);
-              showToast("Package Code copied");
-            }}
-          />
-          <CodeChip
-            label="Gift Message Code"
-            code={DEMO_MESSAGE_CODE}
-            onCopy={() => {
-              void navigator.clipboard?.writeText(DEMO_MESSAGE_CODE);
-              showToast("Gift Message Code copied");
-            }}
-          />
-        </div>
-      </Card>
+            <div className="rounded-2xl border border-dashed border-gift-border-strong bg-[rgba(250,249,246,0.86)] p-3 backdrop-blur-xl">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-gift-ink-faint">
+                  Demo Access
+                </span>
+                <span className="text-[10px] uppercase tracking-[0.14em] text-gift-champagne">
+                  Preview only
+                </span>
+              </div>
+              <div className="grid gap-2">
+                <CodeChip
+                  label="Package Code"
+                  code={DEMO_PACKAGE_CODE}
+                  onCopy={() => {
+                    void navigator.clipboard?.writeText(DEMO_PACKAGE_CODE);
+                    showToast("Package Code copied");
+                  }}
+                />
+                <CodeChip
+                  label="Gift Message Code"
+                  code={DEMO_MESSAGE_CODE}
+                  onCopy={() => {
+                    void navigator.clipboard?.writeText(DEMO_MESSAGE_CODE);
+                    showToast("Gift Message Code copied");
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </StageBody>
 
-      <p className="mt-6 text-center text-[11px] leading-snug text-gift-ink-faint">
-        Prototype scenario selector. Not the production entry flow.
-      </p>
-    </Frame>
+        <ActionTray forceVisible>
+          <Button variant="ghost" onClick={() => go("receive")}>
+            Start the recipient walkthrough
+          </Button>
+        </ActionTray>
+      </Stage>
+    </StageProvider>
   );
 }
 
@@ -201,7 +203,7 @@ function ScenarioButton({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-14 w-full items-center justify-between gap-4 rounded-xl border border-gift-border bg-gift-surface px-4 py-3 text-left transition-colors hover:border-gift-border-strong"
+      className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border border-white/60 bg-[rgba(250,249,246,0.86)] px-4 py-2.5 text-left backdrop-blur-xl transition-colors hover:border-gift-border-strong"
     >
       <span className="min-w-0">
         <span className="block text-[14px] text-gift-ink">{title}</span>
