@@ -102,13 +102,15 @@ assert(
 
 const adminFiles = walk("app/admin");
 const protectedPages = adminFiles.filter((f) => f.includes("(protected)") && f.endsWith("page.tsx"));
-assert(protectedPages.length === 4, `all four protected admin pages live under (protected) (found ${protectedPages.length})`);
+assert(protectedPages.length === 6, `all six protected admin pages live under (protected) (found ${protectedPages.length})`);
 
 for (const expected of [
   "app/admin/(protected)/page.tsx",
   "app/admin/(protected)/clients/page.tsx",
   "app/admin/(protected)/clients/kameleon/page.tsx",
   "app/admin/(protected)/clients/kameleon/testimonials/page.tsx",
+  "app/admin/(protected)/clients/gifting-demo-client-1/page.tsx",
+  "app/admin/(protected)/clients/gifting-demo-client-1/experiences/gifting-demo/page.tsx",
 ]) {
   assert(adminFiles.includes(expected), `public URL preserved via route group: ${expected}`);
 }

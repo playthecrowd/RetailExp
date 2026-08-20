@@ -43,7 +43,29 @@
   --kameleon-text: #f5efe6;
   --kameleon-text-muted: #b8afa2;
   --kameleon-focus-ring: #e3b583;
+
+  /* Gifting Demo — a neutral luxury-retail palette for the retail_gifting
+     template. Deliberately shares nothing with the Kameleon tokens above:
+     where Kameleon is near-black, copper, deep red and teal, this is warm
+     white, soft grey, charcoal, brushed silver and a single champagne accent.
+     A client seeing the demo should never wonder whose brand it is. */
+  --gift-bg: #f4f2ef;
+  --gift-surface: #ffffff;
+  --gift-surface-sunk: #eceae6;
+  --gift-border: #dcd9d4;
+  --gift-border-strong: #c6c2bb;
+  --gift-ink: #2e3033;
+  --gift-ink-soft: #6b6f75;
+  --gift-ink-faint: #9aa0a6;
+  --gift-silver: #bfc2c6;
+  --gift-champagne: #c4a86a;
+  --gift-champagne-soft: #e6d8bd;
+  --gift-blue: #6f8ca6;
+  --gift-blue-soft: #adbfcf;
+  --gift-success: #4f7a5b;
+  --gift-danger: #a6544c;
 }
+
 
 @theme inline {
   --color-background: var(--background);
@@ -79,6 +101,21 @@
   --color-kameleon-blue: var(--kameleon-blue);
   --color-kameleon-teal: var(--kameleon-teal);
   --color-kameleon-teal-light: var(--kameleon-teal-light);
+  --color-gift-bg: var(--gift-bg);
+  --color-gift-surface: var(--gift-surface);
+  --color-gift-surface-sunk: var(--gift-surface-sunk);
+  --color-gift-border: var(--gift-border);
+  --color-gift-border-strong: var(--gift-border-strong);
+  --color-gift-ink: var(--gift-ink);
+  --color-gift-ink-soft: var(--gift-ink-soft);
+  --color-gift-ink-faint: var(--gift-ink-faint);
+  --color-gift-silver: var(--gift-silver);
+  --color-gift-champagne: var(--gift-champagne);
+  --color-gift-champagne-soft: var(--gift-champagne-soft);
+  --color-gift-blue: var(--gift-blue);
+  --color-gift-blue-soft: var(--gift-blue-soft);
+  --color-gift-success: var(--gift-success);
+  --color-gift-danger: var(--gift-danger);
   --color-kameleon-text: var(--kameleon-text);
   --color-kameleon-text-muted: var(--kameleon-text-muted);
 }
