@@ -148,8 +148,21 @@ console.log("\n--- every way out is the same way out ---");
     "browser Back closes the overlay instead of leaving the Journey",
   );
   check(
-    /window\.history\.state\?\.kameleon360/.test(viewer),
+    /if \(window\.history\.state\?\.kameleon360\) window\.history\.back\(\);/.test(
+      viewer.slice(viewer.indexOf("const exit = useCallback")),
+    ),
     "closing by control unwinds the pushed entry, so Back is not left inert",
+  );
+  // StrictMode runs mount -> cleanup -> mount. Pushing unconditionally, or
+  // popping in the cleanup, made that sequence close the overlay as it opened.
+  check(
+    /if \(!window\.history\.state\?\.kameleon360\) \{/.test(viewer),
+    "the history entry is pushed once, so a re-invoked effect cannot stack a second",
+  );
+  const historyEffect = viewer.slice(viewer.indexOf('addEventListener("popstate"'));
+  check(
+    /return \(\) => window\.removeEventListener\("popstate", onPop\);/.test(historyEffect),
+    "the popstate cleanup only removes its listener and never navigates",
   );
 }
 
@@ -158,6 +171,14 @@ console.log("\n--- the viewer's required controls and states ---");
 // ---------------------------------------------------------------------------
 {
   check(/geometry\.scale\(-1, 1, 1\)/.test(viewer), "the sphere's normals are inverted");
+  // The brief requires the bottle to be the first thing the visitor sees.
+  // SphereGeometry puts the texture's middle on the X axis and the camera
+  // opens down -Z, so without this quarter turn the lounge opens 90 degrees
+  // away from its own hero - which it did, in production.
+  check(
+    /sphere\.rotation\.y = -Math\.PI \/ 2;/.test(viewer),
+    "the video's forward is rotated onto the visitor's initial heading",
+  );
   check(/pointerdown/.test(viewer) && /pointermove/.test(viewer), "drag and touch navigation");
   check(/playsInline/.test(viewer), "inline playback on iOS");
   check(
@@ -201,6 +222,12 @@ console.log("\n--- the viewer's required controls and states ---");
   check(
     /video\.removeAttribute\("src"\)/.test(viewer),
     "the video download is dropped on close rather than left running",
+  );
+  // ...and the effect restores it, because the cleanup above runs between
+  // StrictMode's two mounts and React will not re-set an unchanged attribute.
+  check(
+    /if \(video\.getAttribute\("src"\) !== src\) \{/.test(viewer),
+    "the source is restored on re-entry, so a re-invoked effect cannot leave it empty",
   );
   const listeners = viewer.match(/addEventListener\(/g) ?? [];
   const removals = viewer.match(/removeEventListener\(/g) ?? [];

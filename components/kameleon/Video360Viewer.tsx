@@ -147,6 +147,11 @@ export function Video360Viewer({
   const exit = useCallback(() => {
     if (exitedRef.current) return;
     exitedRef.current = true;
+    // Take our history entry back off the stack, here rather than in an effect
+    // cleanup. When the visitor got here by pressing Back the browser has
+    // already popped it and the marker is gone, so this correctly does nothing
+    // and cannot eat the Journey's own entry.
+    if (window.history.state?.kameleon360) window.history.back();
     onExitRef.current(videoRef.current?.currentTime ?? startTime);
   }, [startTime]);
 
@@ -205,6 +210,20 @@ export function Video360Viewer({
     geometry.scale(-1, 1, 1);
     const material = new THREE.MeshBasicMaterial({ map: texture });
     const sphere = new THREE.Mesh(geometry, material);
+    // Put the video's OWN forward direction at the visitor's initial heading.
+    //
+    // SphereGeometry maps the middle of the texture to +X (and the -1 scale
+    // above flips that to -X), while the camera opens looking down -Z. So a
+    // 360 video whose hero is centred in the frame - which is what an
+    // equirectangular delivery means by "forward" - opens 90 degrees to the
+    // side of it. In production that showed as the lounge opening on an empty
+    // alcove with the bottle out of frame, which is precisely the thing the
+    // brief asks for: the bottle is meant to be the first thing seen.
+    //
+    // A quarter turn on the MESH rather than the camera, so yaw 0 still means
+    // "the hero", and Recenter therefore returns to the hero rather than to an
+    // arbitrary wall.
+    sphere.rotation.y = -Math.PI / 2;
     scene.add(sphere);
 
     let frame = 0;
@@ -252,6 +271,17 @@ export function Video360Viewer({
     // both of those are starts, which the brief says begin muted.
     video.muted = true;
 
+    // Self-healing, because the cleanup below strips the source to cancel the
+    // download and StrictMode re-invokes this effect straight after running
+    // it. React will not re-set an attribute it believes is unchanged, so
+    // without this the video sat at networkState EMPTY with a src it was never
+    // going to load, and the sphere rendered black - in development only,
+    // which is the worst place for a bug to hide.
+    if (video.getAttribute("src") !== src) {
+      video.setAttribute("src", src);
+      video.load();
+    }
+
     const onReady = () => {
       setPhase("ready");
       // Seeking before metadata exists is silently ignored, which is how a
@@ -294,7 +324,7 @@ export function Video360Viewer({
       video.removeAttribute("src");
       video.load();
     };
-  }, [startTime, reducedMotion, exit, attempt]);
+  }, [src, startTime, reducedMotion, exit, attempt]);
 
   // ---- Drag and touch ----------------------------------------------------
   useEffect(() => {
@@ -348,18 +378,20 @@ export function Video360Viewer({
     // leave the Journey entirely and lose the chapter the visitor was on.
     // Pushing one makes Back mean "close this", which is what a full-screen
     // overlay looks like it should do.
-    window.history.pushState({ kameleon360: true }, "");
+    //
+    // Guarded on the marker rather than pushed unconditionally, and unwound in
+    // `exit` rather than in this cleanup, because StrictMode runs an effect,
+    // its cleanup, and the effect again on mount. Popping in the cleanup made
+    // that sequence push, pop, push - and the pop's popstate then arrived at
+    // the freshly re-registered listener and closed the overlay the instant it
+    // opened. It worked in production, where effects do not double-invoke, and
+    // failed in development, which is the worst way round for a bug to sit.
+    if (!window.history.state?.kameleon360) {
+      window.history.pushState({ kameleon360: true }, "");
+    }
     const onPop = () => exit();
     window.addEventListener("popstate", onPop);
-    return () => {
-      window.removeEventListener("popstate", onPop);
-      // Closed by a control rather than by Back: the entry pushed above is
-      // still on the stack and has to come off, or the visitor's next Back
-      // press would do nothing at all. After a real Back the browser has
-      // already unwound it and the state no longer carries the marker, so this
-      // correctly does nothing and cannot eat the Journey's own entry.
-      if (window.history.state?.kameleon360) window.history.back();
-    };
+    return () => window.removeEventListener("popstate", onPop);
   }, [exit]);
 
   // ---- Device orientation, only after an explicit grant -------------------
