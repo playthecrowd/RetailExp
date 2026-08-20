@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import {
   createContext,
   useCallback,
@@ -395,8 +396,27 @@ const StoreContext = createContext<StoreValue | null>(null);
 
 const norm = (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
+/**
+ * Which scenario a URL opens on.
+ *
+ * The route IS the entry point, so it seeds the store directly rather than
+ * being corrected by an effect afterwards. Effects run after paint: correcting
+ * it later meant a recipient opening their gift link saw one frame of the
+ * internal scenario picker, on the one screen that must look like nothing but
+ * a gift.
+ */
+function openingScenario(pathname: string): Scenario {
+  if (pathname.endsWith("/demo")) return "launcher";
+  if (pathname.endsWith("/gallery")) return "gallery";
+  return "receive";
+}
+
 export function GiftingSimulationProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const pathname = usePathname();
+  const [state, dispatch] = useReducer(reducer, initialState, (base) => ({
+    ...base,
+    scenario: openingScenario(pathname ?? ""),
+  }));
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const validateCodes = useCallback((packageCode: string, messageCode: string) => {

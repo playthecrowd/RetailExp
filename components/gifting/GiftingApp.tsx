@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useGifting, type Scenario } from "@/lib/gifting/simulation/store";
+import { useState } from "react";
+import { useGifting } from "@/lib/gifting/simulation/store";
 import type { GateKind } from "@/lib/gifting/simulation/types";
 import { GiftingDashboard } from "./Dashboard";
 import { Gallery } from "./Gallery";
@@ -41,19 +41,13 @@ import { Button, Screen, Toast } from "./ui";
  *   sections and scrolls normally, so the lock is applied per scenario rather
  *   than to the whole prototype.
  */
-export function GiftingApp({ initial }: { initial: Scenario }) {
-  const { scenario, dispatch, toast, openGiftId } = useGifting();
-  const applied = useRef(false);
+export function GiftingApp() {
+  // The opening scenario comes from the route, seeded into the store when it
+  // is created — so the first paint is already the right screen and the
+  // server's markup matches it.
+  const { scenario: current, dispatch, toast, openGiftId } = useGifting();
 
-  useEffect(() => {
-    // Once. Re-applying every render would trap the visitor on the entry
-    // scenario the moment they tried to leave it.
-    if (applied.current) return;
-    applied.current = true;
-    if (initial !== "launcher") dispatch({ type: "SCENARIO", scenario: initial });
-  }, [initial, dispatch]);
-
-  const isVisitorStep = scenario !== "dashboard";
+  const isVisitorStep = current !== "dashboard";
   useLockedDocument(isVisitorStep);
 
   const exit = () => {
@@ -61,7 +55,7 @@ export function GiftingApp({ initial }: { initial: Scenario }) {
     dispatch({ type: "SCENARIO", scenario: "launcher" });
   };
 
-  if (scenario === "dashboard") {
+  if (current === "dashboard") {
     return (
       <Screen>
         <GiftingDashboard onExit={exit} />
@@ -72,13 +66,13 @@ export function GiftingApp({ initial }: { initial: Scenario }) {
 
   return (
     <>
-      {scenario === "launcher" && <Launcher />}
-      {scenario === "receive" && <RecipientFlow onExit={exit} />}
-      {(scenario === "create" || scenario === "regift") && <SenderFlow onExit={exit} />}
-      {scenario === "gallery" && <Gallery onExit={exit} />}
+      {current === "launcher" && <Launcher />}
+      {current === "receive" && <RecipientFlow onExit={exit} />}
+      {(current === "create" || current === "regift") && <SenderFlow onExit={exit} />}
+      {current === "gallery" && <Gallery onExit={exit} />}
       {/* Back from an opened gift goes to the gallery, not out of the flow —
           the visitor came from a card and expects to land on it again. */}
-      {scenario === "reveal" && openGiftId && (
+      {current === "reveal" && openGiftId && (
         <GiftReveal giftId={openGiftId} onExit={() => dispatch({ type: "CLOSE_GIFT" })} />
       )}
       <Toast message={toast} />
