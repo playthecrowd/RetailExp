@@ -151,7 +151,7 @@ function Launcher() {
     // On" tints the screen the same teal that flow uses.
     <StageProvider stepKey="launcher" theme={choice.id as ScenarioTheme} pinned>
       <Stage>
-        <StageContent className="justify-start">
+        <StageContent fill className="justify-start">
           {/* Compact, inside the safe content area — not a fixed header. */}
           <div className="w-full max-w-[26rem] shrink-0 pb-3 text-center">
             <p className="text-[10px] uppercase tracking-[0.24em] text-gift-ink-faint">

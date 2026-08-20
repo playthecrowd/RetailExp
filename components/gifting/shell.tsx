@@ -484,9 +484,14 @@ export function ActionDock({
 export function StageContent({
   children,
   className,
+  fill = false,
 }: {
   children: ReactNode;
   className?: string;
+  /** Hand the whole space to the children instead of letting them size
+   *  themselves and scroll. A gallery card is meant to fill the screen it was
+   *  given; without this it collapses to the height of its own caption. */
+  fill?: boolean;
 }) {
   const inset = useKeyboardInset();
   const { dockHeight, guidanceHeight, guidanceVisible } = useStage();
@@ -504,7 +509,14 @@ export function StageContent({
       )}
       style={{ paddingTop: top, paddingBottom: bottom, transition: "padding 220ms ease-out" }}
     >
-      <div className="max-h-full w-full max-w-[26rem] overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        className={cn(
+          "w-full max-w-[26rem]",
+          fill
+            ? "flex h-full min-h-0 flex-col"
+            : "max-h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        )}
+      >
         {children}
       </div>
     </div>
@@ -547,12 +559,17 @@ export function Pager({
   useEffect(() => {
     const el = ref.current;
     if (!el || !onIndexChange) return;
-    let frame = 0;
+    // Read the index straight from the scroll position rather than deferring
+    // to an animation frame. A phone that backgrounds the tab mid-swipe never
+    // runs the callback, and the visitor comes back to a card labelled as the
+    // one before it. The work is a division and a comparison, and the guard
+    // means a scroll that stays on one card causes no renders at all.
+    let last = -1;
     const sync = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() =>
-        onIndexChange(Math.round(el.scrollLeft / Math.max(1, el.clientWidth))),
-      );
+      const index = Math.round(el.scrollLeft / Math.max(1, el.clientWidth));
+      if (index === last) return;
+      last = index;
+      onIndexChange(index);
     };
     el.addEventListener("scroll", sync, { passive: true });
     // iOS can settle a snap without a final scroll event, which would leave the
@@ -561,7 +578,6 @@ export function Pager({
     el.addEventListener("touchend", sync, { passive: true });
     el.addEventListener("scrollend", sync, { passive: true });
     return () => {
-      cancelAnimationFrame(frame);
       el.removeEventListener("scroll", sync);
       el.removeEventListener("pointerup", sync);
       el.removeEventListener("touchend", sync);

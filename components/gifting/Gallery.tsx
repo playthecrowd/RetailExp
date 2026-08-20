@@ -94,7 +94,7 @@ function GalleryStage({ onExit }: { onExit: () => void }) {
       />
       <RecallDot />
 
-      <StageContent>
+      <StageContent fill>
         <Pager onIndexChange={setIndex} className="flex-1">
           {gallery.map((g) => (
             <GiftCard key={g.id} item={g} />

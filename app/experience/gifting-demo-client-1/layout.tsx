@@ -15,7 +15,9 @@ import { GiftingSimulationProvider } from "@/lib/gifting/simulation/store";
  *   in-memory session; nothing is persisted anywhere.
  */
 export const metadata: Metadata = {
-  title: "Gifting Demo — Prototype",
+  // Shown in the browser tab and in a shared link's preview, so it says what
+  // the thing is rather than what stage of construction it is at.
+  title: "Your Gift",
   robots: { index: false, follow: false },
 };
 
