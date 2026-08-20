@@ -121,23 +121,43 @@ log(`uploading ${(statSync(MP4).size / 1_000_000).toFixed(1)} MB -> ${storagePat
 // bucket (no size limit set) or the key. Storage's object API is one POST;
 // going straight at it removes the failure and a dependency at the same time.
 // Everything below still goes through supabase-js, where it works.
-const uploadResponse = await fetch(
-  `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${storagePath}`,
-  {
-    method: "POST",
-    headers: {
-      apikey: SECRET_KEY,
-      Authorization: `Bearer ${SECRET_KEY}`,
-      "Content-Type": "video/mp4",
-      // Idempotent: a re-run replaces the object instead of colliding.
-      "x-upsert": "true",
-    },
-    body: bytes,
-  },
-);
-if (!uploadResponse.ok) {
-  throw new Error(`Upload failed: ${uploadResponse.status} ${await uploadResponse.text()}`);
+//
+// Retried, because a 17 MB POST is long enough to catch an ECONNRESET and one
+// did. The upsert header makes every attempt idempotent, so a retry either
+// replaces the object or replaces it again — there is no half-written state to
+// reason about. Only the transport is retried; a 4xx is a real answer and is
+// raised immediately rather than hammered.
+async function upload() {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${storagePath}`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SECRET_KEY,
+            Authorization: `Bearer ${SECRET_KEY}`,
+            "Content-Type": "video/mp4",
+            // Idempotent: a re-run replaces the object instead of colliding.
+            "x-upsert": "true",
+          },
+          body: bytes,
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status} ${await response.text()}`);
+      }
+      return;
+    } catch (error) {
+      const transport = error instanceof TypeError; // fetch's own failure shape
+      if (!transport || attempt === 3) throw error;
+      log(`upload attempt ${attempt} failed (${error.cause?.code ?? "network"}), retrying`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
 }
+
+await upload();
 log("uploaded");
 
 const { error: assetErr } = await supabase.from("media_assets").upsert(
