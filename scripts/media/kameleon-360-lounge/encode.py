@@ -111,6 +111,16 @@ if abs(residual) > 5.0:
 
 cmd = [
     "ffmpeg", "-y",
+    # Single-threaded PNG DECODE (this is before -i, so it binds to the input).
+    #
+    # ffmpeg segfaults - exit 139, after "inflate returned error -3" on random
+    # frames - decoding 1800 4K PNGs multithreaded while libx264 is also using
+    # 48 threads. The frames are not corrupt: PIL opens all 1800, and a
+    # decode-only pass with -f null completes cleanly. It is the contention
+    # that kills it, which is why the crash moved to a different frame on every
+    # run. One decode thread costs a little wall clock and makes the encode
+    # deterministic. The encoder is left on auto and still gets the machine.
+    "-threads", "1",
     "-framerate", str(FPS),
     "-i", FRAMES,
     "-c:v", "libx264",
