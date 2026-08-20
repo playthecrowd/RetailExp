@@ -52,9 +52,10 @@ export default function EvaluationPrivacyPage() {
             <strong>The photo or video you submit</strong>, and the caption you write.
           </li>
           <li>
-            <strong>Your confirmations</strong> — that you are 18 or older, that no minors
-            appear, that everyone shown consented, and that approved media may appear in the
-            Gallery — together with which version of the notices you agreed to and when.
+            <strong>Your confirmations</strong> — that you are 21 years of age or older,
+            that no minors appear, that everyone shown consented, and that approved media
+            may appear in the Gallery — together with which version of the notices you
+            agreed to and when.
           </li>
           <li>
             <strong>Technical details about the file</strong> that the media provider
@@ -181,10 +182,17 @@ export default function EvaluationPrivacyPage() {
       </section>
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-lg font-semibold">Minors</h2>
+        <h2 className="text-lg font-semibold">Age, and minors</h2>
         <p>
-          This evaluation is for adults. Submitting media in which anyone under 18 appears is
-          prohibited. If you believe a minor appears in something here, email{" "}
+          This experience is limited to people 21 years of age or older, confirmed at the
+          entrance and again before submitting. Your date of birth is used once, to work
+          out whether you are old enough, and is then discarded: it is not stored, not
+          logged, and never sent to Supabase, Cloudflare or anyone else. What is kept is a
+          signed marker on your own device recording only that the confirmation was made.
+        </p>
+        <p>
+          Submitting media in which anyone under 21 appears is prohibited. If you believe a
+          minor appears in something here, email{" "}
           <a className="underline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we
           will remove it and delete the media on the next cleanup.
         </p>
@@ -194,7 +202,7 @@ export default function EvaluationPrivacyPage() {
         <h2 className="text-lg font-semibold">Cookies</h2>
         <p>
           Two, both strictly necessary: one that keeps you signed in to the experience, and
-          one that records that you entered a valid access code. There are no advertising or
+          one that records that you confirmed your age. There are no advertising or
           analytics cookies.
         </p>
       </section>

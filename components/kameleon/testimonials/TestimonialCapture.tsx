@@ -598,7 +598,7 @@ export function TestimonialCapture({
                 id="consent-adult"
                 checked={consent.submitterAdult}
                 onChange={(v) => setConsent((c) => ({ ...c, submitterAdult: v }))}
-                label="I confirm that I am 18 or older."
+                label="I confirm that I am 21 years of age or older."
               />
               <ConsentBox
                 id="consent-no-minors"
@@ -625,8 +625,8 @@ export function TestimonialCapture({
               <p>If it is not approved, it is kept privately for 30 days and then deleted.</p>
               <p>This consent covers Gallery display in the Kameleon experience only.</p>
               <p>
-                This evaluation is for adults. We do not verify anyone&rsquo;s age — the
-                confirmation above is yours to make.
+                This experience is for people 21 years of age or older. We do not verify
+                anyone&rsquo;s age — the confirmation above is yours to make.
               </p>
               {/* No marketing, advertising or social-media reuse consent appears
                   here, and none may be added without a separate approved scope. */}

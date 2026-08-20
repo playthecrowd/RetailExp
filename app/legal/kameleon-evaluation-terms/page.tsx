@@ -44,13 +44,20 @@ export default function EvaluationTermsPage() {
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold">Who may take part</h2>
         <p>
-          You must be <strong>18 or older</strong> to submit a photo or video. We do not
-          verify anyone&rsquo;s age; the confirmation you give is your own statement, and we
-          rely on it.
+          This experience is limited to people who are{" "}
+          <strong>21 years of age or older</strong>, and you must be 21 years of age or
+          older to enter it or to submit a photo or video. We do not verify anyone&rsquo;s
+          age; the confirmations you give — at the entrance and again before submitting —
+          are your own statements, and we rely on them.
         </p>
         <p>
-          Access is by invitation. The access code you were given is for you and the
-          evaluation; please do not pass it on.
+          By entering you also confirm that you are of legal drinking age where you are.
+          Please enjoy responsibly, and never drink and drive.
+        </p>
+        <p>
+          Entry is by age confirmation. Your date of birth is used once to work out
+          whether you are old enough and is then discarded — see{" "}
+          <Link className="underline" href={PRIVACY_ROUTE}>the Privacy Notice</Link>.
         </p>
       </section>
 
@@ -58,10 +65,10 @@ export default function EvaluationTermsPage() {
         <h2 className="text-lg font-semibold">What you may submit</h2>
         <p>Before submitting you confirm all four of the following:</p>
         <ul className="list-disc pl-6">
-          <li>You are 18 or older.</li>
+          <li>You are 21 years of age or older.</li>
           <li>
             <strong>No minors appear</strong> in your photo or video. Media depicting anyone
-            under 18 is prohibited outright.
+            under 21 is prohibited outright.
           </li>
           <li>Everyone who appears has consented to appearing.</li>
           <li>

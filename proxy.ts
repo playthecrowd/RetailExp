@@ -31,11 +31,11 @@ import { type NextRequest, NextResponse } from "next/server";
  *  /admin/login redirecting to /admin/login is the classic infinite loop. */
 const PUBLIC_ADMIN_PATHS = new Set(["/admin/login", "/admin/access-denied"]);
 
-/** The stakeholder gate itself, for the same reason. */
-const PILOT_GATE_PATH = "/experience/kameleon/access";
+/** The age gate itself, for the same reason. */
+const AGE_GATE_PATH = "/experience/kameleon/welcome";
 
 /** Presence only. See the redirect below for why this does not verify. */
-const PILOT_COOKIE = "kameleon_pilot_access";
+const AGE_COOKIE = "kameleon_age_affirmed";
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -63,8 +63,8 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // The stakeholder evaluation is closed. Same division of labour as the
-  // admin branch below: this checks only whether an unlock cookie is PRESENT,
+  // The Kameleon experience is 21+. Same division of labour as the admin
+  // branch below: this checks only whether an affirmation cookie is PRESENT,
   // never whether it is valid. Verifying it here would mean computing an HMAC
   // on every prefetch, and would put a security decision in the one place
   // Next's own guidance says must not be the only line of defence. The real
@@ -74,12 +74,14 @@ export async function proxy(request: NextRequest) {
   // Note what is NOT matched: /api/* is outside this proxy's matcher entirely,
   // so the Cloudflare Stream webhook and the retention cron are unaffected. A
   // gate that blocked them would have broken video reconciliation silently.
+  // /legal/* is outside it too, so the Terms and Privacy Notice stay readable
+  // by anyone the notices bind - including somebody deciding whether to enter.
   if (
     pathname.startsWith("/experience/kameleon") &&
-    pathname !== PILOT_GATE_PATH &&
-    !request.cookies.has(PILOT_COOKIE)
+    pathname !== AGE_GATE_PATH &&
+    !request.cookies.has(AGE_COOKIE)
   ) {
-    return NextResponse.redirect(new URL(PILOT_GATE_PATH, request.url));
+    return NextResponse.redirect(new URL(AGE_GATE_PATH, request.url));
   }
 
   if (pathname.startsWith("/admin") && !PUBLIC_ADMIN_PATHS.has(pathname)) {

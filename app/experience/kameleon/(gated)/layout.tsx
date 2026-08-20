@@ -1,7 +1,7 @@
-import { requirePilotAccess } from "@/lib/pilot/gate";
+import { requireAgeAffirmation } from "@/lib/pilot/gate";
 
 /**
- * The stakeholder gate, enforced for everything beneath it.
+ * The 21+ age gate, enforced for everything beneath it.
  *
  * A ROUTE GROUP, NOT A CHECK IN EVERY PAGE. `(gated)` changes no URL — the
  * experience is still /experience/kameleon and the Gallery is still
@@ -11,7 +11,7 @@ import { requirePilotAccess } from "@/lib/pilot/gate";
  * reason, in app/admin/(protected).
  *
  * The gate page itself sits OUTSIDE this group, at
- * app/experience/kameleon/access, which is what stops the redirect from
+ * app/experience/kameleon/welcome, which is what stops the redirect from
  * pointing at a route that would redirect again.
  *
  * WHY THIS AND NOT proxy.ts ALONE. The proxy redirect is an optimistic
@@ -28,6 +28,6 @@ export default async function GatedKameleonLayout({
 }: {
   children: React.ReactNode;
 }) {
-  await requirePilotAccess();
+  await requireAgeAffirmation();
   return <>{children}</>;
 }

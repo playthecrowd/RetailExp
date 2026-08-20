@@ -1775,7 +1775,7 @@ assert(
 
 // --- Consent ---------------------------------------------------------------
 for (const line of [
-  "I confirm that I am 18 or older.",
+  "I confirm that I am 21 years of age or older.",
   "I confirm that no minors appear.",
   "I confirm that every person shown consented.",
   "I consent to displaying this submission in the Kameleon experience Gallery if approved.",
@@ -1807,7 +1807,7 @@ assert(
   "the 18+ attestation is passed to the server, not merely collected in the browser",
 );
 assert(
-  /We do not verify anyone/.test(capUi),
+  /We do not verify\s*\n?\s*anyone/.test(capUi) || /do not verify anyone/.test(capUi.replace(/\s+/g, " ")),
   "the consent step says plainly that no age verification is performed",
 );
 assert(
@@ -1858,8 +1858,28 @@ assert(
   // formatter rather than the text.
   const flat = (t) => t.replace(/\s+/g, " ");
   assert(
-    /18 or older/.test(flat(terms)) && /do not verify anyone/i.test(flat(terms)),
-    "the Terms state the 18+ requirement AND that no age verification is performed",
+    /21 years of age or older/.test(flat(terms)) && /do not verify anyone/i.test(flat(terms)),
+    "the Terms state the 21+ requirement AND that no age verification is performed",
+  );
+  assert(
+    !/\b18\b/.test(flat(terms)) && !/\bover 21\b/i.test(flat(terms)),
+    "no 18+ wording survives, and the phrasing is never \"over 21\"",
+  );
+  assert(
+    /21 years of age or older/.test(flat(privacy)),
+    "the Privacy Notice states the 21+ requirement too",
+  );
+  assert(
+    /is not stored, not logged, and never sent to Supabase, Cloudflare/.test(flat(privacy)),
+    "the Privacy Notice says plainly that the date of birth is discarded",
+  );
+  assert(
+    /Please enjoy responsibly/.test(flat(terms)),
+    "the Terms carry the responsible-enjoyment statement",
+  );
+  assert(
+    !/access code/i.test(flat(terms) + flat(privacy)),
+    "no reference to the removed access code survives in the notices",
   );
   assert(
     /will not be used in marketing or advertising/.test(flat(terms)),

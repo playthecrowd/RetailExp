@@ -11,9 +11,14 @@
  * for altered text. Any substantive change to either page requires a NEW
  * version and a new registry row — the old row stays, because submissions
  * consented under it and the record has to keep meaning what it meant.
+ *
+ * v2 (19 August 2026) raised the minimum age from 18 to 21 and added the
+ * responsible-enjoyment statement. v1 is NOT rewritten and NOT deleted: any
+ * submission that consented under it did so to different words, and the
+ * registry is the evidence of which words those were.
  */
 
-export const EVALUATION_CONSENT_VERSION = "2026-08-19.evaluation.v1";
+export const EVALUATION_CONSENT_VERSION = "2026-08-19.evaluation.v2";
 
 export const TERMS_ROUTE = "/legal/kameleon-evaluation-terms";
 export const PRIVACY_ROUTE = "/legal/kameleon-evaluation-privacy";
@@ -40,3 +45,7 @@ export const ADMINISTRATOR = "Plotabl";
 export const PROJECT = "Kameleon Beverages";
 export const CONTACT_EMAIL = "plotablstudio@gmail.com";
 export const GOVERNING_LAW = "the State of Georgia, United States";
+
+/** The single place the age appears, so the pages, the capture confirmation
+ *  and the gate cannot drift apart. */
+export const MINIMUM_AGE_TEXT = "21 years of age or older";
