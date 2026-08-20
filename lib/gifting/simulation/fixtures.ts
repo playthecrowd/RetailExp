@@ -2,6 +2,7 @@ import type {
   CreditSummary,
   ExperienceConfig,
   GalleryItem,
+  GiftProduct,
   MediaRef,
   SceneTemplate,
 } from "./types";
@@ -38,6 +39,55 @@ export const DEMO_OTHER_MESSAGE_CODE = "TMY8Q-4FVRD";
 export const DEMO_REGIFT_PACKAGE_CODE = "VC6XA-2QJMH";
 
 export const SENDER_NAME = "Jordan";
+
+/**
+ * The physical items, one per gift.
+ *
+ * Each has its own name, still and package code, which is what makes "gift 2
+ * opens gift 2" something you can see rather than something you have to take
+ * on trust. The names are deliberately house-brand neutral — this is a
+ * template every client will restyle.
+ */
+export const PRODUCTS = {
+  signatureReserve: {
+    id: "prod-signature-reserve",
+    name: "Signature Reserve",
+    image: `${STILL}/hero-product.png`,
+    alt: "A plain white luxury bottle on a brushed metal plinth",
+    packageCode: DEMO_PACKAGE_CODE,
+  },
+  giftingSet: {
+    id: "prod-gifting-set",
+    name: "The Gifting Set",
+    image: `${STILL}/product-package.png`,
+    alt: "A white unbranded bottle with two neutral gift boxes and champagne ribbon",
+    packageCode: DEMO_OTHER_PACKAGE_CODE,
+  },
+  atelierEdition: {
+    id: "prod-atelier-edition",
+    name: "Atelier Edition",
+    image: `${STILL}/template-luxury-product-reveal.png`,
+    alt: "The white bottle lit as a studio product reveal",
+    packageCode: "RN5TB-8LZWQ",
+  },
+  houseSelection: {
+    id: "prod-house-selection",
+    name: "House Selection",
+    image: `${STILL}/poster-standard-gift.png`,
+    alt: "The white bottle presented on a neutral gift table",
+    packageCode: "JW3KC-7PYDS",
+  },
+} satisfies Record<string, GiftProduct>;
+
+/** What a newly created gift is attached to when the visitor starts from
+ *  scratch rather than from something they already own. */
+export const DEFAULT_NEW_PRODUCT: GiftProduct = {
+  id: "prod-signature-package",
+  name: "Signature Gift Package",
+  image: `${STILL}/product-package.png`,
+  alt: "A white unbranded bottle with neutral gift packaging",
+  packageCode: DEMO_REGIFT_PACKAGE_CODE,
+};
 
 export const media = {
   heroProduct: {
@@ -192,44 +242,68 @@ export const INITIAL_GALLERY: GalleryItem[] = [
     kind: "standard",
     direction: "received",
     title: `A gift from ${SENDER_NAME}`,
-    subtitle: "Personal video message",
+    subtitle: PRODUCTS.signatureReserve.name,
     media: media.giftReveal,
     createdLabel: "Received today",
     packageCode: DEMO_PACKAGE_CODE,
     messageCode: DEMO_MESSAGE_CODE,
+    product: PRODUCTS.signatureReserve,
+    senderName: SENDER_NAME,
+    recipientName: "You",
+    message:
+      "I saw this and thought of the night we opened the last one. Save it for something worth marking.",
+    assignment: "active",
+  },
+  {
+    id: "gift-received-2",
+    kind: "ai",
+    direction: "received",
+    title: "A gift from Mara",
+    subtitle: PRODUCTS.atelierEdition.name,
+    media: media.aiGift,
+    stage: "ready",
+    templateTitle: "Luxury Product Reveal",
+    createdLabel: "Received last week",
+    packageCode: PRODUCTS.atelierEdition.packageCode,
+    messageCode: "GD7VP-2XNRC",
+    product: PRODUCTS.atelierEdition,
+    senderName: "Mara",
+    recipientName: "You",
+    message: "For the new place. Open it when the last box is unpacked.",
+    assignment: "active",
   },
   {
     id: "gift-created-standard",
     kind: "standard",
     direction: "created",
     title: "For Alex",
-    subtitle: "Standard video gift",
+    subtitle: PRODUCTS.giftingSet.name,
     media: media.standardGift,
     createdLabel: "Created yesterday",
     packageCode: DEMO_OTHER_PACKAGE_CODE,
     messageCode: DEMO_OTHER_MESSAGE_CODE,
+    product: PRODUCTS.giftingSet,
+    senderName: "You",
+    recipientName: "Alex",
+    message: "Congratulations. You earned every bit of this one.",
+    assignment: "active",
   },
   {
     id: "gift-created-ai-processing",
     kind: "ai",
     direction: "created",
     title: "For Sam",
-    subtitle: "Scene generation in progress",
+    subtitle: PRODUCTS.houseSelection.name,
     media: media.aiGift,
     stage: "building_scene",
     templateTitle: "Modern Retail Welcome",
     createdLabel: "Started a moment ago",
-  },
-  {
-    id: "gift-created-ai-ready",
-    kind: "ai",
-    direction: "created",
-    title: "For Priya",
-    subtitle: "Luxury Product Reveal",
-    media: media.aiGift,
-    stage: "ready",
-    templateTitle: "Luxury Product Reveal",
-    createdLabel: "Created last week",
+    packageCode: PRODUCTS.houseSelection.packageCode,
+    product: PRODUCTS.houseSelection,
+    senderName: "You",
+    recipientName: "Sam",
+    message: "A small thank you for covering for me all month.",
+    assignment: "active",
   },
 ];
 
@@ -287,7 +361,7 @@ export const DASHBOARD_FIXTURES = {
   ],
   aiJobs: [
     {
-      id: "job-8841",
+      id: "GEN-8841",
       template: "Modern Retail Welcome",
       provider: "Preview",
       status: "generating",
@@ -296,7 +370,7 @@ export const DASHBOARD_FIXTURES = {
       charge: "10 credits",
     },
     {
-      id: "job-8836",
+      id: "GEN-8836",
       template: "Luxury Product Reveal",
       provider: "Preview",
       status: "ready",
@@ -305,7 +379,7 @@ export const DASHBOARD_FIXTURES = {
       charge: "12 credits",
     },
     {
-      id: "job-8829",
+      id: "GEN-8829",
       template: "Gift Presentation",
       provider: "Preview",
       status: "failed",

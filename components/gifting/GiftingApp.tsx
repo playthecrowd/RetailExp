@@ -5,6 +5,7 @@ import { useGifting, type Scenario } from "@/lib/gifting/simulation/store";
 import type { GateKind } from "@/lib/gifting/simulation/types";
 import { GiftingDashboard } from "./Dashboard";
 import { Gallery } from "./Gallery";
+import { GiftReveal } from "./GiftReveal";
 import { RecipientFlow } from "./RecipientFlow";
 import { SenderFlow } from "./SenderFlow";
 import {
@@ -41,7 +42,7 @@ import { Button, Screen, Toast } from "./ui";
  *   than to the whole prototype.
  */
 export function GiftingApp({ initial }: { initial: Scenario }) {
-  const { scenario, dispatch, toast } = useGifting();
+  const { scenario, dispatch, toast, openGiftId } = useGifting();
   const applied = useRef(false);
 
   useEffect(() => {
@@ -75,6 +76,11 @@ export function GiftingApp({ initial }: { initial: Scenario }) {
       {scenario === "receive" && <RecipientFlow onExit={exit} />}
       {(scenario === "create" || scenario === "regift") && <SenderFlow onExit={exit} />}
       {scenario === "gallery" && <Gallery onExit={exit} />}
+      {/* Back from an opened gift goes to the gallery, not out of the flow —
+          the visitor came from a card and expects to land on it again. */}
+      {scenario === "reveal" && openGiftId && (
+        <GiftReveal giftId={openGiftId} onExit={() => dispatch({ type: "CLOSE_GIFT" })} />
+      )}
       <Toast message={toast} />
     </>
   );

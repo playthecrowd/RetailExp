@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGifting } from "@/lib/gifting/simulation/store";
 import { AI_STAGE_LABELS } from "@/lib/gifting/simulation/types";
 import type { GalleryItem } from "@/lib/gifting/simulation/types";
@@ -22,6 +22,13 @@ import { Body, Button, Pill } from "./ui";
 
 /**
  * The visitor's private gallery, as a swipeable deck.
+ *
+ * EVERY CARD IS ITS OWN GIFT
+ *   The index the pager reports is the index everything else reads: the
+ *   primary action, the sheet, and the id handed to the reveal. There is no
+ *   second source of "the current gift", so card two cannot open card one's
+ *   contents — and the position is kept in the store, so coming back from a
+ *   reveal lands on the card you opened rather than at the start.
  *
  * ONE CARD, ONE ROW OF CONTROLS
  *   The previous version stacked a six-chip grid under every card, which on a
@@ -45,13 +52,27 @@ export function Gallery({ onExit }: { onExit: () => void }) {
 }
 
 function GalleryStage({ onExit }: { onExit: () => void }) {
-  const { gallery, dispatch, config, showToast } = useGifting();
+  const { gallery, dispatch, config, showToast, galleryIndex } = useGifting();
   const { announce, setPinned } = useStage();
-  const [index, setIndex] = useState(0);
+  const [index, setIndex] = useState(() => Math.min(galleryIndex, Math.max(0, gallery.length - 1)));
   const [sheetOpen, setSheetOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const pagerRef = useRef<HTMLDivElement>(null);
 
   const item: GalleryItem | undefined = gallery[Math.min(index, gallery.length - 1)];
+
+  // Restore the card the visitor left from. Scroll position is the pager's
+  // own state, so the store remembering the index is not enough on its own.
+  useEffect(() => {
+    const el = pagerRef.current;
+    if (!el || galleryIndex === 0) return;
+    el.scrollLeft = el.clientWidth * galleryIndex;
+  }, [galleryIndex]);
+
+  // And keep the store in step, so the next return lands here too.
+  useEffect(() => {
+    dispatch({ type: "GALLERY_INDEX", index });
+  }, [index, dispatch]);
   const processing =
     item?.kind === "ai" && item.stage && item.stage !== "ready" && item.stage !== "failed";
 
@@ -78,11 +99,7 @@ function GalleryStage({ onExit }: { onExit: () => void }) {
     );
   }
 
-  const primaryLabel = processing
-    ? "Still Preparing"
-    : item.kind === "ai"
-      ? "Play Gift"
-      : "View Gift";
+  const primaryLabel = processing ? "Still Preparing" : "View Gift";
 
   return (
     <Stage media={<Backdrop />}>
@@ -95,7 +112,7 @@ function GalleryStage({ onExit }: { onExit: () => void }) {
       <RecallDot />
 
       <StageContent fill>
-        <Pager onIndexChange={setIndex} className="flex-1">
+        <Pager ref={pagerRef} onIndexChange={setIndex} className="flex-1">
           {gallery.map((g) => (
             <GiftCard key={g.id} item={g} />
           ))}
@@ -106,7 +123,11 @@ function GalleryStage({ onExit }: { onExit: () => void }) {
       </StageContent>
 
       <ActionDock>
-        <Button disabled={Boolean(processing)} onClick={() => showToast(`Opening ${item.title}`)}>
+        <Button
+          disabled={Boolean(processing)}
+          // The id of the card actually on screen — not a remembered one.
+          onClick={() => dispatch({ type: "OPEN_GIFT", id: item.id })}
+        >
           {primaryLabel}
         </Button>
         {/* One row. Everything here is safe to tap by accident. */}
@@ -158,13 +179,12 @@ function GalleryStage({ onExit }: { onExit: () => void }) {
           </div>
         ) : (
           <div className="grid gap-2">
-            {item.direction === "received" && config.regiftingEnabled && (
+            {item.direction === "received" && config.regiftingEnabled && item.assignment !== "regifted" && (
               <Button
                 variant="secondary"
                 onClick={() => {
                   setSheetOpen(false);
-                  dispatch({ type: "START_CREATE", isRegift: true });
-                  dispatch({ type: "SCENARIO", scenario: "regift" });
+                  dispatch({ type: "REGIFT_FROM", item });
                 }}
               >
                 Pass This On
@@ -213,11 +233,12 @@ function GiftCard({ item }: { item: GalleryItem }) {
           sizes="(max-width:480px) 100vw, 420px"
           className="object-cover"
         />
-        <div className="absolute left-3 top-3 flex gap-1.5">
+        <div className="absolute left-3 top-3 flex flex-wrap gap-1.5">
           <Pill tone={item.direction === "received" ? "accent" : "neutral"}>
             {item.direction === "received" ? "Received" : "Created"}
           </Pill>
-          {item.kind === "ai" && <Pill tone="warn">Scene</Pill>}
+          {item.assignment === "regifted" && <Pill tone="neutral">Regifted</Pill>}
+          {item.assignment === "ready_to_send" && <Pill tone="accent">Ready to Send</Pill>}
         </div>
         {processing && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-white/70 backdrop-blur-[2px]">
@@ -230,10 +251,10 @@ function GiftCard({ item }: { item: GalleryItem }) {
       </div>
       <div className="shrink-0 p-4">
         <div className="flex items-baseline justify-between gap-3">
-          <p className="truncate text-[15px] text-gift-ink">{item.title}</p>
+          <p className="truncate text-[15px] text-gift-ink">{item.product.name}</p>
           <span className="shrink-0 text-[11px] text-gift-ink-faint">{item.createdLabel}</span>
         </div>
-        <Body className="mt-0.5 truncate text-[12px]">{item.subtitle}</Body>
+        <Body className="mt-0.5 truncate text-[12px]">{item.title}</Body>
         {item.stage === "failed" && (
           <p className="mt-2 text-[12px] text-gift-danger">
             This one didn&apos;t finish. Your credits were returned.

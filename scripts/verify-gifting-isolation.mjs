@@ -220,7 +220,14 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
 
   // The one shared file that did change. It must be ADDITIVE ONLY: new custom
   // properties nothing else reads, and no existing token altered.
-  const cssDiff = execSync("git diff origin/main...HEAD -- app/globals.css", {
+  // Against the merge base with NO second revision, so the comparison includes
+  // the working tree. Reading only committed changes meant this check could
+  // pass while an ungated rule sat unstaged in the file being reviewed.
+  const mergeBase = execSync("git merge-base origin/main HEAD", {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+  const cssDiff = execSync(`git diff ${mergeBase} -- app/globals.css`, {
     cwd: root,
     encoding: "utf8",
   });
@@ -242,11 +249,37 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
     .map((l) => l.slice(1))
     .filter((l) => l.trim().length > 0);
 
-  const addedSelectors = addedLines
-    .filter((l) => l.includes("{") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"))
-    .map((l) => l.replace("{", "").trim())
-    .filter(Boolean);
-  const ungatedSelectors = addedSelectors.filter((sel) => !sel.includes("gift"));
+  // A rule is only dangerous if its SELECTOR can match an element. At-rules
+  // cannot, and neither can a keyframe step — so those are judged on their own
+  // terms: an @keyframes must be gift-named, and its `from`/`to`/`40%` steps
+  // are exempt because they only ever apply to whatever already uses it.
+  let inKeyframes = false;
+  let depth = 0;
+  const ungatedSelectors = [];
+  for (const raw of addedLines) {
+    const line = raw.trim();
+    const opens = (raw.match(/\{/g) ?? []).length;
+    const closes = (raw.match(/\}/g) ?? []).length;
+    const wasInKeyframes = inKeyframes;
+    if (line.includes("{") && !line.startsWith("*") && !line.startsWith("/*")) {
+      const selector = line.slice(0, line.indexOf("{")).trim();
+      if (selector.startsWith("@keyframes")) {
+        if (!selector.includes("gift")) ungatedSelectors.push(selector);
+        inKeyframes = true;
+      } else if (selector.startsWith("@")) {
+        // @media / @supports wrap rules; the rules inside are still checked.
+      } else if (wasInKeyframes && /^(from|to|[\d.]+%)(\s*,\s*(from|to|[\d.]+%))*$/.test(selector)) {
+        // A keyframe step, not a selector.
+      } else if (selector && !selector.includes("gift")) {
+        ungatedSelectors.push(selector);
+      }
+    }
+    depth += opens - closes;
+    if (inKeyframes && depth <= 0) {
+      inKeyframes = false;
+      depth = 0;
+    }
+  }
   check(
     ungatedSelectors.length === 0,
     `every CSS rule added is gated on a gift- selector${ungatedSelectors.length ? ` (${ungatedSelectors.join(" | ")})` : ""}`,
@@ -362,13 +395,14 @@ console.log("\n--- no implementation language reaches a visitor ---");
   // visitor reading "simulated" or "no database" is being told about our
   // plumbing, which is never something they asked about.
   const banned =
-    /\b(simulat\w*|mock\w*|fixtures?|database|backend|migration|localStorage|local state|placeholder|dummy|stub)\b/i;
+    /\b(simulat\w*|mock\w*|fixtures?|database|backend|migration|provider|localStorage|local state|placeholder|dummy|stub|job id|assignment id)\b/i;
   const visitorFiles = [
     "components/gifting/shell.tsx",
     "components/gifting/VideoStage.tsx",
     "components/gifting/RecipientFlow.tsx",
     "components/gifting/SenderFlow.tsx",
     "components/gifting/Gallery.tsx",
+    "components/gifting/GiftReveal.tsx",
     "components/gifting/GiftingApp.tsx",
     "components/gifting/ui.tsx",
   ];

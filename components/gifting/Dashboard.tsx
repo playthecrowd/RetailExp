@@ -37,7 +37,7 @@ const SECTIONS = [
   "Physical Products",
   "Visitors",
   "Gift Messages",
-  "AI Jobs",
+  "Scene Generations",
   "Media Library",
   "Credits & Usage",
   "Team & Access",
@@ -377,11 +377,11 @@ function SectionBody({ section }: { section: Section }) {
         </Panel>
       );
 
-    case "AI Jobs":
+    case "Scene Generations":
       return (
-        <Panel title="AI Jobs" note="Provider expense and retail charge are tracked separately.">
+        <Panel title="Scene Generations" note="Cost to run and credits charged are tracked separately.">
           <Table
-            head={["Job", "Template", "Provider", "Status", "Attempts", "Expense", "Charge"]}
+            head={["Reference", "Scene", "Source", "Status", "Attempts", "Cost", "Charge"]}
             rows={f.aiJobs.map((j) => [
               <span key="i" className="font-mono text-[11px]">{j.id}</span>,
               j.template,

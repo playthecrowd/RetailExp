@@ -64,6 +64,38 @@ export interface SceneTemplate {
   sortOrder: number;
 }
 
+/**
+ * The physical thing a gift is attached to.
+ *
+ * A gift is not a video. The video is how someone says why they chose the
+ * thing; the thing is what arrives. Keeping the product as its own identity is
+ * what lets a reveal show the ACTUAL item, and what lets regifting carry that
+ * item forward instead of asking the visitor to name it again.
+ */
+export interface GiftProduct {
+  id: string;
+  name: string;
+  /** Portrait product still, shown as the focal point of the reveal. */
+  image: string;
+  alt: string;
+  /** The code printed beside the QR on this physical package. It travels WITH
+   *  the product: regifting the same bottle reuses this code by definition. */
+  packageCode: string;
+}
+
+/** Where a gift stands. One package can only have one live assignment, so
+ *  regifting moves the old one aside rather than deleting it. */
+export type AssignmentStatus = "active" | "regifted" | "ready_to_send";
+
+/** A previous assignment of the same physical product, kept so a regifted
+ *  item can still show where it came from. */
+export interface GiftHistoryEntry {
+  senderName: string;
+  recipientName: string;
+  messageCode: string;
+  when: string;
+}
+
 export interface GalleryItem {
   id: string;
   kind: GiftVideoKind;
@@ -79,6 +111,15 @@ export interface GalleryItem {
   packageCode?: string;
   messageCode?: string;
   deleted?: boolean;
+  /** The item itself. */
+  product: GiftProduct;
+  senderName: string;
+  recipientName?: string;
+  /** What the sender wrote, as distinct from what they recorded. */
+  message: string;
+  recipientNote?: string;
+  assignment: AssignmentStatus;
+  history?: GiftHistoryEntry[];
 }
 
 export interface GiftAssignmentView {

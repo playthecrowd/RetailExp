@@ -549,12 +549,17 @@ export function Pager({
   children,
   onIndexChange,
   className,
+  ref: externalRef,
 }: {
   children: ReactNode[];
   onIndexChange?: (index: number) => void;
   className?: string;
+  /** Lets a caller restore a scroll position it remembered. The deck's own
+   *  scrollLeft is the only place "which card" actually lives. */
+  ref?: React.RefObject<HTMLDivElement | null>;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const localRef = useRef<HTMLDivElement>(null);
+  const ref = externalRef ?? localRef;
 
   useEffect(() => {
     const el = ref.current;
@@ -583,7 +588,7 @@ export function Pager({
       el.removeEventListener("touchend", sync);
       el.removeEventListener("scrollend", sync);
     };
-  }, [onIndexChange]);
+  }, [onIndexChange, ref]);
 
   return (
     <div

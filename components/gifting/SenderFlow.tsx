@@ -2,7 +2,8 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { DEMO_REGIFT_PACKAGE_CODE, media, useGifting } from "@/lib/gifting/simulation/store";
+import { media, useGifting } from "@/lib/gifting/simulation/store";
+import type { GalleryItem } from "@/lib/gifting/simulation/types";
 import { AI_STAGE_LABELS, type AiJobStage } from "@/lib/gifting/simulation/types";
 import {
   ActionDock,
@@ -26,7 +27,10 @@ import { Body, Button, Card, Checkbox, CodeChip, Field } from "./ui";
  * no step can lose its way forward to an instruction timer.
  */
 
-const STEPS = 8;
+/** Regifting is one step shorter: the package is the one already in the
+ *  visitor's hand, so there is nothing to look up. */
+const STEPS_NEW = 8;
+const STEPS_REGIFT = 7;
 
 export function SenderFlow({ onExit }: { onExit: () => void }) {
   const { senderStep, draft } = useGifting();
@@ -89,21 +93,41 @@ const glass = "rounded-2xl border border-white/70 bg-[rgba(250,249,246,0.9)] bac
 
 function Intro({ onExit }: { onExit: () => void }) {
   const { dispatch, draft } = useGifting();
+  const regifting = draft.isRegift;
   return (
-    <Stage media={<Backdrop src={media.heroProduct.poster} alt={media.heroProduct.alt} dim={0.5} />}>
+    <Stage media={<Backdrop src={draft.product.image} alt={draft.product.alt} dim={0.55} />}>
       <LiveRegion />
       <Guidance
-        title={draft.isRegift ? "Pass it on, personally" : "Make it personal"}
-        instruction="Record a short message. We'll pair it with a package."
+        // The product is named, not described. Someone regifting already knows
+        // what they are holding; the screen's job is to confirm we do too.
+        title={regifting ? `You're Regifting ${draft.product.name}` : "Make it personal"}
+        instruction={
+          regifting
+            ? "Same item, new message. We'll keep the package it came in."
+            : "Record a short message. We'll pair it with a package."
+        }
         onExit={onExit}
       />
       <RecallDot />
       <StageContent>
-        <div className={`${glass} p-5 text-center`}>
-          <Body>
-            You&apos;ll record a message, choose how it looks, add a recipient, and get a card to
-            hand over.
-          </Body>
+        <div className={`${glass} overflow-hidden`}>
+          <div className="relative aspect-[4/3] w-full">
+            <Image
+              src={draft.product.image}
+              alt={draft.product.alt}
+              fill
+              sizes="(max-width:480px) 100vw, 380px"
+              className="object-contain p-4"
+            />
+          </div>
+          <div className="px-5 pb-5 text-center">
+            <p className="text-[15px] text-gift-ink">{draft.product.name}</p>
+            <Body className="mt-1 text-[12px]">
+              {regifting
+                ? "Record a new message for whoever gets it next."
+                : "You'll record a message, choose how it looks, add a recipient, and get a card to hand over."}
+            </Body>
+          </div>
         </div>
       </StageContent>
       <ActionDock>
@@ -116,7 +140,8 @@ function Intro({ onExit }: { onExit: () => void }) {
 }
 
 function Record({ onExit }: { onExit: () => void }) {
-  const { dispatch } = useGifting();
+  const { dispatch, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const { setPinned, announce } = useStage();
   const [permission, setPermission] = useState<"idle" | "asking" | "granted" | "denied">("idle");
   const [recording, setRecording] = useState(false);
@@ -151,7 +176,7 @@ function Record({ onExit }: { onExit: () => void }) {
         title="Record your message"
         instruction="Keep it short — sixty seconds is plenty."
         step={1}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -278,7 +303,8 @@ function BottleProgress({ percent }: { percent: number }) {
 }
 
 function Uploading({ onExit }: { onExit: () => void }) {
-  const { dispatch, uploadPercent } = useGifting();
+  const { dispatch, uploadPercent, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const { announce } = useStage();
 
   useEffect(() => {
@@ -301,7 +327,7 @@ function Uploading({ onExit }: { onExit: () => void }) {
         title="Saving your message"
         instruction="Keep this screen open until it finishes."
         step={1}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -313,7 +339,8 @@ function Uploading({ onExit }: { onExit: () => void }) {
 }
 
 function Preview({ onExit }: { onExit: () => void }) {
-  const { dispatch } = useGifting();
+  const { dispatch, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   return (
     <Stage
       media={
@@ -335,7 +362,7 @@ function Preview({ onExit }: { onExit: () => void }) {
         title="Happy with this?"
         instruction="Use it, or record another take."
         step={2}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -358,7 +385,8 @@ function Preview({ onExit }: { onExit: () => void }) {
 }
 
 function ChooseKind({ onExit }: { onExit: () => void }) {
-  const { dispatch, config, credits, activeTemplates } = useGifting();
+  const { dispatch, config, credits, activeTemplates, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const [choice, setChoice] = useState<"standard" | "ai" | null>(null);
   const cheapest = activeTemplates.reduce((min, t) => Math.min(min, t.creditPrice), Infinity);
   const aiAvailable =
@@ -371,7 +399,7 @@ function ChooseKind({ onExit }: { onExit: () => void }) {
         title="How should it look?"
         instruction="Pick a style, then continue."
         step={3}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -455,7 +483,8 @@ function SelectableCard({
 }
 
 function ChooseTemplate({ onExit }: { onExit: () => void }) {
-  const { dispatch, activeTemplates } = useGifting();
+  const { dispatch, activeTemplates, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const { announce } = useStage();
   const [index, setIndex] = useState(0);
   const active = activeTemplates[index];
@@ -471,7 +500,7 @@ function ChooseTemplate({ onExit }: { onExit: () => void }) {
         title="Choose a setting"
         instruction="Swipe to compare."
         step={4}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -529,6 +558,7 @@ function ChooseTemplate({ onExit }: { onExit: () => void }) {
 
 function Consent({ onExit }: { onExit: () => void }) {
   const { dispatch, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const { setPinned } = useStage();
   useEffect(() => setPinned(true), [setPinned]);
   const ready = draft.likenessConsent && draft.audioConsent;
@@ -540,7 +570,7 @@ function Consent({ onExit }: { onExit: () => void }) {
         title="Before we build your scene"
         instruction="Both permissions are required."
         step={5}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -584,6 +614,7 @@ const RECIP_ORDER: RecipStage[] = ["who", "contact", "note"];
 
 function Recipient({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, issueMessageCode } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const [stage, setStage] = useState<RecipStage>("who");
   const index = RECIP_ORDER.indexOf(stage);
 
@@ -607,7 +638,7 @@ function Recipient({ onExit }: { onExit: () => void }) {
         title={titles[stage][0]}
         instruction={titles[stage][1]}
         step={6}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -676,6 +707,7 @@ function Recipient({ onExit }: { onExit: () => void }) {
 
 function MessageCodeIssued({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, showToast } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   return (
     <Stage media={<Backdrop src={media.heroProduct.poster} alt={media.heroProduct.alt} dim={0.68} />}>
       <LiveRegion />
@@ -683,7 +715,7 @@ function MessageCodeIssued({ onExit }: { onExit: () => void }) {
         title="Your message has a code"
         instruction="It has to be paired with a package to open."
         step={7}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -700,7 +732,16 @@ function MessageCodeIssued({ onExit }: { onExit: () => void }) {
         </div>
       </StageContent>
       <ActionDock>
-        <Button onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}>
+        <Button
+          onClick={() =>
+            // Regifting reuses the package the item is already in, so there is
+            // nothing to look up and nothing to ask for.
+            dispatch({
+              type: "SENDER_STEP",
+              step: draft.isRegift ? "confirm-product" : "package-code",
+            })
+          }
+        >
           Continue
         </Button>
       </ActionDock>
@@ -709,7 +750,8 @@ function MessageCodeIssued({ onExit }: { onExit: () => void }) {
 }
 
 function PackageCodeEntry({ onExit }: { onExit: () => void }) {
-  const { dispatch, showToast } = useGifting();
+  const { dispatch, showToast, draft } = useGifting();
+  const steps = draft.isRegift ? STEPS_REGIFT : STEPS_NEW;
   const [value, setValue] = useState("");
   return (
     <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.7} />}>
@@ -718,7 +760,7 @@ function PackageCodeEntry({ onExit }: { onExit: () => void }) {
         title="Which package is this for?"
         instruction="Scan the QR code, or type the code beside it."
         step={8}
-        total={STEPS}
+        total={steps}
         onExit={onExit}
       />
       <RecallDot />
@@ -735,7 +777,7 @@ function PackageCodeEntry({ onExit }: { onExit: () => void }) {
             <button
               type="button"
               onClick={() => {
-                setValue(DEMO_REGIFT_PACKAGE_CODE);
+                setValue(draft.product.packageCode);
                 showToast("Sample package code filled");
               }}
               className="min-h-11 flex-1 rounded-full border border-gift-border bg-white/70 px-3 text-[11px] text-gift-ink-soft"
@@ -770,36 +812,71 @@ function PackageCodeEntry({ onExit }: { onExit: () => void }) {
 function ConfirmProduct({ onExit }: { onExit: () => void }) {
   const { dispatch, draft, activeTemplates, credits, showToast } = useGifting();
   const template = activeTemplates.find((t) => t.id === draft.templateId);
+  const regifting = draft.isRegift;
+  const packageCode = draft.packageCode ?? draft.product.packageCode;
+
+  /** The gift as it will appear in My Gifts the moment it is paired. */
+  const newGift = (): GalleryItem => ({
+    id: draft.kind === "ai" ? "job-live" : `gift-${packageCode}-${draft.messageCode ?? "new"}`,
+    kind: draft.kind,
+    direction: "created",
+    title: `For ${draft.recipientName || "your recipient"}`,
+    subtitle: draft.product.name,
+    media: draft.kind === "ai" ? media.aiGift : media.standardGift,
+    stage: draft.kind === "ai" ? "preparing" : undefined,
+    templateTitle: template?.title,
+    createdLabel: "Just now",
+    packageCode,
+    messageCode: draft.messageCode ?? undefined,
+    product: draft.product,
+    senderName: "You",
+    recipientName: draft.recipientName || undefined,
+    message: draft.note || "A gift chosen for you.",
+    // It exists, it is addressed, and it has not been handed over yet.
+    assignment: "ready_to_send",
+  });
 
   return (
-    <Stage media={<Backdrop src={media.product.poster} alt={media.product.alt} dim={0.6} />}>
+    <Stage media={<Backdrop src={draft.product.image} alt={draft.product.alt} dim={0.62} />}>
       <LiveRegion />
       <Guidance
-        title="Is this the right product?"
-        instruction="Check the pairing before you confirm."
+        title={regifting ? "Confirm the item" : "Is this the right product?"}
+        instruction={
+          regifting
+            ? "The package stays the same. Only the message changes."
+            : "Check the pairing before you confirm."
+        }
         onExit={onExit}
       />
       <RecallDot />
       <StageContent>
         <div className={`${glass} p-4`}>
-          <Row label="Product" value="Signature Gift Package" />
-          <Row label="Package" value={draft.packageCode ?? "—"} mono />
-          <Row label="Message" value={draft.messageCode ?? "—"} mono />
+          <Row label="Product" value={draft.product.name} />
+          <Row label="Package" value={packageCode} mono />
+          <Row label="New message code" value={draft.messageCode ?? "—"} mono />
           <Row label="Recipient" value={draft.recipientName || "—"} />
           <Row
             label="Style"
             value={draft.kind === "ai" ? template?.title ?? "Scene" : "Standard video"}
           />
+          {regifting && (
+            <p className="mt-2 rounded-xl border border-gift-border bg-white/60 p-3 text-[11px] leading-snug text-gift-ink-soft">
+              This is the same physical package, so it keeps its code. The person you give it to
+              gets the new message code above.
+            </p>
+          )}
         </div>
       </StageContent>
       <ActionDock note={`Available credits: ${credits.available}`}>
         <Button
           onClick={() => {
-            dispatch({
-              type: "BIND",
-              messageCode: draft.messageCode ?? "",
-              packageCode: draft.packageCode ?? "",
-            });
+            dispatch({ type: "BIND", messageCode: draft.messageCode ?? "", packageCode });
+            // Recorded now, not at the end: a gift that exists in the flow
+            // should exist in My Gifts, whatever happens next.
+            const item = newGift();
+            if (draft.sourceGiftId) dispatch({ type: "COMPLETE_REGIFT", item });
+            else dispatch({ type: "ADD_GALLERY", item });
+
             if (draft.kind === "ai" && template) {
               // Reserve before submitting, as the real ledger will: credits
               // leave `available` when the job is accepted, not when it ends.
@@ -813,12 +890,14 @@ function ConfirmProduct({ onExit }: { onExit: () => void }) {
         >
           Confirm &amp; Pair
         </Button>
-        <Button
-          variant="ghost"
-          onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}
-        >
-          Choose a different package
-        </Button>
+        {!regifting && (
+          <Button
+            variant="ghost"
+            onClick={() => dispatch({ type: "SENDER_STEP", step: "package-code" })}
+          >
+            Choose a different package
+          </Button>
+        )}
       </ActionDock>
     </Stage>
   );
@@ -858,24 +937,11 @@ function Processing({ onExit }: { onExit: () => void }) {
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
+    // The gallery entry already exists — it was created the moment the gift
+    // was paired, so leaving this screen is safe. All that starts here is the
+    // work itself.
     dispatch({ type: "AI_STAGE", stage: "preparing" });
-    // Recorded straight away and in progress, so leaving is safe: the visitor
-    // can walk away and find it finished.
-    dispatch({
-      type: "ADD_GALLERY",
-      item: {
-        id: "job-live",
-        kind: "ai",
-        direction: "created",
-        title: `For ${draft.recipientName || "your recipient"}`,
-        subtitle: "Scene in progress",
-        media: media.aiGift,
-        stage: "preparing",
-        templateTitle: template?.title,
-        createdLabel: "Just now",
-      },
-    });
-  }, [dispatch, draft.recipientName, template?.title]);
+  }, [dispatch]);
 
   useEffect(() => {
     if (stage === "ready") return;

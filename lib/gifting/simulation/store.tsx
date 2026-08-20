@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_NEW_PRODUCT,
   DEMO_MESSAGE_CODE,
   DEMO_PACKAGE_CODE,
   DEMO_REGIFT_PACKAGE_CODE,
@@ -27,6 +28,7 @@ import type {
   ExperienceConfig,
   GalleryItem,
   GateKind,
+  GiftProduct,
   GiftVideoKind,
   SceneTemplate,
 } from "./types";
@@ -53,6 +55,9 @@ export type Scenario =
   | "receive"
   | "create"
   | "regift"
+  // One specific gift, opened. Not a scenario the launcher offers: you get
+  // here by choosing a card, and it carries that card's identity with it.
+  | "reveal"
   | "gallery"
   | "dashboard";
 
@@ -89,6 +94,13 @@ export type SenderStep =
 
 export interface Draft {
   kind: GiftVideoKind;
+  /** The physical item this gift is attached to. When regifting, it is the
+   *  item the visitor already holds, which is why the flow never asks them to
+   *  identify it a second time. */
+  product: GiftProduct;
+  /** The gift being passed on, so the old assignment can be retired and the
+   *  new one can inherit its history. */
+  sourceGiftId: string | null;
   templateId: string | null;
   likenessConsent: boolean;
   audioConsent: boolean;
@@ -111,6 +123,10 @@ export interface VisitorProfile {
 
 interface State {
   scenario: Scenario;
+  /** Which gift is open, and which card the gallery was left on. Returning
+   *  from a reveal lands on the card you opened, not back at the start. */
+  openGiftId: string | null;
+  galleryIndex: number;
   recipientStep: RecipientStep;
   senderStep: SenderStep;
   config: ExperienceConfig;
@@ -130,6 +146,8 @@ interface State {
 
 const emptyDraft: Draft = {
   kind: "standard",
+  product: DEFAULT_NEW_PRODUCT,
+  sourceGiftId: null,
   templateId: null,
   likenessConsent: false,
   audioConsent: false,
@@ -144,6 +162,8 @@ const emptyDraft: Draft = {
 
 const initialState: State = {
   scenario: "launcher",
+  openGiftId: null,
+  galleryIndex: 0,
   recipientStep: "welcome",
   senderStep: "intro",
   config: DEFAULT_CONFIG,
@@ -173,6 +193,11 @@ type Action =
   | { type: "CAPTURE"; visitor: VisitorProfile }
   | { type: "DRAFT"; patch: Partial<Draft> }
   | { type: "START_CREATE"; isRegift: boolean }
+  | { type: "OPEN_GIFT"; id: string }
+  | { type: "CLOSE_GIFT" }
+  | { type: "GALLERY_INDEX"; index: number }
+  | { type: "REGIFT_FROM"; item: GalleryItem }
+  | { type: "COMPLETE_REGIFT"; item: GalleryItem }
   | { type: "UPLOAD"; percent: number }
   | { type: "AI_STAGE"; stage: AiJobStage | null }
   | { type: "RESERVE_CREDITS"; amount: number }
@@ -227,6 +252,60 @@ function reducer(state: State, action: Action): State {
         aiStage: null,
         lastIssued: null,
       };
+    case "OPEN_GIFT":
+      return { ...state, openGiftId: action.id, scenario: "reveal" };
+    case "CLOSE_GIFT":
+      return { ...state, openGiftId: null, scenario: "gallery" };
+    case "GALLERY_INDEX":
+      return { ...state, galleryIndex: action.index };
+    case "REGIFT_FROM":
+      // Everything the visitor already told us by choosing this gift: the
+      // item, the package it is in, and the fact that they are now the sender.
+      // Asking again would be asking them to re-enter what they just tapped.
+      return {
+        ...state,
+        scenario: "regift",
+        openGiftId: null,
+        senderStep: "intro",
+        uploadPercent: 0,
+        aiStage: null,
+        lastIssued: null,
+        draft: {
+          ...emptyDraft,
+          isRegift: true,
+          product: action.item.product,
+          sourceGiftId: action.item.id,
+          packageCode: action.item.product.packageCode,
+        },
+      };
+    case "COMPLETE_REGIFT": {
+      const source = state.gallery.find((g) => g.id === state.draft.sourceGiftId);
+      // One package, one live assignment. The old one is not deleted — it is
+      // retired, and it carries into the new gift's history so the chain is
+      // still readable.
+      const retired = state.gallery.map((g) =>
+        g.id === state.draft.sourceGiftId
+          ? { ...g, assignment: "regifted" as const, subtitle: `${g.product.name} — passed on` }
+          : g,
+      );
+      const history = [
+        ...(source?.history ?? []),
+        ...(source
+          ? [
+              {
+                senderName: source.senderName,
+                recipientName: source.recipientName ?? "You",
+                messageCode: source.messageCode ?? "",
+                when: source.createdLabel,
+              },
+            ]
+          : []),
+      ];
+      return {
+        ...state,
+        gallery: [{ ...action.item, history }, ...retired],
+      };
+    }
     case "UPLOAD":
       return { ...state, uploadPercent: action.percent };
     case "AI_STAGE":
@@ -279,6 +358,7 @@ function reducer(state: State, action: Action): State {
     case "RESET_FLOW":
       return {
         ...state,
+        openGiftId: null,
         recipientStep: "welcome",
         senderStep: "intro",
         draft: emptyDraft,
