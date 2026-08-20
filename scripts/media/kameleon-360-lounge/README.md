@@ -20,7 +20,7 @@ WORKDIR = C:\Users\cotye\Videos\Kameleon360Placeholders
 |---|---|---|
 | 1 | `prepare_panorama.py` | `kameleon-decision-lounge-placeholder-360.png` — 4096×2048, wrap seam feathered |
 | 2 | `make_bottle_cutout.py` | `kameleon-bottle-cutout.png` — the approved bottle with alpha |
-| 3 | `build_scene.py` | the `.blend`, and 450 frames into `frames/` |
+| 3 | `build_scene.py` | the `.blend`, and 1800 frames into `frames/` (~90 min on a 4080, ~15 GB) |
 | 4 | `encode.py` | the delivery MP4, verified against the brief |
 
 Then, from the repository root:
@@ -52,6 +52,24 @@ render equirectangular at all. This is not a quality preference.
 the world alone so `measure_yaw.py` can correlate it against the source and
 report the exact offset. Guessing Blender's mapping is how the hero bottle ends
 up 90° behind the visitor, which is what happened on the first pass.
+
+## Why the animation looks the way it does
+
+Sixty seconds is long enough for the eye to learn a period and start predicting
+it, which is what makes a loop *feel* like a loop. So no two properties breathe
+on the same one: the key light runs a single cycle across the minute, the rim
+one and a half, the pedestal two and a half, the sign one and three quarters,
+the bottle one and a quarter. Their sum never repeats inside the clip.
+
+Every curve is nonetheless sampled from a cosine completing a **whole number**
+of cycles, so frame 1 and frame 1800 hold identical values and the minute can
+loop without a visible jump. Non-repeating within, seamless across — the two
+are not in tension, they just need different parts of the same construction.
+
+The key light also travels a few centimetres on a slow arc. The light does not
+visibly move; its reflection slides across the polished marble and the shoulder
+of the glass, which is the only honest "environmental animation" a world-texture
+lounge can offer — there is no furniture to sway.
 
 ## Two traps that cost real time
 

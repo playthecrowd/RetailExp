@@ -29,7 +29,7 @@ FRAMES = os.path.join(ROOT, "frames", "f_%04d.png")
 OUT = os.path.join(ROOT, "kameleon-decision-lounge-360-v1.mp4")
 
 FPS = 30
-EXPECTED_FRAMES = 450
+EXPECTED_FRAMES = 1800
 WIDTH, HEIGHT = 3840, 1920
 
 present = sorted(f for f in os.listdir(os.path.join(ROOT, "frames")) if f.endswith(".png"))
@@ -168,7 +168,7 @@ checks = [
     (s["codec_name"] == "h264", "codec is H.264"),
     (s["pix_fmt"] == "yuv420p", "pixel format is yuv420p"),
     (abs(fps - FPS) < 0.01, f"frame rate is {FPS}"),
-    (abs(duration - EXPECTED_FRAMES / FPS) < 0.1, "duration is 15 s"),
+    (abs(duration - EXPECTED_FRAMES / FPS) < 0.1, f"duration is {EXPECTED_FRAMES // FPS} s"),
     (faststart, "moov atom is at the front (faststart)"),
 ]
 print()

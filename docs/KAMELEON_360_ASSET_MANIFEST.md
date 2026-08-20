@@ -10,7 +10,7 @@ decision node at it:
 | | |
 |---|---|
 | Asset | `3c0f7a52-6b1e-4d9a-9f21-8ad4c7e05b60` (`role = node-video-360`) |
-| File | `kameleon-decision-lounge-360-v1.mp4`, 3840×1920, 30 fps, 15 s, H.264 High / yuv420p, faststart |
+| File | `kameleon-decision-lounge-360-v1.mp4`, 3840×1920, 30 fps, **60 s**, H.264 High / yuv420p, faststart |
 | Attached to | every node with at least one active choice — i.e. every decision popup |
 | Installed by | `scripts/install-360-lounge-asset.mjs` |
 | Produced by | `scripts/media/kameleon-360-lounge/` (Blender + ffmpeg, see its README) |
@@ -129,13 +129,27 @@ without taking the chapter offline.
   permission call to happen inside a user gesture. Declining it costs nothing:
   drag remains, and that is also the no-motion fallback for anyone who is
   motion-sensitive.
-- **Recenter** returns to the origin. **Return to Choices**, the Escape key,
-  browser Back, and the clip reaching its own end all do the same thing: close
-  the overlay onto the same decision popup, with the same choices, having
-  selected nothing and advanced nothing.
-- Play/Pause and Mute/Unmute are present; the clip opens muted, because no
+- **Recenter** returns to the origin — which is the bottle, because the mesh is
+  turned a quarter so yaw zero means the hero.
+- **Return to Choices**, the Escape key and browser Back all close the overlay
+  onto the same decision popup, with the same choices, having selected nothing
+  and advanced nothing.
+- The clip **ending does not close anything.** At 0:00 the overlay stays open on
+  the final frame, still draggable, viewing direction preserved, with Replay
+  offered. Evicting someone the moment the minute ran out would punish the
+  slow look-around this feature exists to encourage.
+- A circular countdown sits in the top corner: copper ring over dark glass,
+  teal once spent, with the remaining time in words so the state never depends
+  on colour alone. It is derived from the playhead, so it freezes on pause and
+  resynchronises on replay without bookkeeping of its own.
+- Play/Replay and **Use Device Motion** are the two primary controls, at 56px
+  in the bottle label's red-to-teal gradient under a copper rim. Pause, Mute and
+  Recenter sit in a quieter 44px rail below. The clip opens muted, because no
   current mobile browser will autoplay audible video.
+- The motion offer pulses a slow copper-into-teal glow until it is answered,
+  and stops the instant it is — granted, refused, or waved away.
 - Under `prefers-reduced-motion` it opens on the poster frame rather than
-  starting itself.
+  starting itself, the attention pulse becomes a static highlight, and the
+  controls appear without the staggered entry.
 - A device without WebGL sees a plain message saying the standard version is
   still available, not a black rectangle.

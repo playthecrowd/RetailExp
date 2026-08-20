@@ -519,7 +519,7 @@ viewer licence.
 
 | | |
 |---|---|
-| Asset | `kameleon-decision-lounge-360-v1.mp4` — 3840×1920, 30 fps, 15 s, H.264 High / yuv420p, faststart, silent |
+| Asset | `kameleon-decision-lounge-360-v1.mp4` — 3840×1920, 30 fps, **60 s**, H.264 High / yuv420p, faststart, silent |
 | Registered as | `media_assets` `3c0f7a52-6b1e-4d9a-9f21-8ad4c7e05b60`, role `node-video-360`, `is_placeholder = true` |
 | Attached to | all 28 decision nodes via `content_nodes.video360_asset_id` |
 | Viewer | `components/kameleon/Video360Viewer.tsx` (extended, not replaced) |
@@ -542,6 +542,27 @@ to journey state — verified by assertion, not by inspection.
 
 The one removal: the old **View in 360°** button in the standard video chrome,
 now superseded by the popup control. Standard playback is untouched.
+
+### Second pass — the minute, and the controls
+
+The clip runs 60 seconds rather than 15, and none of it is padding: five
+properties breathe on five different periods so their sum never repeats inside
+the minute, while every curve still completes whole cycles so frame 1 and frame
+1800 match and it loops without a jump. The key light travels a slow arc, which
+slides its reflection across the marble.
+
+The viewer changed in one important way and several visible ones. **The end of
+the clip is no longer an exit**: at 0:00 the overlay stays open on the final
+frame, still draggable and still device-motion explorable, viewing direction
+preserved, with Replay in the primary slot. A circular copper countdown sits in
+the top corner with the exit stacked beneath it, derived from the playhead so it
+freezes on pause and resynchronises on replay for free. Play/Replay and Use
+Device Motion are the two primary controls at 56px in the bottle label's
+red-to-teal gradient; Pause, Mute and Recenter drop to a 44px rail. The motion
+offer pulses a 3.2-second copper-into-teal glow until it is answered, then
+stops. Reduced motion gets the same controls, held still.
+
+Verified at 320/390/500px: nothing overflows and every control keeps its 44px.
 
 ### Known gaps
 

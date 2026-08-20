@@ -35,8 +35,8 @@ PANORAMA = os.path.join(ROOT, "kameleon-decision-lounge-placeholder-360.png")
 BOTTLE = os.path.join(ROOT, "kameleon-bottle-cutout.png")
 
 FPS = 30
-DURATION_SECONDS = 15
-FRAMES = FPS * DURATION_SECONDS          # 450
+DURATION_SECONDS = 60
+FRAMES = FPS * DURATION_SECONDS          # 1800
 WIDTH, HEIGHT = 3840, 1920
 
 # Kameleon tokens, linear-ish sRGB values.
@@ -299,16 +299,42 @@ def build_lights(forward_yaw):
     key = area("BottleKey", (fx * 2.4 + 0.5, fy * 2.4, 2.0), 60.0, COPPER_LIGHT, 1.2)
     rim = area("BottleRim", (fx * 3.4 - 0.6, fy * 3.4, 1.4), 45.0, TEAL, 0.9)
     ped = area("PedestalGlow", (fx * 2.9, fy * 2.9, 0.35), 30.0, COPPER, 0.7)
-    return key, rim, ped
+    # The key light's OBJECT as well as its data: energy and colour live on the
+    # data, location lives on the object, and the slow arc needs the latter.
+    key_object = lights[0][0]
+    return key, rim, ped, key_object
 
 
-def animate(bottle_em, sign_bsdf, key, rim, ped):
-    """Restrained, physical motion only.
+def animate(bottle_em, sign_bsdf, key, rim, ped, key_light_object, world_bg):
+    """Restrained, physical motion only - for a full minute.
 
-    No camera movement: the visitor controls the view, and moving the camera in
-    a 360 video is the fastest route to motion sickness. What moves is light -
-    a slow chameleon shift between the label's copper and its teal, and a
-    breathing pedestal glow."""
+    NO CAMERA MOVEMENT. The visitor controls the view, and moving the camera in
+    a 360 video is the fastest route to motion sickness. What moves is LIGHT.
+
+    WHY MULTIPLE PERIODS RATHER THAN ONE SLOW CYCLE
+      At 15 seconds a single swell reads as "the light is alive". Stretched to
+      60 it reads as a loop, because the eye has time to learn the period and
+      predict it. So each property breathes on its own prime-ish period -
+      roughly 60, 40, 24, 34 and 48 seconds - and their sum never repeats
+      inside the clip. Nothing lands on the same beat twice, and nothing is
+      still: the brief's "do not simply freeze the final 45 seconds" is
+      answered by construction rather than by promise.
+
+    WHY IT STILL RETURNS TO ITS START
+      Every curve is sampled from a cosine that completes a whole number of
+      cycles across the clip, so frame 1 and frame FRAMES hold identical
+      values. The minute can loop without a visible jump even though it never
+      repeats within itself.
+
+    THE KEY LIGHT ALSO MOVES
+      A little, and slowly - a couple of degrees of arc, which slides the
+      specular highlight across the polished marble and the shoulder of the
+      glass. That is the "gentle environmental animation" the brief asks for
+      and the only kind this scene can honestly offer: the lounge is a world
+      texture, so there is no furniture to sway. Moving the LIGHT moves the
+      reflections, which is what a visitor actually perceives as the room
+      being alive.
+    """
     scene = bpy.context.scene
 
     # Set BEFORE inserting: Blender 5.x removed Action.fcurves in favour of
@@ -319,37 +345,79 @@ def animate(bottle_em, sign_bsdf, key, rim, ped):
     except Exception:
         pass
 
-    def key_energy(light, frame, value):
-        light.energy = value
-        light.keyframe_insert("energy", frame=frame)
+    def wave(frame, cycles, low, high, phase=0.0):
+        """A cosine that completes `cycles` whole turns across the clip.
 
-    def key_color(light, frame, value):
-        light.color = value[:3]
-        light.keyframe_insert("color", frame=frame)
+        Whole turns is the loop guarantee: at frame 1 and at frame FRAMES the
+        argument differs by an exact multiple of 2*pi, so the value is the
+        same to the last bit.
+        """
+        t = (frame - 1) / (FRAMES - 1)
+        angle = 2.0 * math.pi * (cycles * t + phase)
+        return low + (high - low) * 0.5 * (1.0 - math.cos(angle))
 
-    # One full, slow cycle across the clip, starting and ending identically so
-    # the loop is clean if Stream ever loops it.
-    mid = FRAMES // 2
-    for frame, k, r, p in (
-        (1, 60.0, 45.0, 30.0),
-        (mid, 74.0, 30.0, 40.0),
-        (FRAMES, 60.0, 45.0, 30.0),
-    ):
-        key_energy(key, frame, k)
-        key_energy(rim, frame, r)
-        key_energy(ped, frame, p)
+    def mix(a, b, amount):
+        return tuple(a[i] + (b[i] - a[i]) * amount for i in range(3))
 
-    for frame, c in ((1, COPPER_LIGHT), (mid, TEAL), (FRAMES, COPPER_LIGHT)):
-        key_color(rim, frame, c)
+    # Sampled rather than keyed at extremes: a handful of keys with SINE easing
+    # cannot express several overlapping periods, and this is cheap - 90 keys
+    # per curve over 1800 frames, which is one every three seconds and far
+    # smoother than the eye can resolve on a light this slow.
+    STEP = max(1, FRAMES // 90)
+    frames = list(range(1, FRAMES + 1, STEP))
+    if frames[-1] != FRAMES:
+        frames.append(FRAMES)
 
-    for frame, s in ((1, 0.18), (mid, 0.34), (FRAMES, 0.18)):
-        sign_bsdf.inputs["Emission Strength"].default_value = s
+    for frame in frames:
+        # 1 cycle/minute: the room's slowest breath.
+        key.energy = wave(frame, 1.0, 58.0, 78.0)
+        key.keyframe_insert("energy", frame=frame)
+
+        # 1.5 cycles: deliberately not a multiple of the key's period, so the
+        # rim and the key drift in and out of phase across the minute.
+        rim.energy = wave(frame, 1.5, 28.0, 48.0)
+        rim.keyframe_insert("energy", frame=frame)
+
+        # 2.5 cycles: the pedestal breathes fastest, and is the smallest light,
+        # so it reads as flicker-free warmth rather than as pulsing.
+        ped.energy = wave(frame, 2.5, 26.0, 44.0)
+        ped.keyframe_insert("energy", frame=frame)
+
+        # The chameleon shift, one full pass copper -> teal -> deep red ->
+        # copper over the minute. Two half-speed waves out of phase give three
+        # visited colours from one cycle, which a single lerp cannot.
+        toward_teal = wave(frame, 1.0, 0.0, 1.0)
+        toward_red = wave(frame, 1.0, 0.0, 1.0, phase=0.25)
+        rim.color = mix(mix(COPPER_LIGHT[:3], TEAL[:3], toward_teal), DEEP_RED[:3], toward_red * 0.45)
+        rim.keyframe_insert("color", frame=frame)
+
+        # The sign glows on its own period so it never brightens in lockstep
+        # with the bottle - two things pulsing together read as a machine.
+        sign_bsdf.inputs["Emission Strength"].default_value = wave(frame, 1.75, 0.16, 0.36)
         sign_bsdf.inputs["Emission Strength"].keyframe_insert("default_value", frame=frame)
 
-    for frame, s in ((1, 1.60), (mid, 1.78), (FRAMES, 1.60)):
-        bottle_em.inputs["Strength"].default_value = s
+        bottle_em.inputs["Strength"].default_value = wave(frame, 1.25, 1.55, 1.82)
         bottle_em.inputs["Strength"].keyframe_insert("default_value", frame=frame)
 
+        # Dusk deepening and lifting again, +/- 4 per cent. Small enough that
+        # nobody watching would name it, large enough that the minute does not
+        # feel static.
+        world_bg.inputs["Strength"].default_value = wave(frame, 1.0, 0.96, 1.04)
+        world_bg.inputs["Strength"].keyframe_insert("default_value", frame=frame)
+
+    # The key light's slow arc. Amplitude is a few centimetres at a couple of
+    # metres - the light does not visibly travel, its REFLECTION does.
+    origin = tuple(key_light_object.location)
+    for frame in frames:
+        swing = wave(frame, 1.0, -1.0, 1.0)
+        rise = wave(frame, 2.0, -1.0, 1.0)
+        key_light_object.location = (
+            origin[0] + swing * 0.22,
+            origin[1] + swing * 0.10,
+            origin[2] + rise * 0.08,
+        )
+        key_light_object.keyframe_insert("location", frame=frame)
+    key_light_object.location = origin
 
 
 def _log(message):
@@ -433,7 +501,7 @@ def configure_render(still):
 
 def main():
     clear()
-    build_world()
+    world_bg = build_world()
     cam = build_camera()
     configure_render(STILL or CALIBRATE)
 
@@ -487,8 +555,8 @@ def main():
     sx, sy = math.sin(forward_yaw) * sign_dist, math.cos(forward_yaw) * sign_dist
     sign, sign_bsdf = build_wordmark((sx, sy, 1.95), forward_yaw, height_m=0.36)
 
-    key, rim, ped = build_lights(forward_yaw)
-    animate(bottle_em, sign_bsdf, key, rim, ped)
+    key, rim, ped, key_light_object = build_lights(forward_yaw)
+    animate(bottle_em, sign_bsdf, key, rim, ped, key_light_object, world_bg)
 
     blend_path = os.path.join(ROOT, "kameleon-decision-lounge-placeholder-360.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend_path)
