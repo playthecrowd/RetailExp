@@ -28,8 +28,6 @@ export function MockVideoPlayer({
   durationSeconds,
   posterLabel,
   captionText,
-  video360Src,
-  onOpen360,
   onComplete,
   completionThreshold = 1,
   initialTime = 0,
@@ -44,17 +42,6 @@ export function MockVideoPlayer({
   durationSeconds: number;
   posterLabel: string;
   captionText?: string;
-  /**
-   * A GENUINE 2:1 equirectangular version of this chapter, or undefined.
-   *
-   * This replaced an `is360` boolean that was passed unconditionally by the
-   * Journey and rendered an "Interactive Video" badge on every chapter,
-   * including ones with no 360 asset at all. A label that is always true is
-   * not information, and here it was not even accurate. The control below
-   * appears only when there is something real behind it.
-   */
-  video360Src?: string;
-  onOpen360?: () => void;
   onComplete: () => void;
   completionThreshold?: number;
   /** Resume position, seconds — used when Continue Journey reopens a mid-chapter node. */
@@ -201,16 +188,6 @@ export function MockVideoPlayer({
         </video>
       ) : (
         background && <div className="absolute inset-0">{background}</div>
-      )}
-
-      {video360Src && onOpen360 && (
-        <button
-          type="button"
-          onClick={onOpen360}
-          className="absolute right-3 top-3 z-10 rounded-full border border-kameleon-copper/50 bg-black/40 px-3 py-1 text-[10px] font-medium uppercase tracking-widest text-kameleon-copper-light backdrop-blur"
-        >
-          View in 360°
-        </button>
       )}
 
       {status === "loading" ? (

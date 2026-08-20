@@ -1,20 +1,32 @@
 # Kameleon 360° chapter assets — inventory and replacement manifest
 
-## Current inventory: zero
+## Current inventory: one, reused at every decision
 
-**No chapter has a 360° version today, and none can have had one.** The column
-that records it — `content_nodes.video360_asset_id` — is added by
-`20260821120000_optional_360_chapter_video.sql`, which has not been applied.
-Every chapter's value is therefore NULL by construction, and the player hides
-its **View in 360°** control everywhere until real assets are supplied.
+`20260821120000_optional_360_chapter_video.sql` **is applied**, and
+`content_nodes.video360_asset_id` now resolves for real. The accelerated pilot
+installs a single asset — the Kameleon Decision Lounge — and points every
+decision node at it:
 
-This is stated as a certainty rather than a query result on purpose: the
-inventory is not "we looked and found none", it is "the field did not exist".
+| | |
+|---|---|
+| Asset | `3c0f7a52-6b1e-4d9a-9f21-8ad4c7e05b60` (`role = node-video-360`) |
+| File | `kameleon-decision-lounge-360-v1.mp4`, 3840×1920, 30 fps, 15 s, H.264 High / yuv420p, faststart |
+| Attached to | every node with at least one active choice — i.e. every decision popup |
+| Installed by | `scripts/install-360-lounge-asset.mjs` |
+| Produced by | `scripts/media/kameleon-360-lounge/` (Blender + ffmpeg, see its README) |
+
+**One video everywhere is deliberate, not an oversight.** The 360 view exists
+to help a visitor make a pathway choice by showing them the world the choice
+sits in. That world is the same world at every decision, and producing 28
+near-identical lounges would cost 28× the render for a difference no visitor
+could name. Per-chapter environments are a later step, and the schema already
+supports them: point a node at a different asset and only that node changes.
+
+The asset is flagged `is_placeholder = true`, so the dashboard keeps saying so.
 
 ## The exact live inventory query
 
-Run after the migration is applied. It returns one row per chapter, so the
-result *is* the manifest.
+It returns one row per chapter, so the result *is* the manifest.
 
 ```sql
 select
@@ -36,9 +48,12 @@ where e.slug = 'kameleon'
 order by p.sort_order, n.chapter_number, n.branch_code;
 ```
 
-Every row reading `MISSING` needs one asset produced to the specification
-below. The branching convention the chapters follow is the one fixed by the
-brief:
+Every row reading `MISSING` is a chapter with no decision to support — a
+terminal or convergence node. Every row reading `present` shares the one pilot
+asset. When per-chapter lounges are produced, each needs one asset to the
+specification below.
+
+The branching convention the chapters follow is the one fixed by the brief:
 
 ```
 Chapter 1
@@ -107,14 +122,20 @@ without taking the chapter offline.
 
 ## Player behaviour, for reference
 
-- Opens fullscreen over the chapter, as an overlay in the same component —
+- Opens fullscreen over the decision, as an overlay in the same component —
   chapter and pathway state are untouched, so exiting cannot lose progress.
 - Desktop drag and mobile touch always work.
 - Device orientation is opt-in behind a button, because iOS requires the
   permission call to happen inside a user gesture. Declining it costs nothing:
   drag remains, and that is also the no-motion fallback for anyone who is
   motion-sensitive.
-- **Recenter** returns to the origin; **Exit 360°** and the Escape key return
-  to the standard chapter at the position the 360 view reached.
+- **Recenter** returns to the origin. **Return to Choices**, the Escape key,
+  browser Back, and the clip reaching its own end all do the same thing: close
+  the overlay onto the same decision popup, with the same choices, having
+  selected nothing and advanced nothing.
+- Play/Pause and Mute/Unmute are present; the clip opens muted, because no
+  current mobile browser will autoplay audible video.
+- Under `prefers-reduced-motion` it opens on the poster frame rather than
+  starting itself.
 - A device without WebGL sees a plain message saying the standard version is
   still available, not a black rectangle.

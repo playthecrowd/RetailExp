@@ -506,8 +506,52 @@ review. Phase 4 not started. Dev server running at the URL reported below.
 ## Phase 4 — 360 Video Prototype
 
 **Goal:** Prove the interactive 360° video player without a paid SDK.
-**Status:** NOT STARTED
+**Status:** COMPLETE (accelerated single-video pilot) — pending user QA on real devices.
+**Branch:** main
 **Approval required:** Yes — player must work with local media before storage integration.
+
+### What shipped
+
+An optional **Explore in 360°** control on every pathway decision popup, opening
+one reusable equirectangular lounge in an overlay over the still-mounted popup.
+Delivered without a paid SDK: three.js on an inverted sphere, no Stream, no
+viewer licence.
+
+| | |
+|---|---|
+| Asset | `kameleon-decision-lounge-360-v1.mp4` — 3840×1920, 30 fps, 15 s, H.264 High / yuv420p, faststart, silent |
+| Registered as | `media_assets` `3c0f7a52-6b1e-4d9a-9f21-8ad4c7e05b60`, role `node-video-360`, `is_placeholder = true` |
+| Attached to | all 28 decision nodes via `content_nodes.video360_asset_id` |
+| Viewer | `components/kameleon/Video360Viewer.tsx` (extended, not replaced) |
+| Entry control | `components/kameleon/DecisionDrawer.tsx` |
+| Production pipeline | `scripts/media/kameleon-360-lounge/` |
+| Installer | `scripts/install-360-lounge-asset.mjs` |
+| Tests | `scripts/verify-360-experience.mjs` |
+
+No migration was needed: `20260821120000_optional_360_chapter_video.sql` was
+already applied, and the storage/signing path in `lib/kameleon/live-content.ts`
+resolves the asset alongside every other one.
+
+### What deliberately did NOT change
+
+Journey content, chapter videos, decision-popup layout, choice order, captions,
+thumbnails, chapter state, navigation, testimonial capture, Gallery, moderation,
+Cloudflare upload, legal pages, consent, the age gate, rewards. The 360 view
+supports the decision; it never makes it. Opening and closing it writes nothing
+to journey state — verified by assertion, not by inspection.
+
+The one removal: the old **View in 360°** button in the standard video chrome,
+now superseded by the popup control. Standard playback is untouched.
+
+### Known gaps
+
+- One lounge is reused at every decision. Per-chapter environments are a later
+  step and need no schema change.
+- The clip is silent. Mute/Unmute is present because the brief requires it and
+  because an ambient track is a drop-in later; audio was optional for the pilot.
+- The panorama's wrap seam is feathered rather than reconstructed, so the view
+  directly behind the visitor is softer than the rest. Measured at 0.04× the
+  interior column baseline — no tear, but not new pixels either.
 
 ## Phase 5 — Real WebXR Ground-Plane AR Prototype
 

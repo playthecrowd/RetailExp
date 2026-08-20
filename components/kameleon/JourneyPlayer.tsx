@@ -230,8 +230,6 @@ export function JourneyPlayer({
               durationSeconds={node.duration}
               posterLabel={`${node.title} — placeholder`}
               captionText={node.description}
-              video360Src={node.video360Source || undefined}
-              onOpen360={() => setViewing360(true)}
               completionThreshold={1}
               initialTime={startedAwaitingChoice && playKey === 0 ? node.duration : progress.currentNodeElapsedSeconds}
               startPaused={startedAwaitingChoice && playKey === 0}
@@ -247,23 +245,25 @@ export function JourneyPlayer({
               captionsSrc={node.captionsSource}
             />
 
-            {/* Opened over the chapter, closed back to it. Chapter and
-                pathway state are untouched because this is an overlay in the
-                same component, not a route — leaving 360 cannot lose progress
-                because nothing about the journey moved while it was open. */}
+            {/* Opened over the decision, closed back to it. The drawer stays
+                mounted underneath — this is an overlay in the same component,
+                not a route — so the chapter, the reveal stage and the pathway
+                choices are all still there when it closes.
+
+                Nothing is written back on exit. The 360 lounge is its own
+                clip, not an alternate cut of this chapter, so its playhead is
+                not the chapter's playhead; feeding it to handleProgress (as an
+                earlier version did) would have moved the chapter's elapsed
+                time and could have re-fired the decision reveal. Looking
+                around costs the visitor nothing, and that has to be literally
+                true in the state, not just in the copy. */}
             {viewing360 && node.video360Source && (
               <Video360Viewer
                 src={node.video360Source}
                 poster={node.posterSource}
                 title={node.title}
-                startTime={progress.currentNodeElapsedSeconds}
-                onExit={(currentTime) => {
-                  // The 360 view's position becomes the chapter's position, so
-                  // returning resumes where the visitor actually got to rather
-                  // than where they left the standard player.
-                  handleProgress(currentTime);
-                  setViewing360(false);
-                }}
+                exitLabel="Return to Choices"
+                onExit={() => setViewing360(false)}
               />
             )}
 
@@ -278,6 +278,8 @@ export function JourneyPlayer({
                 onReplay={handleReplay}
                 onViewMap={onViewMap}
                 onExit={onExit}
+                video360Src={node.video360Source || undefined}
+                onOpen360={() => setViewing360(true)}
               />
             )}
           </>

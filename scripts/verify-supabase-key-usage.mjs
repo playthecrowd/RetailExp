@@ -68,6 +68,9 @@ const ALLOWED_SECRET_KEY_FILES = new Set([
   "lib/supabase/secret.ts",
   "scripts/seed-kameleon-content.mjs",
   "scripts/seed-kameleon-character-pathways.mjs",
+  // Same shape as the seeders above: a run-once operational script, never
+  // bundled, never imported by the app, invoked with --env-file=.env.local.
+  "scripts/install-360-lounge-asset.mjs",
 ]);
 const filesReferencingSecretKey = sourceFiles.filter((f) => readFileSync(f, "utf8").includes("SUPABASE_SECRET_KEY"));
 

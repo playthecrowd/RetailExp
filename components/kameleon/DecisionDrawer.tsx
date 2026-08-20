@@ -3,7 +3,7 @@ import type { RevealStage } from "@/lib/kameleon/decision-timing";
 import { getNode } from "@/lib/kameleon/live-content";
 import { getNodeMotif } from "@/lib/kameleon/production-assets";
 import { EnvironmentArt } from "./art/EnvironmentArt";
-import { CheckCircleIcon, ReplayIcon } from "./icons";
+import { CheckCircleIcon, ReplayIcon, Sphere360Icon } from "./icons";
 import { cn } from "@/lib/cn";
 
 /**
@@ -23,6 +23,8 @@ export function DecisionDrawer({
   onReplay,
   onViewMap,
   onExit,
+  video360Src,
+  onOpen360,
 }: {
   stage: RevealStage;
   completedNode: VideoNode;
@@ -33,6 +35,14 @@ export function DecisionDrawer({
   onReplay: () => void;
   onViewMap: () => void;
   onExit: () => void;
+  /**
+   * Present only when a genuine 2:1 equirectangular asset is configured for
+   * this chapter. Absent means absent: the control does not render, exactly as
+   * it does not render in the video chrome, because a 16:9 video on a sphere
+   * is a defect rather than a degraded experience.
+   */
+  video360Src?: string;
+  onOpen360?: () => void;
 }) {
   if (stage === "none") return null;
 
@@ -113,6 +123,23 @@ export function DecisionDrawer({
                 );
               })}
             </div>
+
+            {/* Additive, and deliberately BELOW the choices: the pathway
+                decision is the thing being asked, and its two options keep
+                their order, their sizes and their position in the drawer.
+                This is an aid to making that choice, so it reads as one -
+                outlined rather than filled, and explicitly reassuring that
+                nothing is being committed by tapping it. */}
+            {video360Src && onOpen360 && (
+              <button
+                type="button"
+                onClick={onOpen360}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-kameleon-copper/50 bg-black/30 px-4 py-2.5 text-[11px] font-medium uppercase tracking-widest text-kameleon-copper-light transition-colors hover:border-kameleon-copper hover:text-kameleon-text"
+              >
+                <Sphere360Icon className="h-4 w-4" />
+                Explore in 360°
+              </button>
+            )}
 
             <div className="grid grid-cols-3 gap-2 text-[11px]">
               <button

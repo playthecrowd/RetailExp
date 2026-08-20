@@ -203,3 +203,18 @@ export function LockIcon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+/**
+ * A sphere read as a globe with a horizon and a meridian — the shape a 360
+ * view actually is, rather than the "360" numerals other products use, which
+ * are illegible at 16 px and untranslatable.
+ */
+export function Sphere360Icon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <ellipse cx="12" cy="12" rx="4" ry="9" />
+      <path d="M3 12h18" />
+    </Icon>
+  );
+}

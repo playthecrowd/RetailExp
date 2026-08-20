@@ -41,12 +41,17 @@ export interface VideoNode {
   description: string;
   videoSource: string;
   /**
-   * OPTIONAL 2:1 equirectangular version of this chapter.
+   * OPTIONAL 2:1 equirectangular 360 asset offered at this chapter's decision.
    *
-   * Empty string means this chapter has no 360 version and the player must
-   * hide its "View in 360°" control. A normal 16:9 video is not
-   * equirectangular, so substituting videoSource here would render a smeared
-   * sphere rather than a 360 experience — absent has to mean absent.
+   * Empty string means there is none and the decision popup must hide its
+   * "Explore in 360°" control. A normal 16:9 video is not equirectangular, so
+   * substituting videoSource here would render a smeared sphere rather than a
+   * 360 experience — absent has to mean absent.
+   *
+   * For the pilot every decision node points at the SAME lounge asset, so this
+   * is not necessarily a 360 cut of this chapter's own scene — which is why
+   * the viewer opens it at its own beginning rather than at the chapter's
+   * playhead, and why leaving it writes nothing back.
    */
   video360Source: string;
   posterSource: string;
