@@ -12,6 +12,8 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/cn";
+import { GiftingKeyboard } from "./keyboard/GiftingKeyboard";
+import { useGiftingKeyboard } from "./keyboard/context";
 
 /**
  * The phone shell, as THREE INDEPENDENT LAYERS.
@@ -285,6 +287,10 @@ export function Stage({
         }}
       />
       {children}
+      {/* Inside the stage, so it can never be taller than the experience and
+          can never scroll the document. Renders nothing unless a field in this
+          flow is being edited. */}
+      <GiftingKeyboard />
     </div>
   );
 }
@@ -437,13 +443,17 @@ export function ActionDock({
 }) {
   const { reportDockHeight, reducedMotion } = useStage();
   const inset = useKeyboardInset();
+  // The experience's own keyboard sits below the dock rather than over it, so
+  // the permanent actions stay reachable while someone is typing.
+  const panel = useGiftingKeyboard();
+  const panelHeight = panel?.active ? panel.height : 0;
   const boxRef = useMeasuredHeight(reportDockHeight);
 
   return (
     <div
       className="pointer-events-none absolute inset-x-0 bottom-0 z-50 px-4"
       style={{
-        paddingBottom: `calc(env(safe-area-inset-bottom) + 0.9rem + ${inset}px)`,
+        paddingBottom: `calc(env(safe-area-inset-bottom) + 0.9rem + ${inset + panelHeight}px)`,
         transition: reducedMotion ? undefined : "padding-bottom 200ms ease-out",
       }}
     >
@@ -495,11 +505,14 @@ export function StageContent({
 }) {
   const inset = useKeyboardInset();
   const { dockHeight, guidanceHeight, guidanceVisible } = useStage();
+  const panel = useGiftingKeyboard();
+  const panelHeight = panel?.active ? panel.height : 0;
 
   // Guidance only reserves room while it is showing; once it fades the media
-  // gets the space back.
-  const top = `calc(env(safe-area-inset-top) + ${TOP_GUTTER + 8}px + ${guidanceVisible ? guidanceHeight : 0}px)`;
-  const bottom = `calc(env(safe-area-inset-bottom) + ${Math.max(dockHeight + 28, 96)}px + ${inset}px)`;
+  // gets the space back. The keyboard, when open, takes its own measured
+  // height out of the bottom — the well shrinks, nothing is overlaid.
+  const top = `calc(env(safe-area-inset-top) + ${TOP_GUTTER + 8}px + ${guidanceVisible && !panelHeight ? guidanceHeight : 0}px)`;
+  const bottom = `calc(env(safe-area-inset-bottom) + ${Math.max(dockHeight + 28, 96)}px + ${inset + panelHeight}px)`;
 
   return (
     <div

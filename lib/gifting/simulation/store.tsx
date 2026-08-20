@@ -10,6 +10,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { CODE_ALPHABET } from "./code-alphabet";
 import {
   DEFAULT_CONFIG,
   DEFAULT_NEW_PRODUCT,
@@ -457,7 +458,7 @@ export function GiftingSimulationProvider({ children }: { children: ReactNode })
     // Opaque and non-sequential, using the same read-aloud-safe alphabet the
     // real generator uses. Crypto strength is not the point in a prototype;
     // looking and behaving like a real code is.
-    const alphabet = "23467９ACDEFGHJKMNPQRTUVWXYZ".replace("９", "9");
+    const alphabet = CODE_ALPHABET;
     const pick = () =>
       Array.from({ length: 5 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
     return `${pick()}-${pick()}`;

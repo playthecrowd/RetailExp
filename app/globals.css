@@ -468,3 +468,79 @@ body.gift-locked {
   .gift-anim-confirm { animation: none !important; }
   .gift-anim-pulse { box-shadow: 0 0 0 3px rgba(196, 168, 106, 0.3); }
 }
+
+/* ---------------------------------------------------------------------------
+   The experience's own keyboard.
+
+   Warm white over blur, charcoal labels, the scenario accent on the one key
+   that moves the visitor forward. It should read as part of the same object as
+   everything above it — not as a keyboard from a different application that
+   happens to be on screen.
+   --------------------------------------------------------------------------- */
+
+.gift-keyboard {
+  background: linear-gradient(180deg, rgba(250, 249, 246, 0.86), rgba(244, 241, 235, 0.97));
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 -12px 32px -18px rgba(63, 60, 55, 0.4);
+}
+
+.gift-key {
+  background: linear-gradient(180deg, #ffffff, #f6f3ee);
+  border: 1px solid rgba(63, 60, 55, 0.09);
+  color: var(--gift-ink);
+  box-shadow: 0 1px 1px rgba(63, 60, 55, 0.14);
+  touch-action: manipulation;
+  user-select: none;
+}
+.gift-key:active {
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #f1ece3, #e9e3d8);
+  box-shadow: inset 0 1px 2px rgba(63, 60, 55, 0.18);
+}
+
+/* The way forward, in the colour of whichever flow the visitor is in. */
+.gift-key-accent {
+  background: linear-gradient(180deg, var(--gift-accent-soft), var(--gift-accent));
+  border-color: color-mix(in srgb, var(--gift-accent) 70%, black 10%);
+  color: #ffffff;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.12);
+}
+.gift-key-accent:active {
+  background: linear-gradient(180deg, var(--gift-accent), var(--gift-accent-soft));
+}
+
+/* Backspace and the utilities read as a different KIND of key, so a thumb
+   reaching for them is not aiming at a letter. */
+.gift-key-backspace {
+  background: linear-gradient(180deg, #eceae5, #ddd9d1);
+  color: var(--gift-ink-soft);
+}
+.gift-key-utility {
+  background: linear-gradient(180deg, #f2f0eb, #e6e2da);
+  color: var(--gift-ink-soft);
+}
+.gift-key-utility-on {
+  border-color: var(--gift-accent);
+  color: var(--gift-ink);
+}
+
+/* The field being edited, marked where it sits in the form. */
+.gift-field-active {
+  outline: 2px solid var(--gift-accent);
+  outline-offset: 3px;
+}
+
+.gift-caret {
+  animation: gift-caret-blink 1100ms steps(1, end) infinite;
+}
+@keyframes gift-caret-blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gift-caret { animation: none; opacity: 1; }
+  .gift-key { transition: none; }
+}

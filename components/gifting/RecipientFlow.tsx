@@ -21,7 +21,9 @@ import {
   useStage,
 } from "./shell";
 import { VideoStage } from "./VideoStage";
-import { Body, Button, Checkbox, CodeChip, Field } from "./ui";
+import { GiftingKeyboardProvider } from "./keyboard/context";
+import { KeyboardField } from "./keyboard/KeyboardField";
+import { Body, Button, Checkbox, CodeChip } from "./ui";
 
 /**
  * The recipient journey.
@@ -50,7 +52,11 @@ export function RecipientFlow({ onExit }: { onExit: () => void }) {
   const { recipientStep } = useGifting();
   return (
     <StageProvider stepKey={recipientStep} theme="receive">
-      <Step onExit={onExit} />
+      {/* Inside the stage provider, so the panel can report its height and the
+          content well and dock can reserve exactly that much. */}
+      <GiftingKeyboardProvider>
+        <Step onExit={onExit} />
+      </GiftingKeyboardProvider>
     </StageProvider>
   );
 }
@@ -202,15 +208,15 @@ function CodeEntry({ onExit }: { onExit: () => void }) {
       <StageContent>
         <div className="grid gap-3">
           <div className={`${glass} p-4`}>
-            <Field
+            <KeyboardField
               label="Package Code"
+              mode="code"
               value={pkg}
               onChange={(v) => {
                 setPkg(v);
                 if (codeError) dispatch({ type: "CLEAR_CODE_ERROR" });
               }}
               placeholder="XXXXX-XXXXX"
-              autoCapitalize="characters"
             />
             <div className="mt-2 flex gap-2">
               <Mini onClick={() => setPkg(DEMO_PACKAGE_CODE)}>Use sample</Mini>
@@ -221,15 +227,15 @@ function CodeEntry({ onExit }: { onExit: () => void }) {
           </div>
 
           <div className={`${glass} p-4`}>
-            <Field
+            <KeyboardField
               label="Gift Message Code"
+              mode="code"
               value={msg}
               onChange={(v) => {
                 setMsg(v);
                 if (codeError) dispatch({ type: "CLEAR_CODE_ERROR" });
               }}
               placeholder="XXXXX-XXXXX"
-              autoCapitalize="characters"
             />
             <div className="mt-2 flex gap-2">
               <Mini onClick={() => setMsg(DEMO_MESSAGE_CODE)}>Use sample</Mini>
@@ -436,16 +442,18 @@ function Capture({ onExit }: { onExit: () => void }) {
           className={`${glass} max-h-full min-h-0 overflow-y-auto overscroll-contain p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`}
         >
           <div className="grid grid-cols-2 gap-2.5">
-            <Field
+            <KeyboardField
               label="First name"
+              mode="text"
               value={form.firstName}
               onChange={(v) => setForm({ ...form, firstName: v })}
               required
               autoComplete="given-name"
               error={showErrors && missing.firstName ? "Required" : undefined}
             />
-            <Field
+            <KeyboardField
               label="Last name"
+              mode="text"
               value={form.lastName}
               onChange={(v) => setForm({ ...form, lastName: v })}
               required
@@ -454,8 +462,9 @@ function Capture({ onExit }: { onExit: () => void }) {
             />
           </div>
           <div className="mt-2.5 grid gap-2.5">
-            <Field
+            <KeyboardField
               label="Email"
+              mode="email"
               type="email"
               inputMode="email"
               autoComplete="email"
@@ -464,8 +473,9 @@ function Capture({ onExit }: { onExit: () => void }) {
               required
               error={showErrors && missing.email ? "Enter a valid email" : undefined}
             />
-            <Field
+            <KeyboardField
               label="Mobile"
+              mode="phone"
               type="tel"
               inputMode="tel"
               autoComplete="tel"

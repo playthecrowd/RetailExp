@@ -19,7 +19,10 @@ import {
   useStage,
 } from "./shell";
 import { VideoStage } from "./VideoStage";
-import { Body, Button, Card, Checkbox, CodeChip, Field } from "./ui";
+import { GiftingKeyboardProvider } from "./keyboard/context";
+import { KeyboardField } from "./keyboard/KeyboardField";
+import { LONG_TEXT_MAX } from "./keyboard/model";
+import { Body, Button, Card, Checkbox, CodeChip } from "./ui";
 
 /**
  * Creating or regifting, as full-screen panels.
@@ -37,7 +40,9 @@ export function SenderFlow({ onExit }: { onExit: () => void }) {
   const { senderStep, draft } = useGifting();
   return (
     <StageProvider stepKey={senderStep} theme={draft.isRegift ? "regift" : "create"}>
-      <Step onExit={onExit} />
+      <GiftingKeyboardProvider>
+        <Step onExit={onExit} />
+      </GiftingKeyboardProvider>
     </StageProvider>
   );
 }
@@ -647,27 +652,32 @@ function Recipient({ onExit }: { onExit: () => void }) {
       <StageContent>
         <div className={`${glass} p-4`}>
           {stage === "who" && (
-            <Field
+            <KeyboardField
               label="Recipient name"
+              mode="text"
               value={draft.recipientName}
               onChange={(v) => dispatch({ type: "DRAFT", patch: { recipientName: v } })}
               required
             />
           )}
           {stage === "contact" && (
-            <Field
+            <KeyboardField
               label="Email or mobile"
+              mode="email"
+              inputMode="email"
               value={draft.recipientContact}
               onChange={(v) => dispatch({ type: "DRAFT", patch: { recipientContact: v } })}
               required
             />
           )}
           {stage === "note" && (
-            <Field
+            <KeyboardField
               label="A short note"
+              mode="text"
               value={draft.note}
               onChange={(v) => dispatch({ type: "DRAFT", patch: { note: v } })}
               hint="Optional"
+              maxLength={LONG_TEXT_MAX}
             />
           )}
           <div className="mt-3 flex items-center gap-1.5" aria-hidden="true">
@@ -767,12 +777,12 @@ function PackageCodeEntry({ onExit }: { onExit: () => void }) {
       <RecallDot />
       <StageContent>
         <div className={`${glass} p-4`}>
-          <Field
+          <KeyboardField
             label="Package Code"
+            mode="code"
             value={value}
             onChange={setValue}
             placeholder="XXXXX-XXXXX"
-            autoCapitalize="characters"
           />
           <div className="mt-2 flex gap-2">
             <button

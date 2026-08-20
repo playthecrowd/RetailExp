@@ -33,7 +33,7 @@ export const DEMO_MESSAGE_CODE = "PXR4V-9GNCA";
  *  case that matters: two real codes from two DIFFERENT gifts must still be
  *  refused. Combining KQ7MW-3TDHF with this message code fails. */
 export const DEMO_OTHER_PACKAGE_CODE = "HD2NJ-6WKPT";
-export const DEMO_OTHER_MESSAGE_CODE = "TMY8Q-4FVRD";
+export const DEMO_OTHER_MESSAGE_CODE = "TMY6Q-4FVRD";
 
 /** Issued by the regift flow, so a tester can see a new pair appear. */
 export const DEMO_REGIFT_PACKAGE_CODE = "VC6XA-2QJMH";
@@ -78,7 +78,7 @@ export const PRODUCTS = {
     name: "Atelier Edition",
     image: `${STILL}/template-luxury-product-reveal.png`,
     alt: "The white bottle lit as a studio product reveal",
-    packageCode: "RN5TB-8LZWQ",
+    packageCode: "RN4TC-6KVWQ",
     experience: {
       poster: `${STILL}/poster-ai-gift.png`,
       video: `${VIDEO}/ai-gift.mp4`,
@@ -90,7 +90,7 @@ export const PRODUCTS = {
     name: "House Selection",
     image: `${STILL}/poster-standard-gift.png`,
     alt: "The white bottle presented on a neutral gift table",
-    packageCode: "JW3KC-7PYDS",
+    packageCode: "JW3KC-7PYDT",
     experience: {
       poster: `${STILL}/poster-standard-gift.png`,
       video: `${VIDEO}/standard-gift.mp4`,

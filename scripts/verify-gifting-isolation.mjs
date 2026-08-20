@@ -182,6 +182,8 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
       // "public/demo/" is how git status collapses the still-untracked
       // directory; both forms are this prototype's own media.
       !f.startsWith("public/demo/") &&
+      // This prototype's own verifier, which touches nothing but itself.
+      f !== "scripts/verify-gifting-keyboard.mjs" &&
       !f.startsWith("scripts/media/gifting-demo/") &&
       !f.startsWith("supabase/migrations/20260822090000") &&
       !f.startsWith("scripts/verify-gifting-isolation") &&

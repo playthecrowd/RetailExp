@@ -181,6 +181,12 @@ export function Field({
   inputMode,
   autoComplete = "off",
   error,
+  readOnly,
+  maxLength,
+  onFocus,
+  onPointerDown,
+  onKeyDown,
+  describedBy,
 }: {
   label: string;
   value: string;
@@ -195,6 +201,14 @@ export function Field({
    *  with the field rather than in a summary at the bottom. */
   autoComplete?: string;
   error?: string;
+  /** Set by KeyboardField on touch: it is what stops the system keyboard
+   *  while leaving the field focusable and readable by assistive tech. */
+  readOnly?: boolean;
+  maxLength?: number;
+  onFocus?: () => void;
+  onPointerDown?: () => void;
+  onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  describedBy?: string;
 }) {
   return (
     <label className="block">
@@ -209,6 +223,12 @@ export function Field({
         autoCapitalize={autoCapitalize}
         autoComplete={autoComplete}
         aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        readOnly={readOnly}
+        maxLength={maxLength}
+        onFocus={onFocus}
+        onPointerDown={onPointerDown}
+        onKeyDown={onKeyDown}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         className={cn(
