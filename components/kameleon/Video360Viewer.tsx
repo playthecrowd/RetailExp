@@ -206,10 +206,19 @@ export function Video360Viewer({
     pitchRef.current = 0;
   }, []);
 
+  /**
+   * A rejected play() is NOT a broken video.
+   *
+   * It is usually NotAllowedError, the autoplay policy asking for a gesture,
+   * or AbortError, a play interrupted by a load or a pause. Escalating either
+   * to the error screen is what shipped, and it showed "The 360 view could not
+   * be loaded" over a perfectly healthy 4K video the moment a throttled tab
+   * declined to start it. Only the element's own `error` event means the media
+   * actually failed; a refusal just leaves the clip paused with Play offered,
+   * which is already the honest state.
+   */
   const play = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    void video.play().catch(() => setPhase("error"));
+    void videoRef.current?.play().catch(() => {});
   }, []);
 
   const pause = useCallback(() => {
@@ -224,7 +233,10 @@ export function Video360Viewer({
     // and the ring is still empty.
     video.currentTime = 0;
     setFinished(false);
-    void video.play().catch(() => setPhase("error"));
+    // Same reasoning as `play`: a refusal is not a failure. The clip is
+    // rewound either way, so the visitor gets a Play control on frame one
+    // rather than an error over a working video.
+    void video.play().catch(() => {});
   }, []);
 
   const toggleMute = useCallback(() => {

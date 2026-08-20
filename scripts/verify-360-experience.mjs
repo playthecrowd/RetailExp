@@ -418,6 +418,21 @@ console.log("\n--- the viewer's required controls and states ---");
     /phase === "error"[\s\S]{0,900}Retry/.test(viewer),
     "the error state offers Retry",
   );
+  // A rejected play() is autoplay policy or an AbortError, not a broken file.
+  // Escalating it showed "could not be loaded" over a healthy 4K video the
+  // moment a throttled tab declined to start it.
+  const transport = viewer.slice(
+    viewer.indexOf("const play = useCallback"),
+    viewer.indexOf("const toggleMute = useCallback"),
+  );
+  check(
+    !/setPhase\("error"\)/.test(transport),
+    "a refused play() does not become the error screen",
+  );
+  check(
+    /const onError = \(\) => setPhase\("error"\)/.test(viewer),
+    "only the element's own error event means the media actually failed",
+  );
   check(
     /phase === "error"[\s\S]{0,900}\{exitLabel\}/.test(viewer),
     "the error state offers the return control",
