@@ -67,22 +67,12 @@ export function Landing() {
             experiences from one platform.
           </p>
 
-          {/* Stacked on a phone, side by side once there is room. Both are tall
-              enough to be hit with a thumb. */}
-          <div className="mt-10 flex flex-col items-stretch gap-3 sm:flex-row sm:justify-center">
-            <Link
-              href="/experience/gifting-demo-client-1/demo"
-              className="inline-flex min-h-14 items-center justify-center rounded-full px-8 text-[14px] font-medium tracking-wide text-white transition-colors hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-              style={{
-                background: INK,
-                boxShadow: "0 10px 24px -14px rgba(47,49,52,0.7)",
-              }}
-            >
-              View Gifting Demo
-            </Link>
+          {/* One action. Full width on a phone, its own width once there is
+              room, and tall enough to be hit with a thumb either way. */}
+          <div className="mt-10 flex flex-col items-stretch sm:flex-row sm:justify-center">
             <Link
               href="/admin/login"
-              className="inline-flex min-h-14 items-center justify-center rounded-full border px-8 text-[14px] font-medium tracking-wide transition-colors hover:border-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+              className="inline-flex min-h-14 items-center justify-center rounded-full border px-10 text-[14px] font-medium tracking-wide transition-colors hover:border-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
               style={{ borderColor: HAIRLINE, color: INK }}
             >
               Client Sign In

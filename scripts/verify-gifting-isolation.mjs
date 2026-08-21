@@ -136,26 +136,19 @@ console.log("\n--- routing stays inside the client's own tree ---");
     `no file outside the gifting tree imports the prototype${importers.length ? ` (${importers.join(", ")})` : ""}`,
   );
 
-  // Linking to it is a different matter, and the answer changed deliberately:
-  // the platform homepage now offers "View Gifting Demo". That is one href to
-  // a public route, not a shared launcher, so it is named explicitly here —
-  // every OTHER file outside the tree still may not mention the prototype at
-  // all, which keeps catching an accidental menu item or nav entry.
-  const HOMEPAGE_LINK = "components/home/Landing.tsx";
+  // Nor may anything outside link to it. The homepage briefly carried a "View
+  // Gifting Demo" button; it was removed, so the stronger rule is back — no
+  // file outside the tree mentions the prototype at all, which catches an
+  // accidental menu item, nav entry or stray href.
   const linkers = [...walk("app"), ...walk("components")].filter(
     (f) =>
       (f.endsWith(".ts") || f.endsWith(".tsx")) &&
       !f.includes("gifting") &&
-      f !== HOMEPAGE_LINK &&
       read(f).includes("gifting-demo-client-1"),
   );
   check(
     linkers.length === 0,
-    `only the homepage links to the prototype${linkers.length ? ` (also: ${linkers.join(", ")})` : ""}`,
-  );
-  check(
-    (read(HOMEPAGE_LINK).match(/gifting-demo-client-1/g) ?? []).length === 1,
-    "the homepage carries exactly one link to it, and nothing else from it",
+    `no file outside the gifting tree links to the prototype${linkers.length ? ` (${linkers.join(", ")})` : ""}`,
   );
 
   // The admin dashboard sits INSIDE the (protected) group, so it inherits the
