@@ -122,17 +122,40 @@ console.log("\n--- routing stays inside the client's own tree ---");
     check(exists, `route exists: ${route}`);
   }
 
-  // Nothing outside that tree may reference the prototype. This is the check
-  // that catches somebody "helpfully" linking it from the homepage.
-  const outside = [...walk("app"), ...walk("components")].filter(
+  // Nothing outside that tree may IMPORT the prototype. This is the check that
+  // catches the prototype's screens, state or styles leaking into another
+  // route — which is the coupling that actually costs something.
+  const importers = [...walk("app"), ...walk("components")].filter(
     (f) =>
       (f.endsWith(".ts") || f.endsWith(".tsx")) &&
       !f.includes("gifting") &&
-      (read(f).includes("gifting-demo-client-1") || read(f).includes("components/gifting")),
+      /from "[^"]*(components\/gifting|lib\/gifting)/.test(read(f)),
   );
   check(
-    outside.length === 0,
-    `no file outside the gifting tree links to the prototype${outside.length ? ` (${outside.join(", ")})` : ""}`,
+    importers.length === 0,
+    `no file outside the gifting tree imports the prototype${importers.length ? ` (${importers.join(", ")})` : ""}`,
+  );
+
+  // Linking to it is a different matter, and the answer changed deliberately:
+  // the platform homepage now offers "View Gifting Demo". That is one href to
+  // a public route, not a shared launcher, so it is named explicitly here —
+  // every OTHER file outside the tree still may not mention the prototype at
+  // all, which keeps catching an accidental menu item or nav entry.
+  const HOMEPAGE_LINK = "components/home/Landing.tsx";
+  const linkers = [...walk("app"), ...walk("components")].filter(
+    (f) =>
+      (f.endsWith(".ts") || f.endsWith(".tsx")) &&
+      !f.includes("gifting") &&
+      f !== HOMEPAGE_LINK &&
+      read(f).includes("gifting-demo-client-1"),
+  );
+  check(
+    linkers.length === 0,
+    `only the homepage links to the prototype${linkers.length ? ` (also: ${linkers.join(", ")})` : ""}`,
+  );
+  check(
+    (read(HOMEPAGE_LINK).match(/gifting-demo-client-1/g) ?? []).length === 1,
+    "the homepage carries exactly one link to it, and nothing else from it",
   );
 
   // The admin dashboard sits INSIDE the (protected) group, so it inherits the
@@ -166,13 +189,20 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
 
   console.log(`      (${changed.length} files changed vs origin/main)`);
 
-  // Two shared files change on this branch, and both are checked below rather
-  // than merely permitted:
+  // Shared files that change, each checked below rather than merely permitted:
   //   globals.css      — additive tokens only, proved line by line.
   //   verify-admin-auth — the count of protected admin pages, raised from 4 to
   //                       6 because two were added. Proved to be a widening,
   //                       not a weakening.
-  const ALLOWED_SHARED = new Set(["app/globals.css", "scripts/verify-admin-auth.mjs"]);
+  //   app/page.tsx     — the platform homepage. It replaced the framework's
+  //   components/home/   starter page and links to the demo; it imports
+  //                      nothing from the prototype, which the check above
+  //                      proves, and adds no global CSS.
+  const ALLOWED_SHARED = new Set([
+    "app/globals.css",
+    "scripts/verify-admin-auth.mjs",
+    "app/page.tsx",
+  ]);
   const strayed = changed.filter(
     (f) =>
       !f.startsWith("app/experience/gifting-demo-client-1/") &&
@@ -188,6 +218,7 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
       !f.startsWith("supabase/migrations/20260822090000") &&
       !f.startsWith("scripts/verify-gifting-isolation") &&
       !ALLOWED_SHARED.has(f) &&
+      !f.startsWith("components/home/") &&
       // Pre-existing untracked files belonging to the user, not this branch.
       !["wewtw.txt", ".mcp.json", "mcp/"].some((u) => f.startsWith(u)),
   );
@@ -334,6 +365,34 @@ console.log("\n--- Kameleon and shared infrastructure are untouched ---");
   check(
     consumers.length === 0,
     `no existing component uses a gift-* token${consumers.length ? ` (${consumers.join(", ")})` : ""}`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+console.log("\n--- the homepage borrows nothing from the prototype ---");
+// ---------------------------------------------------------------------------
+{
+  const landing = read("components/home/Landing.tsx");
+  const page = read("app/page.tsx");
+  check(
+    !/gift-/.test(landing) && !/gift-/.test(page),
+    "the homepage uses no gift- token, theme or class",
+  );
+  check(
+    !/StageProvider|ActionDock|GiftingKeyboard|useLockedDocument/.test(landing),
+    "no fixed stage, dock, keyboard or scroll lock reaches the homepage",
+  );
+  check(
+    !/"use client"/.test(landing) && !/"use client"/.test(page),
+    "the homepage stays a server component — nothing on it needs to be interactive",
+  );
+  check(
+    /min-h-dvh/.test(landing) && !/100vh/.test(landing),
+    "it sizes to the dynamic viewport rather than a fixed one",
+  );
+  check(
+    /env\(safe-area-inset/.test(landing),
+    "and keeps its content clear of the notch and the home indicator",
   );
 }
 
